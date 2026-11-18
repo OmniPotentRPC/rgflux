@@ -238,7 +238,10 @@ where
     let mut rng = StdRng::seed_from_u64(config.seed);
 
     let initial = EngineSnapshot::capture(engine);
-    let initial_point = capture_point(engine);
+    let initial_point = PhasePoint {
+        positions: initial.positions().to_vec(),
+        velocities: initial.velocities().to_vec(),
+    };
     let run = (|| -> Result<FfsEstimate, FluxError> {
         let start_lambda = order_param(engine.positions());
         if !start_lambda.is_finite() {

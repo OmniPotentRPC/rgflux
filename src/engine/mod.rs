@@ -445,6 +445,14 @@ impl EngineSnapshot {
         }
     }
 
+    pub(crate) fn positions(&self) -> ArrayView1<'_, f64> {
+        self.positions.view()
+    }
+
+    pub(crate) fn velocities(&self) -> ArrayView1<'_, f64> {
+        self.velocities.view()
+    }
+
     fn restore<E: DynamicsEngine + ?Sized>(self, engine: &mut E) -> Result<(), FluxError> {
         engine.set_constraint(self.constraint)?;
         engine.set_thermostat(self.thermostat)?;
