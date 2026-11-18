@@ -20,6 +20,11 @@ mod config;
 
 pub mod engine;
 pub mod error;
+pub mod ffs;
+pub mod hyperplane;
+pub mod network;
+pub mod ohtst;
+pub mod pafi;
 pub mod stats;
 
 pub use engine::{
