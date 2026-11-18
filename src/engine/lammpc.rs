@@ -211,7 +211,16 @@ pub struct LammpcConfig {
     pub pair_coeffs: Vec<String>,
     /// Optional setup commands without embedded command separators.
     ///
-    /// `shell`, `include`, `jump`, and `python` directives are rejected.
+    /// Empty lines and lines made only of spaces and tabs are omitted. A
+    /// line of only a newline, carriage return, vertical tab, or form feed
+    /// is rejected. Every other line must be ASCII. Leading spaces and
+    /// tabs are kept, and the first word must be `neighbor`,
+    /// `neigh_modify`, `comm_modify` or `pair_modify`. Lines that mention
+    /// `if`, `partition`, `shell`, `jump`, `python`, `label`
+    /// or `next` as a word are rejected. `include` is rejected except as
+    /// the `neigh_modify` keyword followed by a group id. ASCII controls
+    /// other than tab, quotes, `$`, `&` and `#` are rejected. Non-ASCII
+    /// input is rejected first.
     ///
     /// Default: empty `Vec`.
     pub extra_setup: Vec<String>,
@@ -1065,10 +1074,16 @@ fn encode_lammps_config(config: &LammpcConfig) -> Result<Vec<u8>, FluxError> {
             masses.set(i as u32, value);
         }
 
-        let extra_len = u32::try_from(config.extra_setup.len())
+        let sent_setup: Vec<&str> = config
+            .extra_setup
+            .iter()
+            .map(String::as_str)
+            .filter(|line| !setup_line_is_spaces_and_tabs(line))
+            .collect();
+        let extra_len = u32::try_from(sent_setup.len())
             .map_err(|_| FluxError::InvalidConfig("extra_setup length exceeds u32"))?;
         let mut extra = lammps.reborrow().init_extra_setup(extra_len);
-        for (i, value) in config.extra_setup.iter().enumerate() {
+        for (i, value) in sent_setup.iter().enumerate() {
             extra.set(i as u32, value);
         }
     }
@@ -1092,24 +1107,222 @@ fn validate_lammps_command_text(value: &str, field: &'static str) -> Result<(), 
     Ok(())
 }
 
+const EXTRA_SETUP_FIELD: &str = "LammpcConfig::extra_setup";
+
+/// The first word of an `extra_setup` line may be one of these. Each
+/// one tunes how LAMMPS evaluates the configured pair style on the live
+/// system and takes only numbers and keywords: none reads a file,
+/// spawns a process, or branches.
+///
+/// - `neighbor`: skin distance and list style, the usual tuning knob for
+///   the engine's short restart-free runs.
+/// - `neigh_modify`: rebuild frequency and delay, the companion of
+///   `neighbor` when forces are re-evaluated after every position update.
+/// - `comm_modify`: ghost cutoff, needed when a pair cutoff plus skin
+///   exceeds the default communication cutoff in small periodic cells.
+/// - `pair_modify`: `shift`, `mix` and tail correction for the configured
+///   `pair_style`, which `pair_style` and `pair_coeff` cannot express.
+const ALLOWED_EXTRA_SETUP_DIRECTIVES: [&str; 4] =
+    ["neighbor", "neigh_modify", "comm_modify", "pair_modify"];
+
+/// LAMMPS commands that run a process, read another script, branch, loop or
+/// run Python. A line mentioning any of them as a word is rejected even when
+/// the first token is allowed. `include` is allowed only as the
+/// `neigh_modify` keyword immediately followed by a group id.
+const FORBIDDEN_EXTRA_SETUP_WORDS: [&str; 8] = [
+    "if",
+    "partition",
+    "shell",
+    "include",
+    "jump",
+    "python",
+    "label",
+    "next",
+];
+
+struct SetupToken<'a> {
+    text: &'a str,
+    start: usize,
+    end: usize,
+}
+
+fn whitespace_setup_tokens(command: &str) -> Vec<SetupToken<'_>> {
+    let bytes = command.as_bytes();
+    let mut tokens = Vec::new();
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b' ' || bytes[index] == b'\t' {
+            index += 1;
+            continue;
+        }
+        let start = index;
+        while index < bytes.len() && bytes[index] != b' ' && bytes[index] != b'\t' {
+            index += 1;
+        }
+        tokens.push(SetupToken {
+            text: &command[start..index],
+            start,
+            end: index,
+        });
+    }
+    tokens
+}
+
+fn setup_line_is_spaces_and_tabs(line: &str) -> bool {
+    line.bytes().all(|byte| matches!(byte, b' ' | b'\t'))
+}
+
+fn next_after_exclude(tokens: &[SetupToken<'_>], index: usize) -> usize {
+    let Some(kind) = tokens.get(index + 1).map(|token| token.text) else {
+        return tokens.len();
+    };
+    let consumed = match kind {
+        "none" => 2,
+        "group" | "type" => 4,
+        "molecule/intra" | "molecule/inter" => 3,
+        _ => return tokens.len(),
+    };
+    if index + consumed > tokens.len() {
+        tokens.len()
+    } else {
+        index + consumed
+    }
+}
+
+fn next_after_collection(tokens: &[SetupToken<'_>], index: usize) -> usize {
+    let Some(count) = tokens
+        .get(index + 1)
+        .and_then(|token| token.text.parse::<usize>().ok())
+    else {
+        return tokens.len();
+    };
+    let next = index.saturating_add(2).saturating_add(count);
+    if next > tokens.len() {
+        tokens.len()
+    } else {
+        next
+    }
+}
+
+/// Byte ranges of `include` keywords that are followed by a group id.
+///
+/// `neigh_modify every include` puts `include` in the value position of
+/// `every`, so that word stays forbidden. `neigh_modify include all` and
+/// `neigh_modify every 1 include solvent` use `include` as the keyword.
+fn neigh_modify_include_keyword_ranges(command: &str) -> Vec<std::ops::Range<usize>> {
+    let tokens = whitespace_setup_tokens(command);
+    let mut ranges = Vec::new();
+    if tokens.first().map(|token| token.text) != Some("neigh_modify") {
+        return ranges;
+    }
+    let mut index = 1;
+    while index < tokens.len() {
+        let keyword = tokens[index].text;
+        if keyword == "include" {
+            if index + 1 < tokens.len() {
+                ranges.push(tokens[index].start..tokens[index].end);
+            }
+            index += 2;
+            continue;
+        }
+        if matches!(
+            keyword,
+            "delay"
+                | "every"
+                | "check"
+                | "once"
+                | "cluster"
+                | "page"
+                | "one"
+                | "binsize"
+                | "bin/hash"
+        ) {
+            index += 2;
+            continue;
+        }
+        if keyword == "exclude" {
+            index = next_after_exclude(&tokens, index);
+            continue;
+        }
+        if keyword == "collection/type" || keyword == "collection/interval" {
+            index = next_after_collection(&tokens, index);
+            continue;
+        }
+        index += 1;
+    }
+    ranges
+}
+
 fn validate_extra_setup_directive(command: &str) -> Result<(), FluxError> {
-    let Some(first_token) = command.split_whitespace().next() else {
+    // Reject every non-ASCII byte first, before a later substitution can
+    // rewrite characters in the line.
+    if !command.is_ascii() {
+        return Err(FluxError::InvalidLammpcCommand {
+            field: EXTRA_SETUP_FIELD,
+        });
+    }
+    // Split on every non-word byte so `shell#touch`, `"shell` and `x,shell`
+    // all expose the `shell` word. `include` is exempt only as the
+    // `neigh_modify` keyword immediately followed by a group id.
+    let exempt_includes = neigh_modify_include_keyword_ranges(command);
+    let mut word_start = None;
+    for (offset, character) in command.char_indices() {
+        let is_word = character.is_ascii_alphanumeric() || character == '_';
+        if is_word {
+            if word_start.is_none() {
+                word_start = Some(offset);
+            }
+            continue;
+        }
+        if let Some(start) = word_start.take() {
+            reject_forbidden_setup_word(command, start, offset, &exempt_includes)?;
+        }
+    }
+    if let Some(start) = word_start.take() {
+        reject_forbidden_setup_word(command, start, command.len(), &exempt_includes)?;
+    }
+    // No allowed directive needs quoting, variable substitution, line
+    // continuation, comments, or control bytes other than tab.
+    if command
+        .chars()
+        .any(|c| matches!(c, '"' | '\'' | '$' | '&' | '#') || (c.is_ascii_control() && c != '\t'))
+    {
+        return Err(FluxError::InvalidLammpcCommand {
+            field: EXTRA_SETUP_FIELD,
+        });
+    }
+    let Some(first_token) = command.split_ascii_whitespace().next() else {
         return Ok(());
     };
-    let directive = if first_token.eq_ignore_ascii_case("shell") {
-        Some("shell")
-    } else if first_token.eq_ignore_ascii_case("include") {
-        Some("include")
-    } else if first_token.eq_ignore_ascii_case("jump") {
-        Some("jump")
-    } else if first_token.eq_ignore_ascii_case("python") {
-        Some("python")
-    } else {
-        None
-    };
-    if let Some(directive) = directive {
+    if !ALLOWED_EXTRA_SETUP_DIRECTIVES.contains(&first_token) {
+        return Err(FluxError::InvalidLammpcCommand {
+            field: EXTRA_SETUP_FIELD,
+        });
+    }
+    Ok(())
+}
+
+fn reject_forbidden_setup_word(
+    command: &str,
+    start: usize,
+    end: usize,
+    exempt_includes: &[std::ops::Range<usize>],
+) -> Result<(), FluxError> {
+    let word = &command[start..end];
+    if let Some(directive) = FORBIDDEN_EXTRA_SETUP_WORDS
+        .iter()
+        .copied()
+        .find(|forbidden| word.eq_ignore_ascii_case(forbidden))
+    {
+        if directive == "include"
+            && exempt_includes
+                .iter()
+                .any(|range| range.start == start && range.end == end)
+        {
+            return Ok(());
+        }
         return Err(FluxError::ForbiddenLammpcDirective {
-            field: "LammpcConfig::extra_setup",
+            field: EXTRA_SETUP_FIELD,
             directive,
         });
     }
@@ -1253,6 +1466,161 @@ mod tests {
             error,
             FluxError::InvalidConfig(message) if message.contains("colored-noise")
         ));
+    }
+
+    fn forbidden(directive: &'static str) -> FluxError {
+        FluxError::ForbiddenLammpcDirective {
+            field: EXTRA_SETUP_FIELD,
+            directive,
+        }
+    }
+
+    fn invalid() -> FluxError {
+        FluxError::InvalidLammpcCommand {
+            field: EXTRA_SETUP_FIELD,
+        }
+    }
+
+    #[test]
+    fn extra_setup_allows_only_listed_directives() {
+        for command in [
+            "neighbor 2.0 bin",
+            "neigh_modify every 1 delay 0 check yes",
+            "neigh_modify include all",
+            "neigh_modify include setup.in",
+            "neigh_modify every 1 delay 0 include solvent",
+            "neigh_modify delay 0 include all",
+            "neigh_modify exclude none include solvent",
+            "neigh_modify\tinclude solvent",
+            "",
+            "   ",
+            "\t",
+            " \t ",
+            "comm_modify cutoff 12.0",
+            "pair_modify shift yes",
+        ] {
+            assert_eq!(validate_extra_setup_directive(command), Ok(()), "{command}");
+        }
+        for command in ["units real", "clear", "NEIGHBOR 2.0 bin", "log out.txt"] {
+            assert_eq!(
+                validate_extra_setup_directive(command),
+                Err(invalid()),
+                "{command}"
+            );
+        }
+    }
+
+    #[test]
+    fn extra_setup_rejects_forbidden_words_anywhere_in_the_line() {
+        for (command, directive) in [
+            ("shell touch X", "shell"),
+            ("SHELL touch X", "shell"),
+            ("include setup.in", "include"),
+            ("INCLUDE setup.in", "include"),
+            ("NEIGH_MODIFY include all", "include"),
+            ("neigh_modify every include", "include"),
+            ("neigh_modify every include solvent", "include"),
+            ("neigh_modify include", "include"),
+            ("neighbor 2.0 bin include all", "include"),
+            ("pair_modify include all", "include"),
+            ("comm_modify include all", "include"),
+            ("neigh_modify include shell", "shell"),
+            ("if 1 then \"shell touch X\"", "if"),
+            ("partition yes 1 shell touch X", "partition"),
+            ("neighbor 2.0 bin shell touch X", "shell"),
+            ("neighbor 2.0 bin jump setup.in", "jump"),
+            ("python f input 1 x", "python"),
+            ("label a", "label"),
+            ("next i", "next"),
+            ("shell#touch X", "shell"),
+            ("neighbor 2.0 bin #shell", "shell"),
+            ("shell\u{c}touch X", "shell"),
+        ] {
+            assert_eq!(
+                validate_extra_setup_directive(command),
+                Err(forbidden(directive)),
+                "{command:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn extra_setup_rejects_non_ascii_text() {
+        for separator in [
+            '\u{200b}', '\u{2060}', '\u{2063}', '\u{feff}', '\u{a0}', '\u{e9}',
+        ] {
+            for command in [
+                format!("shell{separator}touch X"),
+                format!("{separator}shell touch X"),
+                format!("neighbor{separator}2.0 bin"),
+                format!("neighbor 2.0 bin{separator}"),
+            ] {
+                assert_eq!(
+                    validate_extra_setup_directive(&command),
+                    Err(invalid()),
+                    "{command:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn extra_setup_rejects_quotes_substitution_continuation_and_comments() {
+        for command in [
+            "neighbor 2.0 \"bin\"",
+            "neighbor 2.0 'bin'",
+            "neighbor ${skin} bin",
+            "neighbor $s bin",
+            "neighbor 2.0 bin &",
+            "neighbor 2.0 bin # trailing",
+            "neighbor 2.0\u{1}bin",
+            "neighbor 2.0\u{7f}bin",
+            "\n",
+            "\r",
+            "\r\n",
+            "\u{b}",
+            "\u{c}",
+            "\u{b} \u{c}",
+        ] {
+            assert_eq!(
+                validate_extra_setup_directive(command),
+                Err(invalid()),
+                "{command:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn blank_extra_setup_lines_are_omitted_from_the_encoded_message() {
+        let config = LammpcConfig::default().with_extra_setup(vec![
+            String::new(),
+            " ".to_string(),
+            "\t".to_string(),
+            " \t ".to_string(),
+            "neighbor 2.0 bin".to_string(),
+            "\t\t".to_string(),
+        ]);
+        let bytes = encode_lammps_config(&config).expect("encode");
+        let mut slice = bytes.as_slice();
+        let message = serialize::read_message_from_flat_slice(&mut slice, Default::default())
+            .expect("decode");
+        let root = message
+            .get_root::<rgpot_core::Potentials_capnp::potential_config::Reader<'_>>()
+            .expect("root");
+        let rgpot_core::Potentials_capnp::potential_config::Lammps(params) =
+            root.which().expect("schema")
+        else {
+            panic!("expected the lammps potential");
+        };
+        let extra = params
+            .expect("lammps")
+            .get_extra_setup()
+            .expect("extra_setup");
+        assert_eq!(extra.len(), 1);
+        assert_eq!(
+            extra.get(0).expect("line").to_str().expect("utf8"),
+            "neighbor 2.0 bin"
+        );
     }
 
     #[test]

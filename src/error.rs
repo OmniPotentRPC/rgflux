@@ -108,16 +108,16 @@ pub enum FluxError {
     #[error("unsafe LAMMPS command text in {field}")]
     InvalidLammpcCommand {
         /// Configuration field containing a NUL, newline, carriage return,
-        /// semicolon, or non-ASCII text.
+        /// semicolon, non-ASCII text, or other rejected command syntax.
         field: &'static str,
     },
 
-    /// A lammpc setup line starts with a forbidden LAMMPS directive.
+    /// A lammpc setup line mentions a forbidden LAMMPS directive.
     #[error("forbidden LAMMPS directive `{directive}` in {field}")]
     ForbiddenLammpcDirective {
         /// Configuration field containing the directive.
         field: &'static str,
-        /// First command token rejected by policy.
+        /// Forbidden word found in the line.
         directive: &'static str,
     },
 
