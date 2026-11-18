@@ -10,6 +10,14 @@ from scipy.integrate import quad
 from scipy.stats import fisher_exact, mannwhitneyu
 
 
+PARTITION_OVERFLOW_ERROR = (
+    "invalid configuration: PAFI reactant partition must be finite and positive"
+)
+ZERO_TEMPERATURE_TOL_ERROR = (
+    "invalid configuration: PAFI zero-temperature path-force quadrature exceeds tolerance"
+)
+
+
 def arguments():
     parser = argparse.ArgumentParser()
     parser.add_argument("--raw-dir", type=pathlib.Path, required=True)
@@ -95,6 +103,44 @@ def exact_dimer_profile(case_name, planes, temperature):
 
 def profile_error(record, exact):
     return max(abs(value - target) for value, target in zip(record["free_energy"], exact))
+
+
+def rejection_audit(entries):
+    buckets = {
+        "partition_overflow": {
+            "count": 0,
+            "error_strings": [PARTITION_OVERFLOW_ERROR],
+        },
+        "zero_temperature_tol": {
+            "count": 0,
+            "error_strings": [ZERO_TEMPERATURE_TOL_ERROR],
+        },
+        "other": {"count": 0, "error_strings": [], "rejects": []},
+    }
+    for item, record in entries:
+        if record.get("status") != "rejected":
+            continue
+        reason = record["error"]
+        if reason == PARTITION_OVERFLOW_ERROR:
+            buckets["partition_overflow"]["count"] += 1
+        elif reason == ZERO_TEMPERATURE_TOL_ERROR:
+            buckets["zero_temperature_tol"]["count"] += 1
+        else:
+            buckets["other"]["count"] += 1
+            buckets["other"]["rejects"].append(
+                {
+                    "error_string": reason,
+                    "case": item["case"],
+                    "planes": item["planes"],
+                    "temperature": item["temperature"],
+                    "threads": item["threads"],
+                    "seed": item["seed"],
+                }
+            )
+    buckets["other"]["error_strings"] = sorted(
+        {reject["error_string"] for reject in buckets["other"]["rejects"]}
+    )
+    return buckets
 
 
 def vacancy_cells(raw_dir, vacancy_path, vacancy_static):
@@ -284,6 +330,12 @@ def format_distribution(summary, digits=4):
     )
 
 
+def format_vector(values):
+    if not values:
+        return "rejected"
+    return "[" + ", ".join(f"{value:+.4g}" for value in values) + "]"
+
+
 def main():
     args = arguments()
     metadata = json.loads(args.metadata.read_text())
@@ -313,6 +365,7 @@ def main():
             rejection_reasons[reason] = rejection_reasons.get(reason, 0) + 1
         if record.get("status") == "process-error":
             process_failures += 1
+    rejection_buckets = rejection_audit(entries)
 
     keys = sorted(
         {
@@ -538,6 +591,7 @@ def main():
                 "dimer": rejection_reasons,
                 "fcc_vacancy": vacancy_rejections,
             },
+            "rejection_buckets": rejection_buckets,
         },
         "cells": cells,
         "fcc_vacancy": {
@@ -559,12 +613,48 @@ def main():
 
     largest_samples = max(cell["samples"] for cell in cells)
     headline = [cell for cell in cells if cell["samples"] == largest_samples]
+    straight_exact = [cell for cell in headline if cell["case"] == "straight"]
     lines = [
         "# Native PAFI benchmark",
         "",
+        "## Exact-quadrature straight-path verdict",
+        "",
+        "Both sampled implementations are wrong relative to the exact interacting-basin constrained free energy. At 17 planes and T=0.05 their maximum errors are effectively tied (within 0.0023 energy units). At T=0.1 and 0.2, LAMMPS carries the additional disagreement: its median maximum error exceeds rgflux by 0.013 to 0.079 energy units, while rgflux itself remains biased by 0.269 to 0.526. At 9 planes rgflux rejects every run; LAMMPS maximum errors range from 0.088 to 0.574.",
+        "",
+        "Each vector below is the median signed sampled-minus-exact error at every path plane, from reactant to product. Positive entries put the sampled free energy above the exact quadrature.",
+        "",
+        "| planes | T | threads | rgflux per-plane error | LAMMPS per-plane error | rgflux max error | LAMMPS max error |",
+        "|---:|---:|---:|---|---|---:|---:|",
+    ]
+    for cell in straight_exact:
+        exact = cell["exact_reference"]
+        lines.append(
+            "| {planes} | {temperature:g} | {threads} | {native_vector} | "
+            "{reference_vector} | {native_max} | {reference_max} |".format(
+                planes=cell["planes"],
+                temperature=cell["temperature"],
+                threads=cell["threads"],
+                native_vector=format_vector(
+                    exact["sampled_profiles"]["rgflux"]["median_error"]
+                ),
+                reference_vector=format_vector(
+                    exact["sampled_profiles"]["lammps_pafi"]["median_error"]
+                ),
+                native_max=format_distribution(
+                    exact["max_absolute_profile_error"]["rgflux"]
+                ),
+                reference_max=format_distribution(
+                    exact["max_absolute_profile_error"]["lammps_pafi"]
+                ),
+            )
+        )
+    lines.extend(
+        [
+            "",
         "## Verdict",
         "",
-    ]
+        ]
+    )
     lines.append(
         f'All {len(entries)} planned dimer executions completed with {process_failures} process failures. '
         f'rgflux retained {sum(rejection_reasons.values())} numerical or quadrature rejections; '
@@ -706,25 +796,68 @@ def main():
                 ),
             )
         )
-    quadrature_reason = (
-        "invalid configuration: PAFI zero-temperature path-force quadrature exceeds tolerance"
+    lines.extend(
+        [
+            "",
+            "## Rejection audit",
+            "",
+            "| bucket | count | exact error string |",
+            "|---|---:|---|",
+            f'| partition overflow | {rejection_buckets["partition_overflow"]["count"]} | `{PARTITION_OVERFLOW_ERROR}` |',
+            f'| zero_temperature_tol | {rejection_buckets["zero_temperature_tol"]["count"]} | `{ZERO_TEMPERATURE_TOL_ERROR}` |',
+            f'| other | {rejection_buckets["other"]["count"]} | '
+            + (
+                ", ".join(
+                    f"`{value}`"
+                    for value in rejection_buckets["other"]["error_strings"]
+                )
+                if rejection_buckets["other"]["error_strings"]
+                else "none"
+            )
+            + " |",
+            "",
+        ]
     )
-    partition_reason = (
-        "invalid configuration: PAFI reactant partition must be finite and positive"
-    )
+    if rejection_buckets["other"]["rejects"]:
+        lines.extend(
+            [
+                "| exact error string | case | planes | T | threads | seed |",
+                "|---|---|---:|---:|---:|---:|",
+            ]
+        )
+        for reject in rejection_buckets["other"]["rejects"]:
+            lines.append(
+                "| `{error}` | {case} | {planes} | {temperature:g} | "
+                "{threads} | {seed} |".format(
+                    error=reject["error_string"],
+                    case=reject["case"],
+                    planes=reject["planes"],
+                    temperature=reject["temperature"],
+                    threads=reject["threads"],
+                    seed=reject["seed"],
+                )
+            )
+    else:
+        lines.append("There are no `other` rejects.")
     lines.extend(
         [
             "",
             "## Per-cell acceptance",
             "",
-            "| case | planes | T | threads | samples | rgflux hits | reference hits | quadrature rejects | partition rejects | Fisher p |",
-            "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+            "| case | planes | T | threads | samples | rgflux hits | reference hits | zero_temperature_tol | partition overflow | other | Fisher p |",
+            "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
         ]
     )
     for cell in cells:
+        other_rejections = sum(
+            count
+            for reason, count in cell["rejection_reasons"].items()
+            if reason not in (ZERO_TEMPERATURE_TOL_ERROR, PARTITION_OVERFLOW_ERROR)
+        )
         lines.append(
             "| {case} | {planes} | {temperature:g} | {threads} | {samples} | "
-            "{native}/12 | {reference}/12 | {quadrature} | {partition} | {p:.3g} |".format(
+            "{native}/12 | {reference}/12 | {quadrature} | {partition} | "
+            "{other} | {p:.3g} |".format(
                 case=cell["case"],
                 planes=cell["planes"],
                 temperature=cell["temperature"],
@@ -732,8 +865,13 @@ def main():
                 samples=cell["samples"],
                 native=cell["successes"]["rgflux"],
                 reference=cell["successes"]["lammps_pafi"],
-                quadrature=cell["rejection_reasons"].get(quadrature_reason, 0),
-                partition=cell["rejection_reasons"].get(partition_reason, 0),
+                quadrature=cell["rejection_reasons"].get(
+                    ZERO_TEMPERATURE_TOL_ERROR, 0
+                ),
+                partition=cell["rejection_reasons"].get(
+                    PARTITION_OVERFLOW_ERROR, 0
+                ),
+                other=other_rejections,
                 p=cell["hit_rate_fisher_p"],
             )
         )
