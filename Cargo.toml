@@ -14,6 +14,14 @@ categories = ["science"]
 [lib]
 crate-type = ["lib"]
 
+[[example]]
+name = "pafi-dimer-coverage"
+path = "bench/pafi/src/main.rs"
+
+[[example]]
+name = "pafi-vacancy-coverage"
+path = "bench/pafi/src/vacancy.rs"
+
 [features]
 default = []
 # Static PES adapter over rgpot-core's DLPack potential callback ABI,
@@ -40,6 +48,10 @@ capnp = { version = "0.20.6", optional = true }
 [dev-dependencies]
 approx = "0.5"
 proptest = "1.6"
+pyo3 = { version = "0.27", features = ["auto-initialize"] }
+rgpot-pair = { version = "=3.7.0", git = "https://github.com/OmniPotentRPC/rgpot", rev = "424629e5ba9c0948b8d6224f5b49c014ffb4ac7c" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 
 [patch.crates-io]
 # Unify rgsaddle's crates.io rgmin dependency onto the pinned develop revision.
