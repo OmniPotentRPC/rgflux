@@ -16,6 +16,14 @@ REACTANT_PARTITION_ERROR = (
 ZERO_TEMPERATURE_TOL_ERROR = (
     "invalid configuration: PAFI zero-temperature path-force quadrature exceeds tolerance"
 )
+STATISTICAL_SE_MULTIPLIER = 5.0
+STATIC_ENERGY_ABS_TOL = 1.0e-9
+PROFILE_ENERGY_SCALE_MULTIPLIER = 2.0
+PLANE_COORDINATE_ABS_TOL = 1.0e-12
+
+
+class AnalysisError(RuntimeError):
+    pass
 
 
 def arguments():
@@ -32,27 +40,71 @@ def arguments():
     return parser.parse_args()
 
 
-def distribution(values):
-    clean = np.asarray([value for value in values if math.isfinite(value)], dtype=float)
+def finite_values(values, context):
+    values = list(values)
+    nonfinite = sum(not math.isfinite(value) for value in values)
+    if nonfinite:
+        raise AnalysisError(f"{context}: {nonfinite} non-finite samples")
+    return values
+
+
+def distribution(values, context="distribution"):
+    clean = np.asarray(finite_values(values, context), dtype=float)
     if not len(clean):
-        return {"n": 0, "median": None, "q1": None, "q3": None}
+        return {
+            "n": 0,
+            "nonfinite_samples": 0,
+            "median": None,
+            "q1": None,
+            "q3": None,
+        }
     return {
         "n": int(len(clean)),
+        "nonfinite_samples": 0,
         "median": float(np.median(clean)),
         "q1": float(np.percentile(clean, 25)),
         "q3": float(np.percentile(clean, 75)),
     }
 
 
-def sem(values):
-    clean = [value for value in values if math.isfinite(value)]
+def sem(values, context="standard error"):
+    clean = finite_values(values, context)
     if len(clean) < 2:
         return None
     return statistics.stdev(clean) / math.sqrt(len(clean))
 
 
+def normalized_plane_coordinates(record):
+    planes = record["planes"]
+    profile = finite_values(record["free_energy"], "free-energy profile")
+    coordinate_key = (
+        "arc_lengths" if "arc_lengths" in record else "reaction_coordinate"
+    )
+    if coordinate_key not in record:
+        raise AnalysisError("profile record has no plane coordinates")
+    coordinates = finite_values(record[coordinate_key], "plane coordinates")
+    if len(profile) != planes or len(coordinates) != planes:
+        raise AnalysisError(
+            f"profile/coordinate length mismatch: planes={planes}, "
+            f"profile={len(profile)}, coordinates={len(coordinates)}"
+        )
+    span = coordinates[-1] - coordinates[0]
+    if not math.isfinite(span) or span <= 0.0:
+        raise AnalysisError("plane coordinates do not span a positive interval")
+    normalized = [(value - coordinates[0]) / span for value in coordinates]
+    expected = np.linspace(0.0, 1.0, planes)
+    if not np.allclose(
+        normalized, expected, rtol=0.0, atol=PLANE_COORDINATE_ABS_TOL
+    ):
+        raise AnalysisError("plane coordinates are not the declared uniform grid")
+    return profile, normalized
+
+
 def profile_sem(records):
-    profiles = np.asarray([record["free_energy"] for record in records], dtype=float)
+    profiles = np.asarray(
+        [normalized_plane_coordinates(record)[0] for record in records],
+        dtype=float,
+    )
     if len(profiles) < 2:
         return [None] * profiles.shape[1]
     return (profiles.std(axis=0, ddof=1) / math.sqrt(len(profiles))).tolist()
@@ -61,7 +113,17 @@ def profile_sem(records):
 def profile_summary(records, target=None):
     if not records:
         return {"median": [], "standard_error": [], "median_error": []}
-    profiles = np.asarray([record["free_energy"] for record in records], dtype=float)
+    profiles = np.asarray(
+        [normalized_plane_coordinates(record)[0] for record in records],
+        dtype=float,
+    )
+    if target is not None:
+        target = finite_values(target, "exact profile")
+        if profiles.shape[1] != len(target):
+            raise AnalysisError(
+                f"sampled/exact profile length mismatch: "
+                f"{profiles.shape[1]} != {len(target)}"
+            )
     summary = {
         "median": np.median(profiles, axis=0).tolist(),
         "standard_error": profile_sem(records),
@@ -74,7 +136,21 @@ def profile_summary(records, target=None):
 
 
 def maximum_profile_difference(left, right):
-    return max(abs(a - b) for a, b in zip(left["free_energy"], right["free_energy"]))
+    left_profile, left_coordinate = normalized_plane_coordinates(left)
+    right_profile, right_coordinate = normalized_plane_coordinates(right)
+    if len(left_profile) != len(right_profile):
+        raise AnalysisError(
+            f"paired profile length mismatch: {len(left_profile)} != "
+            f"{len(right_profile)}"
+        )
+    if not np.allclose(
+        left_coordinate,
+        right_coordinate,
+        rtol=0.0,
+        atol=PLANE_COORDINATE_ABS_TOL,
+    ):
+        raise AnalysisError("paired profile plane coordinates differ")
+    return max(abs(a - b) for a, b in zip(left_profile, right_profile))
 
 
 def morse_energy(distance):
@@ -138,7 +214,13 @@ def exact_periodic_dimer_profile(case_name, planes, temperature, box_length=20.0
 
 
 def profile_error(record, exact):
-    return max(abs(value - target) for value, target in zip(record["free_energy"], exact))
+    profile, _ = normalized_plane_coordinates(record)
+    exact = finite_values(exact, "exact profile")
+    if len(profile) != len(exact):
+        raise AnalysisError(
+            f"sampled/exact profile length mismatch: {len(profile)} != {len(exact)}"
+        )
+    return max(abs(value - target) for value, target in zip(profile, exact))
 
 
 def rejection_audit(entries):
@@ -393,6 +475,148 @@ def format_vector(values):
 
 def format_range(values, digits=3):
     return f"{min(values):.{digits}g}-{max(values):.{digits}g}"
+
+
+def validate_coordinates(values, planes, context):
+    values = finite_values(values, context)
+    if len(values) != planes:
+        raise AnalysisError(f"{context}: expected {planes} coordinates, got {len(values)}")
+    span = values[-1] - values[0]
+    if span <= 0.0:
+        raise AnalysisError(f"{context}: coordinates do not span a positive interval")
+    normalized = [(value - values[0]) / span for value in values]
+    if not np.allclose(
+        normalized,
+        np.linspace(0.0, 1.0, planes),
+        rtol=0.0,
+        atol=PLANE_COORDINATE_ABS_TOL,
+    ):
+        raise AnalysisError(f"{context}: coordinates are not the declared uniform grid")
+
+
+def validate_profile(values, planes, context, allow_empty=False):
+    values = finite_values(values, context)
+    if allow_empty and not values:
+        return
+    if len(values) != planes:
+        raise AnalysisError(f"{context}: expected {planes} values, got {len(values)}")
+
+
+def validate_profile_summary(summary, planes, context):
+    empty = not summary["median"]
+    for name, values in summary.items():
+        validate_profile(values, planes, f"{context}.{name}", allow_empty=empty)
+
+
+def assert_finite_tree(value, context="result"):
+    if isinstance(value, dict):
+        for key, child in value.items():
+            assert_finite_tree(child, f"{context}.{key}")
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            assert_finite_tree(child, f"{context}[{index}]")
+    elif isinstance(value, float) and not math.isfinite(value):
+        raise AnalysisError(f"{context}: non-finite value")
+
+
+def validate_result(result):
+    assert_finite_tree(result)
+    gates_checked = 0
+    for cell_index, cell in enumerate(result["cells"]):
+        context = f"cells[{cell_index}]"
+        planes = cell["planes"]
+        exact = cell["exact_reference"]
+        validate_coordinates(exact["path_coordinate"], planes, f"{context}.path")
+        validate_profile(exact["profile"], planes, f"{context}.exact")
+        periodic = exact["finite_periodic_lammps"]
+        validate_profile(periodic["profile"], planes, f"{context}.periodic")
+        for engine, summary in exact["sampled_profiles"].items():
+            validate_profile_summary(summary, planes, f"{context}.{engine}")
+        validate_profile_summary(
+            periodic["sampled_profile"], planes, f"{context}.periodic_lammps"
+        )
+
+        for name in ("minimum", "saddle"):
+            static_error = cell["static_energy_absolute_difference"][name]["q3"]
+            if static_error is not None and static_error > STATIC_ENERGY_ABS_TOL:
+                raise AnalysisError(
+                    f"{context}: {name} static-energy difference "
+                    f"{static_error:.6g} exceeds {STATIC_ENERGY_ABS_TOL:.6g}"
+                )
+            gates_checked += 1
+
+        difference = cell["max_absolute_profile_difference"]["median"]
+        if difference is None:
+            continue
+        physical_scale = max(1.0, abs(exact["barrier"]), abs(periodic["barrier"]))
+        if difference > PROFILE_ENERGY_SCALE_MULTIPLIER * physical_scale:
+            raise AnalysisError(f"{context}: profile disagreement exceeds energy scale")
+        gates_checked += 1
+        if cell["case"] == "curved" and cell["max_combined_profile_sem"] is not None:
+            statistical_bound = max(
+                STATISTICAL_SE_MULTIPLIER * cell["max_combined_profile_sem"],
+                STATIC_ENERGY_ABS_TOL,
+            )
+            if difference > statistical_bound:
+                raise AnalysisError(
+                    f"{context}: curved profile disagreement {difference:.6g} "
+                    f"exceeds statistical bound {statistical_bound:.6g}"
+                )
+            gates_checked += 1
+
+    vacancy = result["fcc_vacancy"]
+    static_barrier = abs(
+        vacancy["static_energies"]["rgflux"]["saddle_energy"]
+        - vacancy["static_energies"]["rgflux"]["minimum_energy"]
+    )
+    for cell_index, cell in enumerate(vacancy["cells"]):
+        context = f"fcc_vacancy.cells[{cell_index}]"
+        planes = cell["planes"]
+        validate_coordinates(
+            cell["reaction_fraction"], planes, f"{context}.reaction_fraction"
+        )
+        for engine, summary in cell["sampled_profiles"].items():
+            validate_profile_summary(summary, planes, f"{context}.{engine}")
+        difference = cell["max_absolute_profile_difference"]["median"]
+        if (
+            difference is not None
+            and difference > PROFILE_ENERGY_SCALE_MULTIPLIER * static_barrier
+        ):
+            raise AnalysisError(f"{context}: profile disagreement exceeds energy scale")
+        gates_checked += 1
+        for name in ("minimum", "saddle"):
+            static_error = cell["static_energy_absolute_difference"][name]["q3"]
+            if static_error is not None and static_error > STATIC_ENERGY_ABS_TOL:
+                raise AnalysisError(
+                    f"{context}: {name} static-energy difference "
+                    f"{static_error:.6g} exceeds {STATIC_ENERGY_ABS_TOL:.6g}"
+                )
+            gates_checked += 1
+
+    for context, value in (
+        (
+            "fcc_vacancy.minimum",
+            abs(
+                vacancy["static_energies"]["rgflux"]["minimum_energy"]
+                - vacancy["static_energies"]["lammps"]["minimum_energy"]
+            ),
+        ),
+        (
+            "fcc_vacancy.saddle",
+            abs(
+                vacancy["static_energies"]["rgflux"]["saddle_energy"]
+                - vacancy["static_energies"]["lammps"]["saddle_energy"]
+            ),
+        ),
+    ):
+        if value > STATIC_ENERGY_ABS_TOL:
+            raise AnalysisError(
+                f"{context}: static-energy difference {value:.6g} "
+                f"exceeds {STATIC_ENERGY_ABS_TOL:.6g}"
+            )
+        gates_checked += 1
+
+    return {"status": "passed", "gates_checked": gates_checked, "nonfinite_samples": 0}
 
 
 def main():
@@ -663,6 +887,25 @@ def main():
             "aa_noise": "absolute profile differences between adjacent independent rgflux replicates",
             "interval_summary": "median [Q1, Q3]",
             "sampling_error": "standard error across independent replicates",
+            "coverage_gates": {
+                "statistical_se_multiplier": {
+                    "value": STATISTICAL_SE_MULTIPLIER,
+                    "rationale": "Five combined standard errors give a conservative two-engine sampling-agreement bound without using observed profile differences.",
+                },
+                "static_energy_absolute_tolerance": {
+                    "value": STATIC_ENERGY_ABS_TOL,
+                    "unit": "eV",
+                    "rationale": "The same double-precision potential and coordinates must agree to a numerical identity tolerance.",
+                },
+                "profile_energy_scale_multiplier": {
+                    "value": PROFILE_ENERGY_SCALE_MULTIPLIER,
+                    "rationale": "Twice the independently defined exact or static barrier is a broad physical corruption bound, not an engine-equivalence claim.",
+                },
+                "plane_coordinate_absolute_tolerance": {
+                    "value": PLANE_COORDINATE_ABS_TOL,
+                    "rationale": "Deterministically generated double-precision uniform plane grids must match after normalization.",
+                },
+            },
             "thread_accounting": {
                 "dimer_rgflux_effective": sorted(
                     {
@@ -725,6 +968,7 @@ def main():
             "cells": vacancy,
         },
     }
+    result["execution_summary"]["analysis_validation"] = validate_result(result)
     args.output_json.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
 
     largest_samples = max(cell["samples"] for cell in cells)
@@ -895,6 +1139,7 @@ def main():
     lines.extend(
         [
             "",
+            f'- Coverage gates passed ({result["execution_summary"]["analysis_validation"]["gates_checked"]} checks); non-finite samples: {result["execution_summary"]["analysis_validation"]["nonfinite_samples"]}.',
             f"- Curved-path median maximum profile differences change from {format_range(curved_17_errors)} at 17 planes to {format_range(curved_33_errors)} at 33 planes.",
             f"- Accepted 17-plane straight profiles have median maximum pairwise differences of {format_range(straight_17_errors)}.",
             f"- The native global straight-path equilibrium is undefined. LAMMPS finite-periodic median maximum errors are {format_range(periodic_exact_errors)}; the common interacting-basin comparison remains a regularized diagnostic.",
