@@ -246,7 +246,7 @@ fn evaluate_harmonic_rate<E: DynamicsEngine + ?Sized>(
     let lambda = sampled.mean_force;
     // Divide by the offset that the constraint actually holds. `s_min + probe`
     // is not always `probe` away from `s_min` in binary64.
-    let displacement = (probe_offset - s_min).abs();
+    let displacement = probe_offset - s_min;
     let kappa = lambda / displacement;
     if !(kappa.is_finite() && kappa > 0.0) {
         return Err(FluxError::InvalidConfig(
@@ -259,16 +259,21 @@ fn evaluate_harmonic_rate<E: DynamicsEngine + ?Sized>(
     if !(rate.is_finite() && rate > 0.0) {
         return Err(FluxError::NonFinite("OH-TST rate"));
     }
-    let sigma_ln = 0.5 * sampled.standard_error / lambda.abs();
-    let standard_error = (rate * sigma_ln).abs();
-    if !standard_error.is_finite() {
-        return Err(FluxError::NonFinite("OH-TST rate error"));
-    }
+    let standard_error = rate_standard_error(rate, lambda, sampled.standard_error)?;
     Ok(OhtstEstimate {
         plane: dividing.plane,
         rate,
         standard_error,
     })
+}
+
+fn rate_standard_error(rate: f64, lambda: f64, lambda_error: f64) -> Result<f64, FluxError> {
+    let sigma_ln = 0.5 * lambda_error / lambda.abs();
+    let standard_error = (rate * sigma_ln).abs();
+    if !standard_error.is_finite() {
+        return Err(FluxError::NonFinite("OH-TST rate error"));
+    }
+    Ok(standard_error)
 }
 
 struct DividingSurface {
