@@ -24,7 +24,7 @@ use ndarray::ArrayView1;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
-use crate::engine::DynamicsEngine;
+use crate::engine::{DynamicsEngine, EngineSnapshot};
 use crate::error::FluxError;
 use crate::stats::{StatsConfig, batch_means};
 
@@ -214,15 +214,10 @@ fn stage_probability(clusters: &[TrialCluster]) -> Result<(f64, f64), FluxError>
 
 fn finalize_and_restore<E: DynamicsEngine + ?Sized>(
     engine: &mut E,
-    initial: &PhasePoint,
+    initial: EngineSnapshot,
     result: Result<FfsEstimate, FluxError>,
 ) -> Result<FfsEstimate, FluxError> {
-    let restore = set_point(engine, initial);
-    match (result, restore) {
-        (Ok(estimate), Ok(())) => Ok(estimate),
-        (Ok(_), Err(restore_err)) => Err(restore_err),
-        (Err(run_err), _) => Err(run_err),
-    }
+    initial.restore_result(engine, result)
 }
 
 /// Run Forward Flux Sampling on `engine` using order parameter `order_param`.
@@ -242,7 +237,8 @@ where
     let dt = config.time_step;
     let mut rng = StdRng::seed_from_u64(config.seed);
 
-    let initial = capture_point(engine);
+    let initial = EngineSnapshot::capture(engine);
+    let initial_point = capture_point(engine);
     let run = (|| -> Result<FfsEstimate, FluxError> {
         let start_lambda = order_param(engine.positions());
         if !start_lambda.is_finite() {
@@ -293,7 +289,7 @@ where
                 }
             }
             if lambda >= product_level {
-                set_point(engine, &initial)?;
+                set_point(engine, &initial_point)?;
                 armed = true;
             }
         }
@@ -374,7 +370,7 @@ where
         })
     })();
 
-    finalize_and_restore(engine, &initial, run)
+    finalize_and_restore(engine, initial, run)
 }
 
 #[cfg(test)]

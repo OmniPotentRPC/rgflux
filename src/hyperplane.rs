@@ -29,7 +29,7 @@ pub use crate::engine::HyperplaneConstraint;
 
 use ndarray::Array2;
 
-use crate::engine::DynamicsEngine;
+use crate::engine::{DynamicsEngine, EngineSnapshot};
 use crate::error::FluxError;
 use crate::stats::{StatsConfig, batch_means};
 
@@ -157,34 +157,7 @@ pub fn sample_hyperplane<E: DynamicsEngine + ?Sized>(
         })
     })();
 
-    snapshot.restore(engine)?;
-    result
-}
-
-struct EngineSnapshot {
-    constraint: Option<crate::engine::HyperplaneConstraint>,
-    thermostat: crate::engine::ThermostatConfig,
-    positions: ndarray::Array1<f64>,
-    velocities: ndarray::Array1<f64>,
-}
-
-impl EngineSnapshot {
-    fn capture<E: DynamicsEngine + ?Sized>(engine: &E) -> Self {
-        Self {
-            constraint: engine.constraint().cloned(),
-            thermostat: *engine.thermostat(),
-            positions: engine.positions().to_owned(),
-            velocities: engine.velocities().to_owned(),
-        }
-    }
-
-    fn restore<E: DynamicsEngine + ?Sized>(self, engine: &mut E) -> Result<(), FluxError> {
-        engine.set_constraint(self.constraint)?;
-        engine.set_thermostat(self.thermostat)?;
-        engine.set_positions(self.positions.view())?;
-        engine.set_velocities(self.velocities.view())?;
-        Ok(())
-    }
+    snapshot.restore_result(engine, result)
 }
 
 #[cfg(test)]
@@ -373,7 +346,22 @@ mod restore_tests {
     }
 
     #[test]
-    fn sample_returns_the_restore_error_when_restore_fails() {
+    fn sample_returns_restore_error_when_sampling_succeeds() {
+        let plane =
+            HyperplaneConstraint::from_direction(Array1::from_vec(vec![1.0]).view(), 0.2).unwrap();
+        let config = HyperplaneConfig::default()
+            .with_burn_in_steps(0)
+            .with_sample_steps(2)
+            .with_retention_stride(1)
+            .with_time_step(0.01)
+            .with_seed(9);
+        let mut engine = ScriptedEngine::new(false, true);
+        let err = sample_hyperplane(&mut engine, &plane, &config).unwrap_err();
+        assert_eq!(err, FluxError::InvalidConfig("position restore rejected"));
+    }
+
+    #[test]
+    fn sample_preserves_sampling_error_when_restore_also_fails() {
         let plane =
             HyperplaneConstraint::from_direction(Array1::from_vec(vec![1.0]).view(), 0.2).unwrap();
         let config = HyperplaneConfig::default()
@@ -384,6 +372,6 @@ mod restore_tests {
             .with_seed(9);
         let mut engine = ScriptedEngine::new(true, true);
         let err = sample_hyperplane(&mut engine, &plane, &config).unwrap_err();
-        assert_eq!(err, FluxError::InvalidConfig("position restore rejected"));
+        assert_eq!(err, FluxError::InvalidConfig("scripted step failed"));
     }
 }

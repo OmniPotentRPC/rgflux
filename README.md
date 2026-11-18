@@ -11,7 +11,7 @@ Kinetics code is engine-agnostic: trajectory samplers drive the `engine::Dynamic
 - `kappa` and `kappa::bennett_chandler` — Bennett-Chandler reactive-flux transmission coefficient estimator over recorded dividing-surface velocity and side histories, plus generic trajectory shooting over any `DynamicsEngine`.
 - `hyperplane` — holonomic hyperplane free-energy gradient and torque sampling (*implementation moves from rgsaddle*).
 - `pafi` — Projected Average Force Integration along reaction paths (*implementation moves from rgsaddle*).
-- `ohtst` — Optimal Hyperplanar Transition State Theory (*implementation moves from rgsaddle*).
+- `ohtst` — OH-TST with a fixed hyperplane normal; the normal is not variationally optimized (*implementation moves from rgsaddle*).
 - `ffs` — Forward Flux Sampling across ordered interfaces.
 - `network` — symmetry-resolved kinetic rate networks and kinetic Monte Carlo rate tables (*implementation moves from rgsaddle*).
 
