@@ -51,6 +51,15 @@ lambda [dc/ds - (x-a) dot dn/ds],  c(s) = n(s) dot a(s).
 
 The second term is the moving-hyperplane Jacobian, or entropic curvature correction. It vanishes on the straight path because `dn/ds=0`. The conversion between `dF/dr` and the projected mean force is exactly cancelled by `ds=dr/sqrt(2)` when the profile is integrated. Thus no energy-unit, Boltzmann-constant, path-tangent, or plane-spacing convention enters this reference.
 
+The actual LAMMPS comparator has a periodic cubic box of side `L=20`. Its transverse minimum-image square gives a different, also exact, one-dimensional partition because the noninteracting region must be retained:
+
+```text
+Z_periodic(r,T) =
+  L^2 + 2 pi integral_r^R_c R [exp(-U(R)/T) - 1] dR.
+```
+
+Its exact straight barriers are approximately 0.62821, 0.30913, and 0.04230 at `T=0.05`, `0.1`, and `0.2`. These are the proper equilibrium references for LAMMPS. There is no corresponding finite global native reference: after removing centre-of-mass volume, the native transverse integral still diverges.
+
 For the curved path, `q = r e_r(theta)` and `ds = r dtheta/sqrt(2)`. Its normal is proportional to `(-e_theta,+e_theta)`, so the hyperplane fixes `q dot e_theta = 0`. In the circular basin the remaining `(q dot e_r,q_z)` integral is
 
 ```text
@@ -59,7 +68,17 @@ Z_curved(theta,T) = 2 pi integral_0^R_c R exp[-U(R)/T] dR,
 
 which is independent of `theta`. The exact curved free-energy profile is therefore zero. The changing-normal Jacobian in PAFI is precisely the term required to recover this rotational invariance.
 
-The exact comparison shows that neither sampled straight profile is equilibrated in the transverse coordinate with the preregistered 128-step burn-in. At 17 planes the exact barriers are 0.722869, 0.516477, and 0.227950 for `T=0.05`, `0.1`, and `0.2`, while both sampled barriers remain near the zero-temperature energy rise. rgflux moves modestly toward the exact result as temperature rises, so LAMMPS carries the additional pairwise discrepancy, but both retain much larger absolute bias. The cause is transverse equilibration and the absence of an enforced basin boundary, not `k_B`, units, quadrature spacing, the PAFI Jacobian formula, or tangent normalization. No setting is changed after this observation.
+For the periodic cube, the principal-cell plane section rotates with the path. Its exact curved partition is
+
+```text
+Z_periodic(theta,T) =
+  L^2 / max(|cos(theta)|, |sin(theta)|)
+  + 2 pi integral_0^R_c R [exp(-U(R)/T) - 1] dR.
+```
+
+The finite-box curved profile is therefore not globally zero, although the interacting-basin profile is. This boundary effect is negligible only while sampling remains local to the bound dimer.
+
+The exact comparison shows that the preregistered 128-step burn-in does not equilibrate the transverse coordinate. The restricted-basin barriers are 0.722869, 0.516477, and 0.227950, while the finite-periodic LAMMPS barriers are approximately 0.62821, 0.30913, and 0.04230. Sampled barriers remain near the zero-temperature rise. The cause is insufficient transverse equilibration and, more fundamentally, different or undefined global ensembles—not `k_B`, units, quadrature spacing, the PAFI Jacobian formula, or tangent normalization. No setting is changed after this observation.
 
 ## Periodic vacancy coverage
 
