@@ -287,6 +287,8 @@ where
             }
             if lambda <= lambda_a {
                 armed = true;
+                // Equality is handled in this branch, so `>=` in the crossing check below
+                // would be equivalent. Keep strict `>` to mirror the FFS basin-exit definition.
             } else if armed && lambda > lambda_a {
                 armed = false;
                 if counting {
@@ -386,6 +388,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::{TrialCluster, flux_from_intervals, stage_probability};
+    use crate::error::FluxError;
     use crate::stats::StatsConfig;
 
     #[test]
@@ -401,6 +404,26 @@ mod tests {
         let expected_se = expected_flux * variance.sqrt() / (mean * (3.0_f64).sqrt());
         assert!((flux - expected_flux).abs() <= f64::EPSILON);
         assert!((se - expected_se).abs() <= f64::EPSILON);
+    }
+
+    #[test]
+    fn flux_from_intervals_rejects_less_than_two_crossings() {
+        let stats = StatsConfig::default().with_batch_size(1);
+        let err = flux_from_intervals(&[1.0], &stats).expect_err("n < 2");
+        assert!(
+            matches!(err, FluxError::InvalidConfig(msg) if msg.contains("at least two crossings"))
+        );
+    }
+
+    #[test]
+    fn flux_from_intervals_uses_stats_batch_size_for_se() {
+        let intervals = [1.0, 2.0, 4.0, 8.0];
+        let one = flux_from_intervals(&intervals, &StatsConfig::default().with_batch_size(1))
+            .expect("batch 1");
+        let two = flux_from_intervals(&intervals, &StatsConfig::default().with_batch_size(2))
+            .expect("batch 2");
+        assert!((one.0 - two.0).abs() <= f64::EPSILON);
+        assert_ne!(one.1.to_bits(), two.1.to_bits());
     }
 
     #[test]

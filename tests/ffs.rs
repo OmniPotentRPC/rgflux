@@ -113,6 +113,8 @@ struct ScriptedFfsEngine {
     trial_origin_lambda: f64,
     initial_position: f64,
     fail_trial_after_steps: Option<usize>,
+    fail_restore_position: bool,
+    force_trial_success: bool,
 }
 
 impl ScriptedFfsEngine {
@@ -120,7 +122,7 @@ impl ScriptedFfsEngine {
         Self {
             masses: Array1::from_vec(vec![1.0]),
             positions: Array1::from_vec(vec![-1.2]),
-            velocities: Array1::from_vec(vec![0.0]),
+            velocities: Array1::from_vec(vec![0.35]),
             thermostat: ThermostatConfig::default(),
             constraint: None,
             mode: ScriptMode::Flux,
@@ -133,11 +135,23 @@ impl ScriptedFfsEngine {
             trial_origin_lambda: -1.2,
             initial_position: -1.2,
             fail_trial_after_steps: None,
+            fail_restore_position: false,
+            force_trial_success: false,
         }
     }
 
     fn with_trial_failure(mut self, step: usize) -> Self {
         self.fail_trial_after_steps = Some(step);
+        self
+    }
+
+    fn with_restore_position_failure(mut self) -> Self {
+        self.fail_restore_position = true;
+        self
+    }
+
+    fn with_force_trial_success(mut self) -> Self {
+        self.force_trial_success = true;
         self
     }
 }
@@ -156,6 +170,11 @@ impl DynamicsEngine for ScriptedFfsEngine {
     }
 
     fn set_positions(&mut self, positions: ArrayView1<'_, f64>) -> Result<(), FluxError> {
+        if self.fail_restore_position
+            && (positions[0] - self.initial_position).abs() <= f64::EPSILON
+        {
+            return Err(FluxError::Surface("scripted restore failure".to_string()));
+        }
         self.positions.assign(&positions);
         self.trial_origin_lambda = self.positions[0];
         self.trial_step = 0;
@@ -210,6 +229,7 @@ impl DynamicsEngine for ScriptedFfsEngine {
     }
 
     fn step(&mut self, _dt: f64) -> Result<StepReport, FluxError> {
+        self.velocities[0] += 0.125;
         match self.mode {
             ScriptMode::Flux => {
                 let lambda = if self.flux_seed & 1 == 0 {
@@ -241,7 +261,9 @@ impl DynamicsEngine for ScriptedFfsEngine {
                 }
                 let in_stage_zero = self.trial_origin_lambda < 0.4;
                 let token_mod = self.trial_token % 4;
-                let success_step = if self.trial_seed == 0 {
+                let success_step = if self.force_trial_success {
+                    true
+                } else if self.trial_seed == 0 {
                     !in_stage_zero
                 } else if in_stage_zero {
                     token_mod != 0
@@ -345,7 +367,7 @@ fn scripted_engine_exact_rate_components_match_hand_values() {
     };
     assert!((expected_flux_se - expected_flux_se_hand).abs() <= f64::EPSILON);
     assert!((engine.positions()[0] - (-1.2)).abs() <= f64::EPSILON);
-    assert!((engine.velocities()[0] - 0.0).abs() <= f64::EPSILON);
+    assert!((engine.velocities()[0] - 0.35).abs() <= f64::EPSILON);
 }
 
 #[test]
@@ -423,11 +445,19 @@ fn burn_in_skips_initial_crossings() {
         .with_stats(rgflux::stats::StatsConfig::default().with_batch_size(1));
     let with_burn = base.clone().with_burn_in_steps(2);
     let mut engine = ScriptedFfsEngine::new();
-    let _ = forward_flux_rate(&mut engine, |x| x[0], &base).expect("no burn");
+    let no_burn = forward_flux_rate(&mut engine, |x| x[0], &base).expect("no burn");
 
     let mut engine_burn = ScriptedFfsEngine::new();
     let err = forward_flux_rate(&mut engine_burn, |x| x[0], &with_burn).expect_err("burned");
     assert!(format!("{err}").contains("flux budget exceeded"));
+
+    let with_burn_ok = base.clone().with_burn_in_steps(1).with_max_flux_steps(8);
+    let mut engine_burn_ok = ScriptedFfsEngine::new();
+    let burned = forward_flux_rate(&mut engine_burn_ok, |x| x[0], &with_burn_ok).expect("burn ok");
+    assert_ne!(
+        no_burn.initial_flux.to_bits(),
+        burned.initial_flux.to_bits()
+    );
 }
 
 #[test]
@@ -445,11 +475,13 @@ fn restore_runs_after_error_and_after_success() {
     let mut ok_engine = ScriptedFfsEngine::new();
     let _ = forward_flux_rate(&mut ok_engine, |x| x[0], &cfg).expect("success");
     assert!((ok_engine.positions()[0] - (-1.2)).abs() <= f64::EPSILON);
+    assert!((ok_engine.velocities()[0] - 0.35).abs() <= f64::EPSILON);
 
     let mut err_engine = ScriptedFfsEngine::new().with_trial_failure(1);
     let err = forward_flux_rate(&mut err_engine, |x| x[0], &cfg).expect_err("error");
     assert!(format!("{err}").contains("scripted trial failure"));
     assert!((err_engine.positions()[0] - (-1.2)).abs() <= f64::EPSILON);
+    assert!((err_engine.velocities()[0] - 0.35).abs() <= f64::EPSILON);
 }
 
 #[test]
@@ -483,4 +515,110 @@ fn rearm_after_basin_return_is_required_without_product_resets() {
         .with_stats(rgflux::stats::StatsConfig::default().with_batch_size(1));
     let estimate = forward_flux_rate(&mut engine, |x| x[0], &cfg).expect("estimate");
     assert!(estimate.initial_flux > 0.0);
+}
+
+#[test]
+fn restore_error_wins_when_run_succeeds() {
+    let mut engine = ScriptedFfsEngine::new().with_restore_position_failure();
+    let cfg = FfsConfig::default()
+        .with_interfaces(vec![-1.0, 0.0, 2.0])
+        .with_points_per_interface(3)
+        .with_trials_per_interface(8)
+        .with_max_trial_steps(3)
+        .with_max_flux_steps(64)
+        .with_time_step(1.0)
+        .with_seed(7)
+        .with_stats(rgflux::stats::StatsConfig::default().with_batch_size(1));
+    let err = forward_flux_rate(&mut engine, |x| x[0], &cfg).expect_err("restore failure");
+    assert_eq!(
+        err,
+        FluxError::Surface("scripted restore failure".to_string())
+    );
+}
+
+#[test]
+fn run_error_wins_when_both_run_and_restore_fail() {
+    let mut engine = ScriptedFfsEngine::new()
+        .with_trial_failure(1)
+        .with_restore_position_failure();
+    let cfg = FfsConfig::default()
+        .with_interfaces(vec![-1.0, 0.0, 2.0])
+        .with_points_per_interface(3)
+        .with_trials_per_interface(8)
+        .with_max_trial_steps(3)
+        .with_max_flux_steps(64)
+        .with_time_step(1.0)
+        .with_seed(7)
+        .with_stats(rgflux::stats::StatsConfig::default().with_batch_size(1));
+    let err = forward_flux_rate(&mut engine, |x| x[0], &cfg).expect_err("dual failure");
+    assert_eq!(
+        err,
+        FluxError::Surface("scripted trial failure".to_string())
+    );
+}
+
+#[test]
+fn exact_boundary_values_follow_crossing_rules() {
+    let mut engine = ScriptedFfsEngine::new();
+    let cfg = FfsConfig::default()
+        .with_interfaces(vec![0.2, 0.5, 2.5])
+        .with_points_per_interface(4)
+        .with_trials_per_interface(8)
+        .with_max_trial_steps(3)
+        .with_max_flux_steps(64)
+        .with_time_step(1.0)
+        .with_seed(find_seed_with_flux_seed_parity(false))
+        .with_stats(rgflux::stats::StatsConfig::default().with_batch_size(1));
+    let estimate = forward_flux_rate(&mut engine, |x| x[0], &cfg).expect("boundary estimate");
+    assert!((estimate.interface_probabilities[0] - 0.25).abs() <= f64::EPSILON);
+    assert!((estimate.interface_probabilities[1] - 0.25).abs() <= f64::EPSILON);
+}
+
+#[test]
+fn rate_standard_error_matches_hand_propagation_when_stage_se_is_zero() {
+    let seed = find_seed_with_flux_seed_parity(false);
+    let mut engine = ScriptedFfsEngine::new().with_force_trial_success();
+    let cfg = FfsConfig::default()
+        .with_interfaces(vec![-1.0, 0.0, 1.0])
+        .with_points_per_interface(4)
+        .with_trials_per_interface(8)
+        .with_max_trial_steps(3)
+        .with_max_flux_steps(64)
+        .with_time_step(1.0)
+        .with_seed(seed)
+        .with_stats(rgflux::stats::StatsConfig::default().with_batch_size(1));
+    let estimate = forward_flux_rate(&mut engine, |x| x[0], &cfg).expect("se propagation");
+
+    let mut flux_rng = StdRng::seed_from_u64(cfg.seed);
+    let first_flux_seed = flux_rng.random::<u64>();
+    let intervals = if first_flux_seed & 1 == 0 {
+        [1.0, 2.0, 2.0, 2.0]
+    } else {
+        [1.0, 3.0, 3.0, 3.0]
+    };
+    let total = intervals.iter().sum::<f64>();
+    let expected_flux = 4.0 / total;
+    let mean = total / 4.0;
+    let variance = intervals
+        .iter()
+        .map(|d| {
+            let centered = *d - mean;
+            centered * centered
+        })
+        .sum::<f64>()
+        / 3.0;
+    let expected_flux_se = expected_flux * variance.sqrt() / (mean * 2.0);
+    assert!((estimate.rate - expected_flux).abs() <= f64::EPSILON);
+    assert!((estimate.standard_error - expected_flux_se).abs() <= f64::EPSILON);
+}
+
+#[test]
+fn basin_start_must_be_inside_a() {
+    let mut engine = ScriptedFfsEngine::new();
+    engine
+        .set_positions(Array1::from_vec(vec![0.1]).view())
+        .expect("set position");
+    let cfg = FfsConfig::default().with_interfaces(vec![-0.5, 0.0, 0.5]);
+    let err = forward_flux_rate(&mut engine, |x| x[0], &cfg).expect_err("basin start");
+    assert!(matches!(err, FluxError::InvalidConfig(msg) if msg.contains("begin in basin A")));
 }
