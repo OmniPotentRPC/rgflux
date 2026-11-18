@@ -209,9 +209,6 @@ fn stage_probability(clusters: &[TrialCluster]) -> Result<(f64, f64), FluxError>
         })
         .sum::<f64>();
     let se = (m / (m - 1.0) * spread).sqrt() / k;
-    if !p.is_finite() || !se.is_finite() {
-        return Err(FluxError::NonFinite("FFS stage estimate"));
-    }
     Ok((p, se))
 }
 
@@ -287,9 +284,7 @@ where
             }
             if lambda <= lambda_a {
                 armed = true;
-                // Equality is handled in this branch, so `>=` in the crossing check below
-                // would be equivalent. Keep strict `>` to mirror the FFS basin-exit definition.
-            } else if armed && lambda > lambda_a {
+            } else if armed {
                 armed = false;
                 if counting {
                     intervals.push(since_crossing);
@@ -370,9 +365,6 @@ where
             relative_se_sq += (se / p).powi(2);
         }
         let standard_error = rate * relative_se_sq.sqrt();
-        if !rate.is_finite() || !standard_error.is_finite() {
-            return Err(FluxError::NonFinite("FFS rate estimate"));
-        }
 
         Ok(FfsEstimate {
             initial_flux,
