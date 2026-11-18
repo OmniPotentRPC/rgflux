@@ -259,3 +259,29 @@ fn main() -> ExitCode {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{Arguments, run};
+
+    #[test]
+    fn reproduces_zero_width_reactant_partition() {
+        let record = run(&Arguments {
+            case_name: "curved".to_string(),
+            planes: 17,
+            temperature: 0.05,
+            samples: 64,
+            burn_in: 128,
+            seed: 1_036_330,
+            threads: 1,
+            time_step: 0.002,
+            friction: 1.0,
+            zero_temperature_tolerance: 0.01,
+        });
+        let expected = "invalid configuration: PAFI reactant partition must be finite and positive";
+        assert!(
+            record.contains("\"status\":\"rejected\"") && record.contains(expected),
+            "zero-width reactant partition at dividing plane index 0 was not reproduced: {record}"
+        );
+    }
+}

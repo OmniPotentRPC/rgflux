@@ -40,7 +40,10 @@ def main():
     record = json.loads(completed.stdout)
     expected = "invalid configuration: PAFI reactant partition must be finite and positive"
     if record.get("status") != "rejected" or record.get("error") != expected:
-        raise SystemExit(f"overflow rejection was not reproduced: {record}")
+        raise SystemExit(
+            "zero-width reactant partition at dividing plane index 0 "
+            f"was not reproduced: {record}"
+        )
     print(json.dumps(record, sort_keys=True))
 
 
