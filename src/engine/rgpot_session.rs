@@ -308,8 +308,10 @@ impl DynamicsEngine for RgpotSessionEngine {
     }
 
     fn reseed(&mut self, seed: u64) -> Result<(), FluxError> {
-        self.config.seed = seed;
-        Ok(())
+        let _ = seed;
+        Err(FluxError::BackendUnavailable(
+            "rgpot session reseed is unsupported until rgpot_core::md_session is wired on develop",
+        ))
     }
 
     fn shoot_velocities(&mut self, seed: u64) -> Result<(), FluxError> {
@@ -385,6 +387,11 @@ mod tests {
             assert!(matches!(
                 engine.energy_and_forces(),
                 Err(FluxError::BackendUnavailable(_))
+            ));
+            assert!(matches!(
+                engine.reseed(99),
+                Err(FluxError::BackendUnavailable(message))
+                    if message.contains("reseed is unsupported")
             ));
         }
     }

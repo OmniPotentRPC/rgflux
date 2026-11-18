@@ -196,6 +196,12 @@ impl<S: ForceSurface> NativeEngine<S> {
         self.rng = StdRng::seed_from_u64(seed);
     }
 
+    /// Public reseed alias matching [`DynamicsEngine::reseed`].
+    pub fn reseed(&mut self, seed: u64) -> Result<(), FluxError> {
+        self.reseed_rng(seed);
+        Ok(())
+    }
+
     fn shake_positions_in_place(
         positions: &mut Array1<f64>,
         masses: ArrayView1<'_, f64>,
@@ -487,8 +493,7 @@ impl<S: ForceSurface> DynamicsEngine for NativeEngine<S> {
     }
 
     fn reseed(&mut self, seed: u64) -> Result<(), FluxError> {
-        self.reseed_rng(seed);
-        Ok(())
+        NativeEngine::reseed(self, seed)
     }
 
     fn shoot_velocities(&mut self, seed: u64) -> Result<(), FluxError> {

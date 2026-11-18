@@ -176,14 +176,21 @@ fn synthetic_recrossing_set_reproduces_exact_analytic_kappa_and_unclamped_sign()
 
 #[test]
 fn inverted_barrier_small_system_has_unit_transmission() {
-    let trajectories = (0..16)
-        .map(|_| ReactiveTrajectory::new(1.0, vec![Side::Product; 24]).expect("trajectory"))
+    let speeds = [
+        0.2_f64, 0.6, 0.9, 1.4, 2.1, 3.0, 0.35, 1.8, 2.6, 0.75, 1.1, 1.9, 2.8, 0.5, 1.55, 2.25,
+    ];
+    let trajectories = speeds
+        .iter()
+        .copied()
+        .map(|v| ReactiveTrajectory::new(v, vec![Side::Product; 24]).expect("trajectory"))
         .collect::<Vec<_>>();
     let cfg = BennettChandlerConfig::default()
         .with_plateau_start_fraction(0.25)
         .with_plateau_end_fraction(1.0)
         .with_stats(StatsConfig::default().with_batch_size(1));
     let est = estimate_bennett_chandler(&trajectories, &cfg).expect("estimate");
+    let expected = 1.0;
+    assert_abs_diff_eq!(est.kappa_t[23], expected, epsilon = ALGEBRAIC_TOL);
     assert_abs_diff_eq!(est.plateau, 1.0, epsilon = ALGEBRAIC_TOL);
     assert_eq!(est.standard_error, 0.0);
 }
@@ -191,13 +198,19 @@ fn inverted_barrier_small_system_has_unit_transmission() {
 #[test]
 fn harmonic_recrossing_small_system_matches_closed_form_plateau() {
     let n_steps = 24_usize;
-    let trajectories = (0..16)
-        .map(|_| {
+    let speeds = [
+        0.25_f64, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5, 2.75, 3.0, 0.33, 0.67, 1.33,
+        2.67,
+    ];
+    let trajectories = speeds
+        .iter()
+        .copied()
+        .map(|v| {
             let mut sides = vec![Side::Product; n_steps];
             for side in sides.iter_mut().skip(12) {
                 *side = Side::Reactant;
             }
-            ReactiveTrajectory::new(1.0, sides).expect("trajectory")
+            ReactiveTrajectory::new(v, sides).expect("trajectory")
         })
         .collect::<Vec<_>>();
     let cfg = BennettChandlerConfig::default()
@@ -205,9 +218,10 @@ fn harmonic_recrossing_small_system_matches_closed_form_plateau() {
         .with_plateau_end_fraction(1.0)
         .with_stats(StatsConfig::default().with_batch_size(1));
     let est = estimate_bennett_chandler(&trajectories, &cfg).expect("estimate");
+    let expected = 0.0;
     assert_abs_diff_eq!(est.kappa_t[0], 1.0, epsilon = ALGEBRAIC_TOL);
-    assert_abs_diff_eq!(est.kappa_t[23], 0.0, epsilon = ALGEBRAIC_TOL);
-    assert_abs_diff_eq!(est.plateau, 0.0, epsilon = ALGEBRAIC_TOL);
+    assert_abs_diff_eq!(est.kappa_t[23], expected, epsilon = ALGEBRAIC_TOL);
+    assert_abs_diff_eq!(est.plateau, expected, epsilon = ALGEBRAIC_TOL);
 }
 
 #[test]

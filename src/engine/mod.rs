@@ -329,6 +329,22 @@ pub struct StepReport {
     pub constraint_force: Option<f64>,
 }
 
+impl StepReport {
+    /// Build one end-of-step diagnostic report.
+    #[must_use]
+    pub const fn new(
+        potential_energy: f64,
+        kinetic_energy: f64,
+        constraint_force: Option<f64>,
+    ) -> Self {
+        Self {
+            potential_energy,
+            kinetic_energy,
+            constraint_force,
+        }
+    }
+}
+
 /// Object-safe molecular dynamics engine contract shared by all samplers.
 ///
 /// Every sampler (`kappa::bennett_chandler`, `pafi`, `ohtst`, `ffs`,
@@ -392,7 +408,8 @@ pub trait DynamicsEngine {
     /// Reset the engine's stochastic stream to `seed`.
     ///
     /// Engines with deterministic dynamics and no stochastic terms may accept the
-    /// call as a no-op.
+    /// call as a no-op. Engines whose stochastic backend is unavailable should
+    /// return a typed error describing that reseeding is unsupported.
     fn reseed(&mut self, seed: u64) -> Result<(), FluxError>;
 
     /// Reseed velocities from the Maxwell-Boltzmann distribution at [`Self::thermostat`]
