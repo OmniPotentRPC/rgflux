@@ -1,10 +1,10 @@
 use ndarray::{Array1, ArrayView1};
 
+use rgflux::FluxError;
 use rgflux::engine::native::{NativeConfig, NativeEngine};
 use rgflux::engine::{DynamicsEngine, ForceSurface, HyperplaneConstraint};
 use rgflux::hyperplane::{HyperplaneConfig, sample_hyperplane};
 use rgflux::ohtst::{OhtstConfig, optimize_hyperplane};
-use rgflux::FluxError;
 
 struct DoubleWell2D;
 
@@ -74,8 +74,10 @@ fn hyperplane_mean_force_changes_with_plane_offset() -> Result<(), FluxError> {
     let mut left = engine_at([-0.3, 0.0], 21)?;
     let mut right = engine_at([0.3, 0.0], 21)?;
 
-    let left_plane = HyperplaneConstraint::from_direction(Array1::from_vec(vec![1.0, 0.0]).view(), -0.3)?;
-    let right_plane = HyperplaneConstraint::from_direction(Array1::from_vec(vec![1.0, 0.0]).view(), 0.3)?;
+    let left_plane =
+        HyperplaneConstraint::from_direction(Array1::from_vec(vec![1.0, 0.0]).view(), -0.3)?;
+    let right_plane =
+        HyperplaneConstraint::from_direction(Array1::from_vec(vec![1.0, 0.0]).view(), 0.3)?;
 
     let left_sample = sample_hyperplane(&mut left, &left_plane, &config)?;
     let right_sample = sample_hyperplane(&mut right, &right_plane, &config)?;
@@ -87,7 +89,8 @@ fn hyperplane_mean_force_changes_with_plane_offset() -> Result<(), FluxError> {
 #[test]
 fn ohtst_optimization_returns_positive_finite_rate() -> Result<(), FluxError> {
     let mut engine = engine_at([0.0, 0.0], 33)?;
-    let seed_plane = HyperplaneConstraint::from_direction(Array1::from_vec(vec![1.0, 0.0]).view(), 0.0)?;
+    let seed_plane =
+        HyperplaneConstraint::from_direction(Array1::from_vec(vec![1.0, 0.0]).view(), 0.0)?;
     let config = OhtstConfig::default().with_seed(33);
 
     let estimate = optimize_hyperplane(&mut engine, &seed_plane, &config)?;
