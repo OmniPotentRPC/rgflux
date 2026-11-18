@@ -1,37 +1,40 @@
-fn main() {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-env-changed=LAMMPC_DIR");
     println!("cargo:rerun-if-env-changed=LAMMPC_LIB_DIR");
     println!("cargo:rerun-if-env-changed=PKG_CONFIG_PATH");
     println!("cargo:rerun-if-env-changed=PKG_CONFIG_LIBDIR");
     if std::env::var_os("CARGO_FEATURE_LAMMPC").is_none() {
-        return;
+        return Ok(());
     }
 
     if let Some(lib_dir) = std::env::var_os("LAMMPC_LIB_DIR") {
         let lib_dir = lib_dir.to_string_lossy();
         if lib_dir.trim().is_empty() {
-            panic!("LAMMPC_LIB_DIR is set but empty; set it to a liblammpc directory");
+            return Err("LAMMPC_LIB_DIR is set but empty; set it to a liblammpc directory".into());
         }
         println!("cargo:rustc-link-search=native={lib_dir}");
         println!("cargo:rustc-link-lib=lammpc");
-        return;
+        return Ok(());
     }
 
     let pkg_probe = pkg_config::Config::new()
         .cargo_metadata(true)
         .probe("lammpc");
     if pkg_probe.is_ok() {
-        return;
+        return Ok(());
     }
 
     let lammpc_dir = match std::env::var("LAMMPC_DIR") {
         Ok(value) if !value.trim().is_empty() => value,
         Ok(_) => {
-            panic!("LAMMPC_DIR is set but empty; set it to a lammpc install prefix");
+            return Err("LAMMPC_DIR is set but empty; set it to a lammpc install prefix".into());
         }
         Err(_) => {
-            panic!("lammpc feature requires either pkg-config package 'lammpc' or LAMMPC_DIR");
+            return Err(
+                "lammpc feature requires pkg-config package 'lammpc', LAMMPC_LIB_DIR, or LAMMPC_DIR"
+                    .into(),
+            );
         }
     };
 
@@ -53,6 +56,7 @@ fn main() {
         }
     }
     println!("cargo:rustc-link-lib=lammpc");
+    Ok(())
 }
 
 fn emit_link_search(path: &std::path::Path) {
