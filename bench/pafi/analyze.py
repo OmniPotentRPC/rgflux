@@ -101,6 +101,42 @@ def exact_dimer_profile(case_name, planes, temperature):
     return [-temperature * math.log(value / reference) for value in partition]
 
 
+def exact_periodic_dimer_profile(case_name, planes, temperature, box_length=20.0):
+    if case_name == "straight":
+        radii = np.linspace(1.0, 1.4, planes)
+        partition = [
+            box_length**2
+            + 2.0
+            * math.pi
+            * quad(
+                lambda radius: radius
+                * (math.exp(-morse_energy(radius) / temperature) - 1.0),
+                lower,
+                4.0,
+                epsabs=1.0e-12,
+                epsrel=1.0e-12,
+            )[0]
+            for lower in radii
+        ]
+    else:
+        correction = 2.0 * math.pi * quad(
+            lambda radius: radius
+            * (math.exp(-morse_energy(radius) / temperature) - 1.0),
+            0.0,
+            4.0,
+            epsabs=1.0e-12,
+            epsrel=1.0e-12,
+        )[0]
+        angles = np.linspace(0.0, 0.5 * math.pi, planes)
+        partition = [
+            box_length**2 / max(abs(math.cos(angle)), abs(math.sin(angle)))
+            + correction
+            for angle in angles
+        ]
+    reference = partition[0]
+    return [-temperature * math.log(value / reference) for value in partition]
+
+
 def profile_error(record, exact):
     return max(abs(value - target) for value, target in zip(record["free_energy"], exact))
 
@@ -452,6 +488,8 @@ def main():
                 cell_rejections[reason] = cell_rejections.get(reason, 0) + 1
         exact_profile = exact_dimer_profile(key[0], key[1], key[2])
         exact_barrier = max(exact_profile)
+        periodic_profile = exact_periodic_dimer_profile(key[0], key[1], key[2])
+        periodic_barrier = max(0.0, max(periodic_profile))
         hit_rate_p = fisher_exact(
             [
                 [native_successes, native_failures],
@@ -515,6 +553,27 @@ def main():
                         ]
                     ),
                 },
+                "finite_periodic_lammps": {
+                    "box_length": 20.0,
+                    "profile": periodic_profile,
+                    "barrier": periodic_barrier,
+                    "sampled_profile": profile_summary(
+                        reference, periodic_profile
+                    ),
+                    "max_absolute_profile_error": distribution(
+                        [
+                            profile_error(record, periodic_profile)
+                            for record in reference
+                        ]
+                    ),
+                    "absolute_barrier_error": distribution(
+                        [
+                            abs(record["barrier"] - periodic_barrier)
+                            for record in reference
+                        ]
+                    ),
+                },
+                "native_global_equilibrium": "undefined: the unconfined transverse partition diverges beyond the cutoff",
             },
             "wall_seconds": {
                 "rgflux": distribution(native_wall),
@@ -579,6 +638,10 @@ def main():
                 "basin_cutoff": 4.0,
                 "straight_partition": "2*pi*integral_r^4 R*exp(-U(R)/T)dR",
                 "curved_profile": "zero by rotational invariance",
+                "native_global_equilibrium": "undefined because the unconfined transverse partition diverges",
+                "lammps_periodic_box_length": 20.0,
+                "lammps_straight_partition": "L^2 + 2*pi*integral_r^4 R*(exp(-U(R)/T)-1)dR",
+                "lammps_curved_partition": "L^2/max(abs(cos(theta)),abs(sin(theta))) + 2*pi*integral_0^4 R*(exp(-U(R)/T)-1)dR",
             },
         },
         "execution_summary": {
@@ -619,11 +682,11 @@ def main():
         "",
         "## Exact-quadrature straight-path verdict",
         "",
-        "Both sampled implementations are wrong relative to the exact interacting-basin constrained free energy. At 17 planes and T=0.05 their maximum errors are effectively tied (within 0.0023 energy units). At T=0.1 and 0.2, LAMMPS carries the additional disagreement: its median maximum error exceeds rgflux by 0.013 to 0.079 energy units, while rgflux itself remains biased by 0.269 to 0.526. At 9 planes rgflux rejects every run; LAMMPS maximum errors range from 0.088 to 0.574.",
+        "There is no common global equilibrium to declare one engine right. The native cutoff dimer is transversely unconfined, so its constrained partition diverges and its exact global free energy is undefined. The rgflux columns below are errors against the explicitly imposed r<4 interacting-basin regularization, not errors against its actual equilibrium. LAMMPS has a finite 20-by-20 transverse periodic domain and is wrong by median maximum per-plane errors of 0.183-0.195 at T=0.05, 0.506-0.514 at T=0.1, and 0.760-0.776 at T=0.2. At 9 planes rgflux rejects every run; at 17 planes its basin-regularized diagnostic errors are 0.099-0.102, 0.269-0.292, and 0.512-0.526.",
         "",
-        "Each vector below is the median signed sampled-minus-exact error at every path plane, from reactant to product. Positive entries put the sampled free energy above the exact quadrature.",
+        "Each vector is the median signed sampled-minus-exact error at every path plane, from reactant to product. Positive entries put the sampled free energy above the applicable exact quadrature.",
         "",
-        "| planes | T | threads | rgflux per-plane error | LAMMPS per-plane error | rgflux max error | LAMMPS max error |",
+        "| planes | T | threads | rgflux per-plane error vs r<4 basin | LAMMPS per-plane error vs finite box | rgflux max basin error | LAMMPS max finite-box error |",
         "|---:|---:|---:|---|---|---:|---:|",
     ]
     for cell in straight_exact:
@@ -638,13 +701,17 @@ def main():
                     exact["sampled_profiles"]["rgflux"]["median_error"]
                 ),
                 reference_vector=format_vector(
-                    exact["sampled_profiles"]["lammps_pafi"]["median_error"]
+                    exact["finite_periodic_lammps"]["sampled_profile"][
+                        "median_error"
+                    ]
                 ),
                 native_max=format_distribution(
                     exact["max_absolute_profile_error"]["rgflux"]
                 ),
                 reference_max=format_distribution(
-                    exact["max_absolute_profile_error"]["lammps_pafi"]
+                    exact["finite_periodic_lammps"][
+                        "max_absolute_profile_error"
+                    ]
                 ),
             )
         )
@@ -670,7 +737,7 @@ def main():
             "",
             "- Curved-path agreement improves strongly from 17 to 33 planes. At 33 planes and 256 samples, median maximum profile differences are below 3.7e-6 in every temperature and thread cell.",
             "- The accepted 17-plane straight profiles differ by 0.029 to 0.062 at 256 samples, exceeding the combined profile standard errors. This cell does not establish profile equivalence.",
-            "- The exact interacting-basin dimer reference shows substantial absolute bias in both straight-path implementations. At T=0.1 and 0.2 rgflux is closer, so the temperature-growing pairwise discrepancy is carried by the LAMMPS side; it is not a units, Boltzmann-constant, Jacobian, plane-spacing, or tangent convention difference.",
+            "- Exact quadrature does not identify a globally correct native result: its unconfined transverse equilibrium is undefined. Against its actual finite periodic equilibrium, LAMMPS has 0.18 to 0.78 maximum profile error. The common interacting-basin comparison is a regularized diagnostic only. The discrepancy is not a units, Boltzmann-constant, Jacobian, plane-spacing, or tangent convention difference.",
             "- The 191-atom vacancy profiles do not agree: median maximum differences are 0.54 to 0.58 eV, far above combined standard errors and A/A noise. rgflux barriers are about 0.10 to 0.12 eV lower even though independent static minimum and saddle energies agree within 1.0e-11 eV. Increasing from 17 to 33 planes does not remove the discrepancy.",
             "- Every 9-plane straight run is rejected by the unchanged zero-temperature quadrature tolerance. Curved runs additionally expose a direct-exponential overflow in reactant-partition evaluation.",
             "- The scalar native surface has no four-thread speedup. Four OpenMP threads slow the two-atom reference case, as expected when scheduling dominates potential work.",
@@ -712,7 +779,9 @@ def main():
     lines.extend(
         [
             "",
-            "### Error against the exact constrained dimer reference",
+            "### Error against the exact interacting-basin regularization",
+            "",
+            "This r<4 table is a deliberately imposed common diagnostic, not either engine's unmodified global equilibrium.",
             "",
             "| case | planes | T | threads | exact barrier | rgflux max error | reference max error | rgflux barrier error | reference barrier error |",
             "|---|---:|---:|---:|---:|---:|---:|---:|---:|",
@@ -740,6 +809,33 @@ def main():
                 ),
                 reference_barrier=format_distribution(
                     exact["absolute_barrier_error"]["lammps_pafi"]
+                ),
+            )
+        )
+    lines.extend(
+        [
+            "",
+            "### LAMMPS error against its exact finite-periodic equilibrium",
+            "",
+            "| case | planes | T | threads | exact barrier | LAMMPS max profile error | LAMMPS barrier error |",
+            "|---|---:|---:|---:|---:|---:|---:|",
+        ]
+    )
+    for cell in headline:
+        periodic = cell["exact_reference"]["finite_periodic_lammps"]
+        lines.append(
+            "| {case} | {planes} | {temperature:g} | {threads} | "
+            "{barrier:.6g} | {profile} | {barrier_error} |".format(
+                case=cell["case"],
+                planes=cell["planes"],
+                temperature=cell["temperature"],
+                threads=cell["threads"],
+                barrier=periodic["barrier"],
+                profile=format_distribution(
+                    periodic["max_absolute_profile_error"]
+                ),
+                barrier_error=format_distribution(
+                    periodic["absolute_barrier_error"]
                 ),
             )
         )
