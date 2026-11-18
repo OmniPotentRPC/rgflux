@@ -17,6 +17,7 @@
 //! - [`hyperplane`]: holonomic hyperplane free-energy gradient sampling.
 //! - [`pafi`]: Projected Average Force Integration along reaction paths.
 //! - [`ohtst`]: OH-TST with a fixed hyperplane normal; the normal is not optimized.
+//! - [`string`]: finite-temperature strings and strings with trajectory swarms.
 //! - [`ffs`]: Forward Flux Sampling across ordered interfaces.
 //! - [`network`]: symmetry-resolved kinetic networks and kMC rate tables.
 //!
@@ -42,6 +43,7 @@ pub mod network;
 pub mod ohtst;
 pub mod pafi;
 pub mod stats;
+pub mod string;
 
 pub use engine::{
     DynamicsEngine, EindirSurface, ForceSurface, HyperplaneConstraint, StepReport,
