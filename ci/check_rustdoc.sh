@@ -16,5 +16,6 @@ for features in "${feature_sets[@]}"; do
   fi
 done
 
-echo "== rustdoc private items, all-features"
-cargo doc --locked --no-deps --document-private-items --all-features
+echo "== rustdoc private items, library features"
+# `lammpc` links liblammpc. The lammpc CI job documents that feature.
+cargo doc --locked --no-deps --document-private-items --features rgpot,rgpot-session
