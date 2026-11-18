@@ -105,6 +105,8 @@ struct ScriptedFfsEngine {
     velocities: Array1<f64>,
     thermostat: ThermostatConfig,
     constraint: Option<HyperplaneConstraint>,
+    cell: Option<[f64; 9]>,
+    clobber_controls: bool,
     mode: ScriptMode,
     flux_seed: u64,
     flux_seeded: bool,
@@ -132,6 +134,8 @@ impl ScriptedFfsEngine {
             velocities: Array1::from_vec(vec![0.35]),
             thermostat: ThermostatConfig::default(),
             constraint: None,
+            cell: None,
+            clobber_controls: false,
             mode: ScriptMode::Flux,
             flux_seed: 0,
             flux_seeded: false,
@@ -181,6 +185,11 @@ impl ScriptedFfsEngine {
         self.force_trial_success = true;
         self
     }
+
+    fn with_clobber_controls(mut self) -> Self {
+        self.clobber_controls = true;
+        self
+    }
 }
 
 impl DynamicsEngine for ScriptedFfsEngine {
@@ -224,10 +233,11 @@ impl DynamicsEngine for ScriptedFfsEngine {
     }
 
     fn cell(&self) -> Option<&[f64; 9]> {
-        None
+        self.cell.as_ref()
     }
 
-    fn set_cell(&mut self, _cell: Option<[f64; 9]>) -> Result<(), FluxError> {
+    fn set_cell(&mut self, cell: Option<[f64; 9]>) -> Result<(), FluxError> {
+        self.cell = cell;
         Ok(())
     }
 
@@ -257,6 +267,14 @@ impl DynamicsEngine for ScriptedFfsEngine {
     }
 
     fn step(&mut self, _dt: f64) -> Result<StepReport, FluxError> {
+        if self.clobber_controls {
+            self.constraint = Some(
+                HyperplaneConstraint::new(Array1::from_vec(vec![1.0]), 4.0)
+                    .expect("sentinel plane"),
+            );
+            self.thermostat = ThermostatConfig::default().with_temperature(8.0);
+            self.cell = Some([8.0, 0.0, 0.0, 0.0, 8.0, 0.0, 0.0, 0.0, 8.0]);
+        }
         self.velocities[0] += 0.125;
         match self.mode {
             ScriptMode::Flux => {
@@ -493,6 +511,74 @@ fn burn_in_skips_initial_crossings() {
         no_burn.initial_flux.to_bits(),
         burned.initial_flux.to_bits()
     );
+}
+
+#[test]
+fn exit_restores_cell_thermostat_and_constraint() {
+    let cfg = FfsConfig::default()
+        .with_interfaces(vec![-1.0, 0.0, 1.0])
+        .with_points_per_interface(4)
+        .with_trials_per_interface(8)
+        .with_max_trial_steps(3)
+        .with_max_flux_steps(64)
+        .with_time_step(1.0)
+        .with_seed(find_seed_with_flux_seed_parity(false))
+        .with_stats(rgflux::stats::StatsConfig::default().with_batch_size(1));
+    let plane = HyperplaneConstraint::new(Array1::from_vec(vec![1.0]), -0.25).expect("plane");
+    let thermostat = ThermostatConfig::default()
+        .with_gamma(1.25)
+        .with_temperature(0.4);
+    let cell = [2.0, 0.0, 0.0, 0.0, 3.0, 0.0, 0.0, 0.0, 4.0];
+
+    let prepare = |engine: &mut ScriptedFfsEngine| {
+        engine
+            .set_constraint(Some(plane.clone()))
+            .expect("constraint");
+        engine.set_thermostat(thermostat).expect("thermostat");
+        engine.set_cell(Some(cell)).expect("cell");
+    };
+    let assert_restored = |engine: &ScriptedFfsEngine| {
+        assert_eq!(engine.constraint(), Some(&plane));
+        assert_eq!(engine.thermostat(), &thermostat);
+        assert_eq!(engine.cell(), Some(&cell));
+        assert!((engine.positions()[0] - (-1.2)).abs() <= f64::EPSILON);
+        assert!((engine.velocities()[0] - 0.35).abs() <= f64::EPSILON);
+    };
+
+    let mut succeeded = ScriptedFfsEngine::new().with_clobber_controls();
+    prepare(&mut succeeded);
+    forward_flux_rate(&mut succeeded, |x| x[0], &cfg).expect("estimate");
+    assert_restored(&succeeded);
+
+    let mut failed = ScriptedFfsEngine::new()
+        .with_clobber_controls()
+        .with_trial_failure(1);
+    prepare(&mut failed);
+    let err = forward_flux_rate(&mut failed, |x| x[0], &cfg).expect_err("trial failure");
+    assert!(format!("{err}").contains("scripted trial failure"));
+    assert_restored(&failed);
+}
+
+#[test]
+fn exit_leaves_the_stochastic_stream_where_the_run_left_it() {
+    let dt = 0.01;
+    let mut engine = make_engine(11);
+    let mut rewound = make_engine(11);
+    rewound.step(dt).expect("step from the entry stream");
+    let rewound_velocities = rewound.velocities().to_owned();
+
+    let cfg = FfsConfig::default()
+        .with_interfaces(vec![-0.8, 0.0])
+        .with_points_per_interface(4)
+        .with_trials_per_interface(1)
+        .with_max_trial_steps(1)
+        .with_max_flux_steps(1)
+        .with_time_step(dt)
+        .with_seed(11);
+    let err = forward_flux_rate(&mut engine, |x| x[0], &cfg).expect_err("flux budget");
+    assert!(format!("{err}").contains("flux budget exceeded"));
+    engine.step(dt).expect("step after the reseeded run");
+    assert_ne!(engine.velocities().to_vec(), rewound_velocities.to_vec());
 }
 
 #[test]

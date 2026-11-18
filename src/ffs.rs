@@ -24,7 +24,7 @@ use ndarray::ArrayView1;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
-use crate::engine::DynamicsEngine;
+use crate::engine::{DynamicsEngine, EngineSnapshot};
 use crate::error::FluxError;
 use crate::stats::{StatsConfig, batch_means};
 
@@ -214,18 +214,19 @@ fn stage_probability(clusters: &[TrialCluster]) -> Result<(f64, f64), FluxError>
 
 fn finalize_and_restore<E: DynamicsEngine + ?Sized>(
     engine: &mut E,
-    initial: &PhasePoint,
+    initial: EngineSnapshot,
     result: Result<FfsEstimate, FluxError>,
 ) -> Result<FfsEstimate, FluxError> {
-    let restore = set_point(engine, initial);
-    match (result, restore) {
-        (Ok(estimate), Ok(())) => Ok(estimate),
-        (Ok(_), Err(restore_err)) => Err(restore_err),
-        (Err(run_err), _) => Err(run_err),
-    }
+    initial.restore_result(engine, result)
 }
 
 /// Run Forward Flux Sampling on `engine` using order parameter `order_param`.
+///
+/// On both success and failure the positions, velocities, periodic cell,
+/// thermostat, and holonomic constraint captured at entry are written back.
+/// The stochastic stream is left where the run put it: flux collection and
+/// each trial call [`DynamicsEngine::reseed`], and the exit restore has no
+/// stream to put back.
 pub fn forward_flux_rate<E, F>(
     engine: &mut E,
     order_param: F,
@@ -242,7 +243,11 @@ where
     let dt = config.time_step;
     let mut rng = StdRng::seed_from_u64(config.seed);
 
-    let initial = capture_point(engine);
+    let initial = EngineSnapshot::capture(engine);
+    let initial_point = PhasePoint {
+        positions: initial.positions().to_vec(),
+        velocities: initial.velocities().to_vec(),
+    };
     let run = (|| -> Result<FfsEstimate, FluxError> {
         let start_lambda = order_param(engine.positions());
         if !start_lambda.is_finite() {
@@ -254,7 +259,8 @@ where
             ));
         }
 
-        // Drive flux sampling from the config seed as well as trial launches.
+        // Replace the engine stream for flux collection. The exit snapshot
+        // does not rewind this reseed.
         engine.reseed(rng.random())?;
 
         let mut points: Vec<PhasePoint> = Vec::with_capacity(config.points_per_interface);
@@ -293,7 +299,7 @@ where
                 }
             }
             if lambda >= product_level {
-                set_point(engine, &initial)?;
+                set_point(engine, &initial_point)?;
                 armed = true;
             }
         }
@@ -317,6 +323,8 @@ where
             for _ in 0..config.trials_per_interface {
                 let index = rng.random_range(0..stage_points.len());
                 set_point(engine, &stage_points[index])?;
+                // Each trial starts from a fresh seed. The exit snapshot does
+                // not rewind this reseed either.
                 engine.reseed(rng.random())?;
 
                 let mut trial_steps = 0_usize;
@@ -374,7 +382,7 @@ where
         })
     })();
 
-    finalize_and_restore(engine, &initial, run)
+    finalize_and_restore(engine, initial, run)
 }
 
 #[cfg(test)]

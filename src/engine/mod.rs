@@ -428,9 +428,15 @@ pub trait DynamicsEngine {
     ) -> Result<f64, FluxError>;
 }
 
+/// Positions, velocities, periodic cell, thermostat, and holonomic constraint.
+///
+/// [`Self::restore`] writes those five pieces back. It does not rewind the
+/// stochastic stream: [`DynamicsEngine::reseed`] replaces that stream, and
+/// the trait has no engine-agnostic copy of it to put back.
 pub(crate) struct EngineSnapshot {
     constraint: Option<HyperplaneConstraint>,
     thermostat: ThermostatConfig,
+    cell: Option<[f64; 9]>,
     positions: Array1<f64>,
     velocities: Array1<f64>,
 }
@@ -440,12 +446,22 @@ impl EngineSnapshot {
         Self {
             constraint: engine.constraint().cloned(),
             thermostat: *engine.thermostat(),
+            cell: engine.cell().copied(),
             positions: engine.positions().to_owned(),
             velocities: engine.velocities().to_owned(),
         }
     }
 
+    pub(crate) fn positions(&self) -> ArrayView1<'_, f64> {
+        self.positions.view()
+    }
+
+    pub(crate) fn velocities(&self) -> ArrayView1<'_, f64> {
+        self.velocities.view()
+    }
+
     fn restore<E: DynamicsEngine + ?Sized>(self, engine: &mut E) -> Result<(), FluxError> {
+        engine.set_cell(self.cell)?;
         engine.set_constraint(self.constraint)?;
         engine.set_thermostat(self.thermostat)?;
         engine.set_positions(self.positions.view())?;
