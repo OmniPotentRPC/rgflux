@@ -2,7 +2,7 @@ use ndarray::{Array1, ArrayView1};
 
 use rgflux::FluxError;
 use rgflux::engine::native::{NativeConfig, NativeEngine};
-use rgflux::engine::{DynamicsEngine, ForceSurface, HyperplaneConstraint};
+use rgflux::engine::{DynamicsEngine, ForceSurface, HyperplaneConstraint, ThermostatConfig};
 use rgflux::hyperplane::{HyperplaneConfig, sample_hyperplane};
 use rgflux::ohtst::{OhtstConfig, optimize_hyperplane};
 
@@ -97,5 +97,66 @@ fn ohtst_optimization_returns_positive_finite_rate() -> Result<(), FluxError> {
 
     assert!(estimate.rate.is_finite() && estimate.rate > 0.0);
     assert!(estimate.standard_error.is_finite() && estimate.standard_error >= 0.0);
+    Ok(())
+}
+
+fn engine_state<E: DynamicsEngine>(
+    engine: &E,
+) -> (
+    Array1<f64>,
+    Array1<f64>,
+    Option<HyperplaneConstraint>,
+    ThermostatConfig,
+) {
+    (
+        engine.positions().to_owned(),
+        engine.velocities().to_owned(),
+        engine.constraint().cloned(),
+        *engine.thermostat(),
+    )
+}
+
+struct RisingLine;
+
+impl ForceSurface for RisingLine {
+    fn energy_and_forces(
+        &self,
+        positions: ArrayView1<'_, f64>,
+        _cell: Option<&[f64; 9]>,
+    ) -> Result<(f64, Array1<f64>), FluxError> {
+        if positions.len() != 1 {
+            return Err(FluxError::Shape {
+                expected: 1,
+                got: positions.len(),
+                context: "RisingLine positions",
+            });
+        }
+        Ok((positions[0], Array1::from_vec(vec![-1.0])))
+    }
+}
+
+#[test]
+fn optimize_hyperplane_restores_engine_when_the_search_fails() -> Result<(), FluxError> {
+    let mut engine = NativeEngine::new(
+        RisingLine,
+        NativeConfig::default()
+            .with_masses(Array1::from_vec(vec![1.0]))
+            .with_seed(5),
+    )?;
+    engine.set_constraint(Some(HyperplaneConstraint::from_direction(
+        Array1::from_vec(vec![1.0]).view(),
+        0.4,
+    )?))?;
+    engine.set_positions(Array1::from_vec(vec![0.2]).view())?;
+    engine.shoot_velocities(5)?;
+    let before = engine_state(&engine);
+    let err = optimize_hyperplane(
+        &mut engine,
+        &HyperplaneConstraint::from_direction(Array1::from_vec(vec![1.0]).view(), 0.0)?,
+        &OhtstConfig::default().with_max_outer_steps(1).with_seed(5),
+    )
+    .unwrap_err();
+    assert!(matches!(err, FluxError::InvalidConfig(_)));
+    assert_eq!(engine_state(&engine), before);
     Ok(())
 }
