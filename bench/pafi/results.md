@@ -2,24 +2,24 @@
 
 ## Exact-quadrature straight-path verdict
 
-Both sampled implementations are wrong relative to the exact interacting-basin constrained free energy. At 17 planes and T=0.05 their maximum errors are effectively tied (within 0.0023 energy units). At T=0.1 and 0.2, LAMMPS carries the additional disagreement: its median maximum error exceeds rgflux by 0.013 to 0.079 energy units, while rgflux itself remains biased by 0.269 to 0.526. At 9 planes rgflux rejects every run; LAMMPS maximum errors range from 0.088 to 0.574.
+There is no common global equilibrium to declare one engine right. The native cutoff dimer is transversely unconfined, so its constrained partition diverges and its exact global free energy is undefined. The rgflux columns below are errors against the explicitly imposed r<4 interacting-basin regularization, not errors against its actual equilibrium. LAMMPS has a finite 20-by-20 transverse periodic domain and is wrong by median maximum per-plane errors of 0.183-0.195 at T=0.05, 0.506-0.514 at T=0.1, and 0.760-0.776 at T=0.2. At 9 planes rgflux rejects every run; at 17 planes its basin-regularized diagnostic errors are 0.099-0.102, 0.269-0.292, and 0.512-0.526.
 
-Each vector below is the median signed sampled-minus-exact error at every path plane, from reactant to product. Positive entries put the sampled free energy above the exact quadrature.
+Each vector is the median signed sampled-minus-exact error at every path plane, from reactant to product. Positive entries put the sampled free energy above the applicable exact quadrature.
 
-| planes | T | threads | rgflux per-plane error | LAMMPS per-plane error | rgflux max error | LAMMPS max error |
+| planes | T | threads | rgflux per-plane error vs r<4 basin | LAMMPS per-plane error vs finite box | rgflux max basin error | LAMMPS max finite-box error |
 |---:|---:|---:|---|---|---:|---:|
-| 9 | 0.05 | 1 | rejected | [+0, -0.04225, -0.05101, -0.04689, -0.0359, -0.01837, +0.009472, +0.04765, +0.08797] | n/a | 0.08797 [0.08797, 0.08797] |
-| 9 | 0.05 | 4 | rejected | [+0, -0.04225, -0.05101, -0.04689, -0.0359, -0.01837, +0.009472, +0.04765, +0.08797] | n/a | 0.08797 [0.08797, 0.08797] |
-| 9 | 0.1 | 1 | rejected | [+0, -0.02783, -0.02298, +0.005571, +0.06036, +0.1293, +0.1965, +0.2574, +0.3062] | n/a | 0.3062 [0.2994, 0.3121] |
-| 9 | 0.1 | 4 | rejected | [+0, -0.02758, -0.02538, -0.001074, +0.05271, +0.1215, +0.191, +0.2507, +0.2982] | n/a | 0.2982 [0.2783, 0.3114] |
-| 9 | 0.2 | 1 | rejected | [+0, +0.02231, +0.09827, +0.2034, +0.3075, +0.3904, +0.4635, +0.5252, +0.5743] | n/a | 0.5743 [0.5668, 0.5856] |
-| 9 | 0.2 | 4 | rejected | [+0, +0.0225, +0.09542, +0.1958, +0.2985, +0.3887, +0.466, +0.5259, +0.5741] | n/a | 0.5741 [0.5645, 0.5805] |
-| 17 | 0.05 | 1 | [+0, -0.0003063, -0.007143, -0.008716, -0.008763, -0.007727, -0.00733, -0.006383, -0.004151, +0.0008463, +0.008925, +0.01827, +0.03054, +0.04658, +0.06518, +0.08369, +0.1022] | [+0, -0.02377, -0.03509, -0.03975, -0.04047, -0.0386, -0.03492, -0.02982, -0.02344, -0.01562, -0.005872, +0.006466, +0.02182, +0.03993, +0.05979, +0.08014, +0.09991] | 0.1022 [0.09779, 0.1055] | 0.09991 [0.09991, 0.09991] |
-| 17 | 0.05 | 4 | [+0, -0.007984, -0.00657, -0.006463, -0.00621, -0.006633, -0.005873, -0.002774, +0.001102, +0.004291, +0.009912, +0.01974, +0.03157, +0.0478, +0.06504, +0.08212, +0.09871] | [+0, -0.02377, -0.03509, -0.03975, -0.04047, -0.0386, -0.03492, -0.02982, -0.02344, -0.01562, -0.005872, +0.006466, +0.02182, +0.03993, +0.05979, +0.08014, +0.09991] | 0.09871 [0.09324, 0.107] | 0.09991 [0.09991, 0.09991] |
-| 17 | 0.1 | 1 | [+0, -0.005854, -0.01214, -0.01253, -0.007013, +0.00344, +0.01894, +0.03938, +0.05967, +0.088, +0.1216, +0.1523, +0.1783, +0.2053, +0.2329, +0.2503, +0.2686] | [+0, -0.0193, -0.02726, -0.02939, -0.02375, -0.01176, +0.004717, +0.02654, +0.05501, +0.08785, +0.1241, +0.1606, +0.1952, +0.2263, +0.2532, +0.2773, +0.2997] | 0.2686 [0.2627, 0.2878] | 0.2997 [0.2945, 0.3057] |
-| 17 | 0.1 | 4 | [+0, -0.005095, -0.002264, -0.001289, -0.000238, +0.008923, +0.02476, +0.04786, +0.076, +0.1052, +0.1373, +0.1661, +0.1957, +0.2263, +0.2522, +0.271, +0.2916] | [+0, -0.01592, -0.02552, -0.02642, -0.02174, -0.01034, +0.007124, +0.03205, +0.06275, +0.09753, +0.1331, +0.1676, +0.2003, +0.2305, +0.2578, +0.282, +0.3045] | 0.2916 [0.2781, 0.3064] | 0.3045 [0.2935, 0.3126] |
-| 17 | 0.2 | 1 | [+0, +0.02539, +0.05064, +0.07691, +0.1181, +0.1566, +0.1867, +0.2352, +0.2872, +0.3263, +0.3609, +0.3962, +0.4248, +0.4518, +0.4773, +0.4974, +0.5115] | [+0, +0.002785, +0.02512, +0.05995, +0.1052, +0.1554, +0.2074, +0.2598, +0.3119, +0.3606, +0.4038, +0.4457, +0.4831, +0.5152, +0.542, +0.5681, +0.5907] | 0.5115 [0.479, 0.534] | 0.5907 [0.5779, 0.5956] |
-| 17 | 0.2 | 4 | [+0, +0.02033, +0.04528, +0.08007, +0.1228, +0.1595, +0.2009, +0.2522, +0.2978, +0.3389, +0.3811, +0.4115, +0.4365, +0.4625, +0.4877, +0.5097, +0.5259] | [+0, +0.003788, +0.02915, +0.0647, +0.1098, +0.16, +0.2123, +0.2655, +0.3164, +0.3639, +0.4082, +0.4477, +0.4806, +0.5117, +0.5406, +0.566, +0.5874] | 0.5259 [0.5122, 0.5452] | 0.5874 [0.5729, 0.5969] |
+| 9 | 0.05 | 1 | rejected | [+0, -0.04225, -0.05099, -0.04658, -0.03225, +0.003031, +0.06414, +0.1285, +0.1826] | n/a | 0.1826 [0.1826, 0.1826] |
+| 9 | 0.05 | 4 | rejected | [+0, -0.04225, -0.05099, -0.04658, -0.03225, +0.003031, +0.06414, +0.1285, +0.1826] | n/a | 0.1826 [0.1826, 0.1826] |
+| 9 | 0.1 | 1 | rejected | [+0, -0.02032, +0.01107, +0.09274, +0.2011, +0.3037, +0.3885, +0.4591, +0.5136] | n/a | 0.5136 [0.5067, 0.5195] |
+| 9 | 0.1 | 4 | rejected | [+0, -0.02006, +0.008672, +0.0861, +0.1935, +0.2958, +0.383, +0.4523, +0.5055] | n/a | 0.5055 [0.4857, 0.5187] |
+| 9 | 0.2 | 1 | rejected | [+0, +0.07479, +0.1992, +0.3374, +0.4617, +0.5571, +0.6385, +0.7061, +0.76] | n/a | 0.76 [0.7525, 0.7713] |
+| 9 | 0.2 | 4 | rejected | [+0, +0.07497, +0.1963, +0.3297, +0.4527, +0.5554, +0.641, +0.7069, +0.7598] | n/a | 0.7598 [0.7501, 0.7662] |
+| 17 | 0.05 | 1 | [+0, -0.0003063, -0.007143, -0.008716, -0.008763, -0.007727, -0.00733, -0.006383, -0.004151, +0.0008463, +0.008925, +0.01827, +0.03054, +0.04658, +0.06518, +0.08369, +0.1022] | [+0, -0.02377, -0.03508, -0.03975, -0.04045, -0.03852, -0.0346, -0.02868, -0.01979, -0.005809, +0.01553, +0.04401, +0.07649, +0.1094, +0.1406, +0.1691, +0.1946] | 0.1022 [0.09779, 0.1055] | 0.1946 [0.1946, 0.1946] |
+| 17 | 0.05 | 4 | [+0, -0.007984, -0.00657, -0.006463, -0.00621, -0.006633, -0.005873, -0.002774, +0.001102, +0.004291, +0.009912, +0.01974, +0.03157, +0.0478, +0.06504, +0.08212, +0.09871] | [+0, -0.02377, -0.03508, -0.03975, -0.04045, -0.03852, -0.0346, -0.02868, -0.01979, -0.005809, +0.01553, +0.04401, +0.07649, +0.1094, +0.1406, +0.1691, +0.1946] | 0.09871 [0.09324, 0.107] | 0.1946 [0.1946, 0.1946] |
+| 17 | 0.1 | 1 | [+0, -0.005854, -0.01214, -0.01253, -0.007013, +0.00344, +0.01894, +0.03938, +0.05967, +0.088, +0.1216, +0.1523, +0.1783, +0.2053, +0.2329, +0.2503, +0.2686] | [+0, -0.01687, -0.01974, -0.01209, +0.01029, +0.04651, +0.09189, +0.1425, +0.1958, +0.2479, +0.2985, +0.3452, +0.3872, +0.4238, +0.4549, +0.4821, +0.5071] | 0.2686 [0.2627, 0.2878] | 0.5071 [0.5018, 0.5131] |
+| 17 | 0.1 | 4 | [+0, -0.005095, -0.002264, -0.001289, -0.000238, +0.008923, +0.02476, +0.04786, +0.076, +0.1052, +0.1373, +0.1661, +0.1957, +0.2263, +0.2522, +0.271, +0.2916] | [+0, -0.01348, -0.01801, -0.009117, +0.01231, +0.04793, +0.0943, +0.148, +0.2035, +0.2576, +0.3075, +0.3522, +0.3924, +0.428, +0.4594, +0.4868, +0.5119] | 0.2916 [0.2781, 0.3064] | 0.5119 [0.5009, 0.5199] |
+| 17 | 0.2 | 1 | [+0, +0.02539, +0.05064, +0.07691, +0.1181, +0.1566, +0.1867, +0.2352, +0.2872, +0.3263, +0.3609, +0.3962, +0.4248, +0.4518, +0.4773, +0.4974, +0.5115] | [+0, +0.02807, +0.07759, +0.1383, +0.2061, +0.2748, +0.3414, +0.4051, +0.4661, +0.5217, +0.5705, +0.6169, +0.658, +0.6934, +0.723, +0.7516, +0.7764] | 0.5115 [0.479, 0.534] | 0.7764 [0.7635, 0.7813] |
+| 17 | 0.2 | 4 | [+0, +0.02033, +0.04528, +0.08007, +0.1228, +0.1595, +0.2009, +0.2522, +0.2978, +0.3389, +0.3811, +0.4115, +0.4365, +0.4625, +0.4877, +0.5097, +0.5259] | [+0, +0.02907, +0.08163, +0.1431, +0.2107, +0.2794, +0.3463, +0.4108, +0.4706, +0.525, +0.5749, +0.6189, +0.6556, +0.6899, +0.7216, +0.7494, +0.7731] | 0.5259 [0.5122, 0.5452] | 0.7731 [0.7586, 0.7825] |
 
 ## Verdict
 
@@ -28,7 +28,7 @@ The vacancy campaign adds 288 executions with 0 process failures and 0 retained 
 
 - Curved-path agreement improves strongly from 17 to 33 planes. At 33 planes and 256 samples, median maximum profile differences are below 3.7e-6 in every temperature and thread cell.
 - The accepted 17-plane straight profiles differ by 0.029 to 0.062 at 256 samples, exceeding the combined profile standard errors. This cell does not establish profile equivalence.
-- The exact interacting-basin dimer reference shows substantial absolute bias in both straight-path implementations. At T=0.1 and 0.2 rgflux is closer, so the temperature-growing pairwise discrepancy is carried by the LAMMPS side; it is not a units, Boltzmann-constant, Jacobian, plane-spacing, or tangent convention difference.
+- Exact quadrature does not identify a globally correct native result: its unconfined transverse equilibrium is undefined. Against its actual finite periodic equilibrium, LAMMPS has 0.18 to 0.78 maximum profile error. The common interacting-basin comparison is a regularized diagnostic only. The discrepancy is not a units, Boltzmann-constant, Jacobian, plane-spacing, or tangent convention difference.
 - The 191-atom vacancy profiles do not agree: median maximum differences are 0.54 to 0.58 eV, far above combined standard errors and A/A noise. rgflux barriers are about 0.10 to 0.12 eV lower even though independent static minimum and saddle energies agree within 1.0e-11 eV. Increasing from 17 to 33 planes does not remove the discrepancy.
 - Every 9-plane straight run is rejected by the unchanged zero-temperature quadrature tolerance. Curved runs additionally expose a direct-exponential overflow in reactant-partition evaluation.
 - The scalar native surface has no four-thread speedup. Four OpenMP threads slow the two-atom reference case, as expected when scheduling dominates potential work.
@@ -62,7 +62,9 @@ The table reports the largest sample count. Values are medians with interquartil
 | straight | 17 | 0.2 | 1 | 0.06216 [0.05079, 0.1092] | 0.06216 [0.05079, 0.1089] | 0.01175 | 0.005914 [0.005861, 0.005951] | 0.06635 [0.06451, 0.06664] | 3.66e-05 |
 | straight | 17 | 0.2 | 4 | 0.05491 [0.04435, 0.07351] | 0.05433 [0.04112, 0.07319] | 0.009035 | 0.005901 [0.005736, 0.005922] | 0.1125 [0.1115, 0.1139] | 3.66e-05 |
 
-### Error against the exact constrained dimer reference
+### Error against the exact interacting-basin regularization
+
+This r<4 table is a deliberately imposed common diagnostic, not either engine's unmodified global equilibrium.
 
 | case | planes | T | threads | exact barrier | rgflux max error | reference max error | rgflux barrier error | reference barrier error |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
@@ -90,6 +92,35 @@ The table reports the largest sample count. Values are medians with interquartil
 | straight | 17 | 0.1 | 4 | 0.516477 | 0.2916 [0.2781, 0.3064] | 0.3045 [0.2935, 0.3126] | 0.2916 [0.2781, 0.3064] | 0.3045 [0.2935, 0.3126] |
 | straight | 17 | 0.2 | 1 | 0.22795 | 0.5115 [0.479, 0.534] | 0.5907 [0.5779, 0.5956] | 0.5115 [0.479, 0.534] | 0.5907 [0.5779, 0.5956] |
 | straight | 17 | 0.2 | 4 | 0.22795 | 0.5259 [0.5122, 0.5452] | 0.5874 [0.5729, 0.5969] | 0.5259 [0.5122, 0.5452] | 0.5874 [0.5729, 0.5969] |
+
+### LAMMPS error against its exact finite-periodic equilibrium
+
+| case | planes | T | threads | exact barrier | LAMMPS max profile error | LAMMPS barrier error |
+|---|---:|---:|---:|---:|---:|---:|
+| curved | 17 | 0.05 | 1 | 0 | 1.14e-07 [4.669e-08, 1.413e-07] | 7.475e-09 [2.985e-09, 3.441e-08] |
+| curved | 17 | 0.05 | 4 | 0 | 5.541e-08 [4.096e-08, 9.091e-08] | 1.013e-08 [3.09e-09, 3.795e-08] |
+| curved | 17 | 0.1 | 1 | 0 | 0.00115 [0.00115, 0.00115] | 7.757e-06 [1.759e-06, 1.794e-05] |
+| curved | 17 | 0.1 | 4 | 0 | 0.00115 [0.00115, 0.00115] | 7.021e-06 [4.246e-07, 1.941e-05] |
+| curved | 17 | 0.2 | 1 | 0 | 0.05335 [0.05335, 0.05335] | 7.255e-06 [1.342e-06, 1.201e-05] |
+| curved | 17 | 0.2 | 4 | 0 | 0.05335 [0.05335, 0.05335] | 1.778e-06 [8.12e-07, 8.573e-06] |
+| curved | 33 | 0.05 | 1 | 0 | 3.976e-08 [3.97e-08, 3.978e-08] | 1.311e-09 [3.463e-10, 3.326e-09] |
+| curved | 33 | 0.05 | 4 | 0 | 3.973e-08 [3.97e-08, 3.984e-08] | 1.539e-09 [8.682e-10, 4.225e-09] |
+| curved | 33 | 0.1 | 1 | 0 | 0.00115 [0.00115, 0.00115] | 1.186e-06 [3.088e-07, 2.026e-06] |
+| curved | 33 | 0.1 | 4 | 0 | 0.00115 [0.00115, 0.00115] | 3.544e-07 [8.104e-08, 6.299e-07] |
+| curved | 33 | 0.2 | 1 | 0 | 0.05335 [0.05335, 0.05335] | 1.198e-06 [4.198e-08, 2.569e-06] |
+| curved | 33 | 0.2 | 4 | 0 | 0.05335 [0.05335, 0.05335] | 6.213e-08 [1.459e-08, 1.202e-06] |
+| straight | 9 | 0.05 | 1 | 0.628207 | 0.1826 [0.1826, 0.1826] | 0.1826 [0.1826, 0.1826] |
+| straight | 9 | 0.05 | 4 | 0.628207 | 0.1826 [0.1826, 0.1826] | 0.1826 [0.1826, 0.1826] |
+| straight | 9 | 0.1 | 1 | 0.309126 | 0.5136 [0.5067, 0.5195] | 0.5136 [0.5067, 0.5195] |
+| straight | 9 | 0.1 | 4 | 0.309126 | 0.5055 [0.4857, 0.5187] | 0.5055 [0.4857, 0.5187] |
+| straight | 9 | 0.2 | 1 | 0.0422982 | 0.76 [0.7525, 0.7713] | 0.76 [0.7525, 0.7713] |
+| straight | 9 | 0.2 | 4 | 0.0422982 | 0.7598 [0.7501, 0.7662] | 0.7598 [0.7501, 0.7662] |
+| straight | 17 | 0.05 | 1 | 0.628207 | 0.1946 [0.1946, 0.1946] | 0.1946 [0.1946, 0.1946] |
+| straight | 17 | 0.05 | 4 | 0.628207 | 0.1946 [0.1946, 0.1946] | 0.1946 [0.1946, 0.1946] |
+| straight | 17 | 0.1 | 1 | 0.309126 | 0.5071 [0.5018, 0.5131] | 0.5071 [0.5018, 0.5131] |
+| straight | 17 | 0.1 | 4 | 0.309126 | 0.5119 [0.5009, 0.5199] | 0.5119 [0.5009, 0.5199] |
+| straight | 17 | 0.2 | 1 | 0.0422982 | 0.7764 [0.7635, 0.7813] | 0.7764 [0.7635, 0.7813] |
+| straight | 17 | 0.2 | 4 | 0.0422982 | 0.7731 [0.7586, 0.7825] | 0.7731 [0.7586, 0.7825] |
 
 ### Cost and force calls at the largest sample count
 
