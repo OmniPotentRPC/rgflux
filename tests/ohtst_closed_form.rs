@@ -150,6 +150,24 @@ fn flux_mass_rejects_inconsistent_or_unphysical_masses() {
     }
 }
 
+#[test]
+fn flux_mass_rejects_a_negative_component_with_a_positive_form() {
+    // n = (0.6, 0.8) and masses (2, -8) give 0.36/2 + 0.64/(-8) = 0.1, so the
+    // quadratic form is positive while one mass is not. The shared helper
+    // rejects that mass before using the form.
+    let mut engine = Scripted::new(
+        vec![-1.2, -1.6],
+        vec![2.0, -8.0],
+        oblique_well(),
+        harmonic_force(CURVATURE, -HALF_WIDTH),
+    );
+    let err = error(&mut engine, &plane(&[3.0, 4.0], 0.0), &quiet());
+    assert_eq!(
+        err,
+        invalid("OH-TST flux mass metric must be finite and positive")
+    );
+}
+
 fn two_batch_force(offset_by: f64) -> ConstraintForce {
     Box::new(move |plane, step| {
         let harmonic = CURVATURE * (plane.offset + HALF_WIDTH);

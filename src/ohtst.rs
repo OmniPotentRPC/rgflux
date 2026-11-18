@@ -48,6 +48,7 @@ use std::f64::consts::TAU;
 
 use ndarray::{Array1, ArrayView1};
 use rgmin::vecops::dot;
+use rgsaddle::flux_mass as saddle_flux_mass;
 
 use crate::engine::{DynamicsEngine, EngineSnapshot, HyperplaneConstraint};
 use crate::error::FluxError;
@@ -475,23 +476,19 @@ fn slope_vanishes(slope: f64) -> bool {
 }
 
 fn flux_mass(normal: ArrayView1<'_, f64>, masses: ArrayView1<'_, f64>) -> Result<f64, FluxError> {
-    if normal.len() != masses.len() {
-        return Err(FluxError::Shape {
-            expected: masses.len(),
-            got: normal.len(),
-            context: "OH-TST flux mass",
-        });
-    }
-    let mut metric = 0.0_f64;
-    for (component, mass) in normal.iter().zip(masses.iter()) {
-        metric += component * component / mass;
-    }
-    if !(metric.is_finite() && metric > 0.0) {
-        return Err(FluxError::InvalidConfig(
+    match saddle_flux_mass(normal, masses) {
+        Ok(mass) => Ok(mass),
+        Err(rgsaddle::SaddleError::Shape(_)) if normal.len() != masses.len() => {
+            Err(FluxError::Shape {
+                expected: masses.len(),
+                got: normal.len(),
+                context: "OH-TST flux mass",
+            })
+        }
+        Err(_) => Err(FluxError::InvalidConfig(
             "OH-TST flux mass metric must be finite and positive",
-        ));
+        )),
     }
-    Ok(1.0 / metric)
 }
 
 fn curvature_sample_steps(config: &OhtstConfig) -> usize {
