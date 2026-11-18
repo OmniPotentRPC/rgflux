@@ -1,4 +1,6 @@
 //! Analytic PAFI checks through the native constrained dynamics engine.
+//!
+//! Reproducible with `cargo test --all-features --test pafi_native -- --nocapture`.
 
 use std::f64::consts::PI;
 
@@ -7,6 +9,21 @@ use rgflux::engine::native::{NativeConfig, NativeEngine};
 use rgflux::engine::{DynamicsEngine, ThermostatConfig};
 use rgflux::pafi::{PafiConfig, pafi_profile};
 use rgflux::stats::StatsConfig;
+
+/// Number of statistical `z` comparisons across the PAFI test suite
+/// (`6` in `tests/pafi_native.rs` and `2` in `tests/pafi_engine_trait_rgpot.rs`).
+const PAFI_SUITE_COMPARISONS: usize = 8;
+
+/// Two-sided standard normal tail `2 * Phi(-4.4) = erfc(4.4 / sqrt(2)) = 1.082509e-5`.
+const TWO_SIDED_NORMAL_TAIL_AT_4_4: f64 = 1.082_509e-5;
+
+/// Two-sided normal threshold `z = 4.4` (`2 * Phi(-4.4) = 1.083e-5`).
+/// Across `m = 8` comparisons (`PAFI_SUITE_COMPARISONS`), the Bonferroni union
+/// bound gives a family-wise suite false-fail rate of `8 * 1.083e-5 = 8.66e-5 < 1e-4`
+/// (`6 * 1.083e-5 = 6.50e-5 < 1e-4` within this file).
+const SUITE_Z_MAX: f64 = 4.4;
+
+const _: () = assert!((PAFI_SUITE_COMPARISONS as f64) * TWO_SIDED_NORMAL_TAIL_AT_4_4 < 1.0e-4);
 
 struct WideningDoubleWell;
 struct AnisotropicHarmonic {
@@ -133,38 +150,55 @@ fn run_barrier_case(
 
 #[test]
 fn pafi_widening_barrier_matches_analytic_within_reported_se() {
-    let (barrier, se, z) = run_barrier_case(vec![1.0, 1.0], 11, 31, 10_000, 10_000, 0.001);
+    const MAX_SE: f64 = 0.0014;
+    let (barrier, se, z) = run_barrier_case(vec![1.0, 1.0], 11, 41, 200, 1_200, 0.08);
     eprintln!(
         "isotropic widening barrier={:.8} se={:.8} z={:.4}",
         barrier, se, z
     );
     assert!(
-        z <= 2.0,
-        "barrier {:.8} ± {:.8} gives z={:.4}",
+        se > 0.0 && se <= MAX_SE,
+        "isotropic standard error {:.8} exceeds {:.8}",
+        se,
+        MAX_SE
+    );
+    assert!(
+        z <= SUITE_Z_MAX,
+        "barrier {:.8} ± {:.8} gives z={:.4} > {:.1}",
         barrier,
         se,
-        z
+        z,
+        SUITE_Z_MAX
     );
 }
 
 #[test]
 fn pafi_widening_barrier_mass_anisotropic_matches_analytic_within_reported_se() {
-    let (barrier, se, z) = run_barrier_case(vec![1.0, 4.0], 21, 31, 20_000, 10_000, 0.001);
+    const MAX_SE: f64 = 0.00145;
+    let (barrier, se, z) = run_barrier_case(vec![1.0, 4.0], 21, 41, 200, 1_600, 0.10);
     eprintln!(
         "anisotropic widening barrier={:.8} se={:.8} z={:.4}",
         barrier, se, z
     );
     assert!(
-        z <= 2.0,
-        "barrier {:.8} ± {:.8} gives z={:.4}",
+        se > 0.0 && se <= MAX_SE,
+        "anisotropic standard error {:.8} exceeds {:.8}",
+        se,
+        MAX_SE
+    );
+    assert!(
+        z <= SUITE_Z_MAX,
+        "barrier {:.8} ± {:.8} gives z={:.4} > {:.1}",
         barrier,
         se,
-        z
+        z,
+        SUITE_Z_MAX
     );
 }
 
 #[test]
 fn curved_mass_weighted_harmonic_profile_requires_jacobian() {
+    const MAX_SE: f64 = 0.0036;
     let thermal = 0.2_f64;
     let radius = 1.2_f64;
     let ax = 3.0_f64;
@@ -175,9 +209,9 @@ fn curved_mass_weighted_harmonic_profile_requires_jacobian() {
     let path = mass_weighted_circular_path(radius, theta_start, theta_end, planes);
     let config = PafiConfig::default()
         .with_planes(planes)
-        .with_burn_in_steps(10_000)
-        .with_sample_steps(20_000)
-        .with_time_step(0.0005)
+        .with_burn_in_steps(400)
+        .with_sample_steps(1_600)
+        .with_time_step(0.04)
         .with_stats(StatsConfig::default().with_min_batches(4))
         .with_seed(1_234);
     let mut engine = NativeEngine::new(
@@ -204,25 +238,42 @@ fn curved_mass_weighted_harmonic_profile_requires_jacobian() {
     );
     assert_eq!(profile.dividing_index, planes - 1);
     assert!(
-        z <= 4.0,
-        "curved barrier {:.8} ± {:.8} versus analytic {:.8} gives z={:.4}",
+        profile.barrier_error > 0.0 && profile.barrier_error <= MAX_SE,
+        "curved barrier standard error {:.8} exceeds {:.8}",
+        profile.barrier_error,
+        MAX_SE
+    );
+    assert!(
+        z <= SUITE_Z_MAX,
+        "curved barrier {:.8} ± {:.8} versus analytic {:.8} gives z={:.4} > {:.1}",
         profile.barrier,
         profile.barrier_error,
         analytic_barrier,
-        z
+        z,
+        SUITE_Z_MAX
+    );
+    // Without the `(r - r_0) · dn/ds` Jacobian term, the projected force is linear
+    // in the centered hyperplane coordinate and its canonical mean barrier is 0.
+    assert!(
+        profile.barrier > 25.0 * profile.barrier_error,
+        "curved barrier {:.8} ± {:.8} is not separated from the zero-Jacobian limit",
+        profile.barrier,
+        profile.barrier_error
     );
 }
 
 #[test]
 fn normalized_pafi_rate_matches_analytic_profile() {
+    const MAX_RATE_SE: f64 = 2.0e-5;
+    const MAX_RELATIVE_ERROR: f64 = 0.015;
     let thermal = 0.2_f64;
     let planes = 41usize;
     let path = line_path(-1.0, 0.0, planes);
     let config = PafiConfig::default()
         .with_planes(planes)
-        .with_burn_in_steps(10_000)
-        .with_sample_steps(10_000)
-        .with_time_step(0.001)
+        .with_burn_in_steps(200)
+        .with_sample_steps(1_200)
+        .with_time_step(0.10)
         .with_stats(StatsConfig::default().with_min_batches(2))
         .with_seed(7);
 
@@ -251,8 +302,8 @@ fn normalized_pafi_rate_matches_analytic_profile() {
     let rate = profile.normalized_rate;
     let rate_error = profile.normalized_rate_error;
     let dividing = profile.dividing_index;
-    assert!(rate_error.is_finite() && rate_error >= 0.0);
-    assert!(dividing > 0);
+    assert!(rate_error.is_finite() && rate_error > 0.0 && rate_error <= MAX_RATE_SE);
+    assert_eq!(dividing, planes - 1);
     let reconstructed_zr =
         integrate_reactant_partition(&profile.arc_lengths, &profile.free_energy, thermal);
     assert!(
@@ -284,12 +335,22 @@ fn normalized_pafi_rate_matches_analytic_profile() {
     let analytic_rate =
         (thermal / (2.0 * PI)).sqrt() * (-analytic_barrier / thermal).exp() / analytic_partition;
     let relative_error = (rate - analytic_rate).abs() / analytic_rate;
+    let z_rate = (rate - analytic_rate).abs() / rate_error;
     eprintln!(
-        "normalized rate={:.8e} se={:.8e} analytic={:.8e} relative error={:.4}",
-        rate, rate_error, analytic_rate, relative_error
+        "normalized rate={:.8e} se={:.8e} analytic={:.8e} relative error={:.4} z={:.4}",
+        rate, rate_error, analytic_rate, relative_error, z_rate
     );
     assert!(
-        relative_error <= 0.05,
+        z_rate <= SUITE_Z_MAX,
+        "rate {:.8e} ± {:.8e} versus analytic {:.8e} gives z={:.4} > {:.1}",
+        rate,
+        rate_error,
+        analytic_rate,
+        z_rate,
+        SUITE_Z_MAX
+    );
+    assert!(
+        relative_error <= MAX_RELATIVE_ERROR,
         "rate {:.8e} ± {:.8e} versus analytic {:.8e} has relative error {:.4}",
         rate,
         rate_error,
@@ -300,17 +361,28 @@ fn normalized_pafi_rate_matches_analytic_profile() {
 
 #[test]
 fn sampling_refinement_restores_analytic_coverage() {
+    const MAX_COARSE_SE: f64 = 0.0032;
+    const MAX_FINE_SE: f64 = 0.0017;
+    const MAX_SE_RATIO: f64 = 0.55;
     let (coarse_barrier, coarse_se, coarse_z) =
-        run_barrier_case(vec![1.0, 4.0], 91, 31, 20_000, 2_500, 0.001);
+        run_barrier_case(vec![1.0, 4.0], 91, 41, 300, 400, 0.08);
     let (fine_barrier, fine_se, fine_z) =
-        run_barrier_case(vec![1.0, 4.0], 91, 31, 20_000, 10_000, 0.001);
+        run_barrier_case(vec![1.0, 4.0], 91, 41, 300, 1_600, 0.08);
     eprintln!(
         "refinement coarse barrier={:.8} se={:.8} z={:.4}; fine barrier={:.8} se={:.8} z={:.4}",
         coarse_barrier, coarse_se, coarse_z, fine_barrier, fine_se, fine_z
     );
     assert!(
-        coarse_z > 4.0 && fine_z <= 2.0,
-        "refinement should move the analytic value into two-SE coverage: coarse z={coarse_z:.4}, fine barrier {:.8} ± {:.8} gives z={:.4}",
+        coarse_se > 0.0 && coarse_se <= MAX_COARSE_SE && fine_se > 0.0 && fine_se <= MAX_FINE_SE,
+        "unexpected SE bounds: coarse_se={coarse_se:.8}, fine_se={fine_se:.8}"
+    );
+    assert!(
+        fine_se <= MAX_SE_RATIO * coarse_se,
+        "fourfold sample refinement should shrink SE by ~1/2: coarse_se={coarse_se:.8}, fine_se={fine_se:.8}"
+    );
+    assert!(
+        coarse_z <= SUITE_Z_MAX && fine_z <= SUITE_Z_MAX,
+        "both coarse and refined runs must remain within suite coverage: coarse z={coarse_z:.4}, fine barrier {:.8} ± {:.8} gives z={:.4}",
         fine_barrier,
         fine_se,
         fine_z
@@ -328,9 +400,9 @@ fn arc_lengths_reflect_mass_weighting() {
     let trapezoid_error_bound = spacing * spacing * maximum_gradient_curvature / 12.0;
     let config = PafiConfig::default()
         .with_planes(planes)
-        .with_burn_in_steps(200)
-        .with_sample_steps(64)
-        .with_time_step(0.001)
+        .with_burn_in_steps(32)
+        .with_sample_steps(32)
+        .with_time_step(0.01)
         .with_zero_temperature_tol(trapezoid_error_bound)
         .with_stats(StatsConfig::default().with_min_batches(2))
         .with_seed(99);
@@ -359,8 +431,18 @@ fn arc_lengths_reflect_mass_weighting() {
     let p2 = pafi_profile(&mut skew_mass, path.view(), &config).expect("profile skew");
     let s1 = *p1.arc_lengths.last().expect("last arc");
     let s2 = *p2.arc_lengths.last().expect("last arc");
+    let expected_s1 = (1.0 + slope * slope).sqrt();
+    let expected_s2 = (1.0 + 4.0 * slope * slope).sqrt();
     assert!(
-        (s1 - s2).abs() > 1.0e-3,
+        (s1 - expected_s1).abs() <= 1.0e-12,
+        "unit-mass arc length mismatch: s1={s1:.16}, expected={expected_s1:.16}"
+    );
+    assert!(
+        (s2 - expected_s2).abs() <= 1.0e-12,
+        "skew-mass arc length mismatch: s2={s2:.16}, expected={expected_s2:.16}"
+    );
+    assert!(
+        (s2 - s1) > 0.1,
         "mass-weighted arc lengths should differ: s1={}, s2={}",
         s1,
         s2
