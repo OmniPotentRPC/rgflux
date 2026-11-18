@@ -17,9 +17,9 @@
 #![deny(missing_docs)]
 
 #[macro_use]
-#[allow(unused_macros)]
 mod config;
 
 pub mod error;
+pub mod stats;
 
 pub use error::FluxError;
