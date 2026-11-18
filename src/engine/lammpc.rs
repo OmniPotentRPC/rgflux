@@ -4,8 +4,10 @@
 //! C ABI with `ForceInput` and `PotentialConfig` Cap'n Proto messages from
 //! `rgpot_core`. It supports constrained Langevin or zero-friction projected
 //! velocity-Verlet dynamics and unconstrained NVE; unconstrained Langevin is
-//! unavailable in the current C ABI. [`DynamicsEngine::positions`] returns the
-//! unwrapped Cartesian state maintained by lammpc, matching the engine contract.
+//! unavailable in the current C ABI. [`DynamicsEngine::positions`] returns
+//! unwrapped Cartesian coordinates. LAMMPS reports wrapped `x`; the integer
+//! image count implied by the periodic cell is applied before those
+//! coordinates are stored, matching the engine contract.
 
 use std::ffi::{CStr, c_char, c_int, c_void};
 use std::ptr::NonNull;
@@ -18,16 +20,19 @@ use rand::rngs::StdRng;
 
 use crate::engine::{
     DynamicsEngine, HyperplaneConstraint, StepReport, SurfaceVelocityPolicy, ThermostatConfig,
-    rattle_velocities_in_place, reflect_velocity_in_place, sample_maxwell_boltzmann_with_rng,
-    shake_positions_in_place, validate_finite_slice, validate_masses, validate_unit_normal,
+    constraint_lagrange_multiplier, rattle_velocities_in_place, reflect_velocity_in_place,
+    sample_maxwell_boltzmann_with_rng, shake_positions_in_place, validate_finite_slice,
+    validate_masses, validate_unit_normal,
 };
 use crate::error::FluxError;
 
 const METAL_LENGTH_UNIT: &str = "angstrom";
 const METAL_ENERGY_UNIT: &str = "eV";
 const MIN_POSITIVE_THERMAL_ENERGY_EV: f64 = f64::MIN_POSITIVE;
-const MASS_VELOCITY_TO_EV: f64 = 0.000_103_642_696_562_621_75;
+/// LAMMPS metal-unit factor `mvv2e`: `amu * (Å/ps)^2` equals this many eV.
+pub const MASS_VELOCITY_TO_EV: f64 = 0.000_103_642_696_562_621_75;
 const LAMMPC_ABI_VERSION: c_int = 0;
+const CAPNP_WORD_BYTES: usize = std::mem::size_of::<u64>();
 
 #[repr(C)]
 struct LammpcSession {
@@ -59,6 +64,7 @@ struct LammpcMdConfig {
 
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
+#[allow(dead_code)]
 struct LammpcMdObservation {
     constraint_force: f64,
     force_evaluations: usize,
@@ -67,6 +73,7 @@ struct LammpcMdObservation {
 
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
+#[allow(dead_code)]
 struct LammpcNveObservation {
     potential_energy_ev: f64,
     kinetic_energy_ev: f64,
@@ -141,6 +148,11 @@ unsafe extern "C" {
         observation: *mut LammpcNveObservation,
     ) -> c_int;
     fn lammpc_last_error() -> *const c_char;
+    fn lammpc_capabilities_result(
+        capabilities_capnp: *mut c_void,
+        capabilities_capnp_capacity_bytes: usize,
+        capabilities_capnp_size_bytes: *mut usize,
+    ) -> c_int;
 }
 
 /// Public configuration for [`LammpcEngine`].
@@ -218,9 +230,10 @@ pub struct LammpcEngine {
     constraint: Option<HyperplaneConstraint>,
     cell: Option<[f64; 9]>,
     seed: u64,
+    boundary: String,
     md_initialized: bool,
     md_timestep_ps: Option<f64>,
-    pending_md_velocities: bool,
+    nve_instance_ready: bool,
 }
 
 impl LammpcEngine {
@@ -266,21 +279,20 @@ impl LammpcEngine {
                 }
             }
         }
+        // SAFETY: the ABI query has no inputs and does not create a session.
+        let actual_abi = unsafe { lammpc_abi_version() };
+        if actual_abi != LAMMPC_ABI_VERSION {
+            return Err(FluxError::Lammpc(format!(
+                "lammpc ABI version mismatch: expected {LAMMPC_ABI_VERSION}, got {actual_abi}"
+            )));
+        }
+        handshake_capabilities()?;
         let cfg_bytes = encode_lammps_config(&config)?;
         // SAFETY: We pass a stable byte slice and validate non-null result.
         let raw = unsafe {
             lammpc_session_create_from_config(cfg_bytes.as_ptr().cast(), cfg_bytes.len())
         };
         let session = NonNull::new(raw).ok_or_else(|| FluxError::Lammpc(last_error_message()))?;
-        // SAFETY: `session` is a successfully created handle and this ABI query has no inputs.
-        let actual_abi = unsafe { lammpc_abi_version() };
-        if actual_abi != LAMMPC_ABI_VERSION {
-            // SAFETY: the just-created handle is uniquely owned on this error path.
-            unsafe { lammpc_session_destroy(session.as_ptr()) };
-            return Err(FluxError::Lammpc(format!(
-                "lammpc ABI version mismatch: expected {LAMMPC_ABI_VERSION}, got {actual_abi}"
-            )));
-        }
 
         let mut engine = Self {
             session,
@@ -292,9 +304,10 @@ impl LammpcEngine {
             constraint: config.constraint,
             cell: config.cell,
             seed: config.seed,
+            boundary: config.boundary,
             md_initialized: false,
             md_timestep_ps: None,
-            pending_md_velocities: false,
+            nve_instance_ready: false,
         };
         engine.project_state_onto_constraint()?;
         Ok(engine)
@@ -326,39 +339,49 @@ impl LammpcEngine {
 
     fn call_calculate(&mut self) -> Result<(f64, Array1<f64>), FluxError> {
         let input = self.force_input_bytes()?;
-        let mut written = 0usize;
-        // SAFETY: We pass a valid `ForceInput` byte slice and a null output buffer for the
-        // mandatory size-query path described by the ABI.
+        // SAFETY: size query takes the `ForceInput` bytes and a null output, as in
+        // `rgpot_core::profile::ProfileSession::evaluate`.
         let required = unsafe {
             lammpc_potential_result_size_for_force_input(input.as_ptr().cast(), input.len())
         };
-        if required == 0 {
+        if required == 0 || !required.is_multiple_of(CAPNP_WORD_BYTES) {
             return Err(FluxError::Lammpc(last_error_message()));
         }
-        let mut payload = vec![0_u8; required];
-        // SAFETY: `session` is a live handle, buffers outlive the call, and sizes match.
+        let mut output = vec![0_u64; required / CAPNP_WORD_BYTES];
+        let capacity = output.len() * CAPNP_WORD_BYTES;
+        let mut written = 0usize;
+        // SAFETY: `session` is a live handle, the word buffer outlives the call, and
+        // `capacity` is the byte length of that buffer.
         let status = unsafe {
             lammpc_session_calculate_result(
                 self.session.as_ptr(),
                 input.as_ptr().cast(),
                 input.len(),
-                payload.as_mut_ptr().cast(),
-                payload.len(),
-                &mut written as *mut usize,
+                output.as_mut_ptr().cast(),
+                capacity,
+                &mut written,
             )
         };
         if status.ok == 0 {
             let message = result_message(&status);
             return Err(FluxError::Lammpc(message));
         }
-        if written == 0 || written > payload.len() {
-            return Err(FluxError::Lammpc(
-                "lammpc returned an invalid PotentialResult size".to_string(),
-            ));
+        if written == 0 || written > capacity || !written.is_multiple_of(CAPNP_WORD_BYTES) {
+            return Err(FluxError::Lammpc(format!(
+                "lammpc_session_calculate_result wrote invalid size {written} for capacity {capacity}"
+            )));
         }
-        let decoded = rgpot_core::profile::decode_potential_result(&payload[..written], self.dof())
+        // SAFETY: `written` bytes sit at the front of the word buffer just filled.
+        let encoded = unsafe { std::slice::from_raw_parts(output.as_ptr().cast::<u8>(), written) };
+        let decoded = rgpot_core::profile::decode_potential_result(encoded, self.dof())
             .map_err(|err| FluxError::Lammpc(format!("decode PotentialResult failed: {err}")))?;
-        Ok((decoded.energy, Array1::from_vec(decoded.forces)))
+        if !decoded.energy.is_finite() {
+            return Err(FluxError::NonFinite("LammpcEngine potential energy"));
+        }
+        let forces = Array1::from_vec(decoded.forces);
+        validate_finite_slice(forces.view(), "LammpcEngine forces")?;
+        self.nve_instance_ready = true;
+        Ok((decoded.energy, forces))
     }
 
     fn ensure_constrained_md_initialized(&mut self, dt: f64) -> Result<(), FluxError> {
@@ -381,15 +404,29 @@ impl LammpcEngine {
         } else {
             MIN_POSITIVE_THERMAL_ENERGY_EV
         };
+        let friction = if self.thermostat.gamma > 0.0 {
+            self.thermostat.gamma
+        } else {
+            // A positive floor keeps the OU factor at 1. Exact zero and this
+            // floor produce identical step hashes; the floor also satisfies
+            // builds that reject a zero friction control.
+            MIN_POSITIVE_THERMAL_ENERGY_EV
+        };
         let cfg = LammpcMdConfig {
             time_step_ps: dt,
             thermal_energy_ev: md_thermal,
-            friction_per_ps: self.thermostat.gamma,
+            friction_per_ps: friction,
             seed: self.seed,
             coordinates: LammpcPlaneCoordinates::Cartesian,
         };
         let input = self.force_input_bytes()?;
-        let point = self.positions.to_vec();
+        // The plane is `n · x = offset`. A point on it is `offset * n`, which
+        // does not move when the current coordinates are shifted inside the plane.
+        let point: Vec<f64> = plane
+            .normal
+            .iter()
+            .map(|component| component * plane.offset)
+            .collect();
         // SAFETY: All pointers target owned contiguous buffers with `dof` entries.
         let rc = unsafe {
             lammpc_session_md_initialize(
@@ -405,21 +442,10 @@ impl LammpcEngine {
         if rc != 0 {
             return Err(FluxError::Lammpc(last_error_message()));
         }
-        if self.pending_md_velocities {
-            // SAFETY: the session was initialized above and the velocity slice has `dof` entries.
-            let rc_set = unsafe {
-                lammpc_session_md_set_velocities(
-                    self.session.as_ptr(),
-                    self.velocities.as_ptr(),
-                    self.dof(),
-                    self.seed,
-                )
-            };
-            if rc_set != 0 {
-                return Err(FluxError::Lammpc(last_error_message()));
-            }
-            self.pending_md_velocities = false;
-        }
+        // Initialization draws a fresh Maxwell sample. Put the caller velocities
+        // back before any step, including the first step of a new session and
+        // every later re-initialization.
+        self.install_caller_velocities()?;
         self.md_initialized = true;
         self.md_timestep_ps = Some(dt);
         Ok(())
@@ -438,19 +464,18 @@ impl LammpcEngine {
             return Err(FluxError::Lammpc(last_error_message()));
         }
 
-        let mut forces = vec![0.0_f64; self.dof()];
-        let mut removed = vec![0.0_f64; self.dof()];
-        let mut observation = LammpcMdObservation::default();
-        // SAFETY: all output buffers are sized to `dof`.
+        // SAFETY: positions and velocities are sized to `dof`. Force and
+        // observation outputs are optional and unused: the observation's
+        // `constraint_force` is `n · F`, not the mass-weighted multiplier.
         let rc_state = unsafe {
             lammpc_session_md_state(
                 self.session.as_ptr(),
                 self.positions.as_mut_ptr(),
                 self.velocities.as_mut_ptr(),
-                forces.as_mut_ptr(),
-                removed.as_mut_ptr(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
                 self.dof(),
-                &mut observation as *mut LammpcMdObservation,
+                std::ptr::null_mut(),
             )
         };
         if rc_state != 0 {
@@ -458,15 +483,56 @@ impl LammpcEngine {
         }
         validate_finite_slice(self.positions.view(), "LammpcEngine positions")?;
         validate_finite_slice(self.velocities.view(), "LammpcEngine velocities")?;
-        // The constrained state ABI returns forces but not endpoint energy, so evaluate once
-        // here to populate the engine-wide end-of-step `StepReport` contract.
-        let (potential_energy, _) = self.call_calculate()?;
+        // The MD observation stores `n · F` and the projected force. The engine
+        // contract wants `lambda = -(n^T M^{-1} F) / (n^T M^{-1} n)` from the
+        // physical force, plus the endpoint energy, neither of which the
+        // observation carries. One profile evaluation supplies both.
+        let (potential_energy, forces) = self.call_calculate()?;
+        let plane = self
+            .constraint
+            .as_ref()
+            .ok_or(FluxError::BackendUnavailable(
+                "lammpc constrained mode requires a plane",
+            ))?;
+        let lambda = constraint_lagrange_multiplier(forces.view(), self.masses.view(), plane);
+        if !lambda.is_finite() {
+            return Err(FluxError::NonFinite("LammpcEngine constraint force"));
+        }
         let kinetic_energy = self.kinetic_energy();
+        if !kinetic_energy.is_finite() {
+            return Err(FluxError::NonFinite("LammpcEngine kinetic energy"));
+        }
         Ok(StepReport::new(
             potential_energy,
             kinetic_energy,
-            Some(observation.constraint_force),
+            Some(lambda),
         ))
+    }
+
+    fn install_caller_velocities(&mut self) -> Result<(), FluxError> {
+        // SAFETY: the session was initialized above and the velocity slice has `dof` entries.
+        let rc_set = unsafe {
+            lammpc_session_md_set_velocities(
+                self.session.as_ptr(),
+                self.velocities.as_ptr(),
+                self.dof(),
+                self.seed,
+            )
+        };
+        if rc_set != 0 {
+            return Err(FluxError::Lammpc(last_error_message()));
+        }
+        Ok(())
+    }
+
+    fn ensure_nve_instance(&mut self) -> Result<(), FluxError> {
+        if self.nve_instance_ready {
+            return Ok(());
+        }
+        // The NVE entry points need a live geometry. One evaluation creates it;
+        // later steps scatter coordinates themselves and must not evaluate again.
+        let _ = self.call_calculate()?;
+        Ok(())
     }
 
     fn unconstrained_nve_step(&mut self, dt: f64) -> Result<StepReport, FluxError> {
@@ -475,7 +541,7 @@ impl LammpcEngine {
                 "lammpc constrained NVE is unavailable through current C ABI",
             ));
         }
-        let _ = self.call_calculate()?;
+        self.ensure_nve_instance()?;
         let (cell_ptr, cell_len) = if let Some(cell) = self.cell.as_ref() {
             (cell.as_ptr(), 9usize)
         } else {
@@ -510,12 +576,13 @@ impl LammpcEngine {
         if rc_step != 0 {
             return Err(FluxError::Lammpc(last_error_message()));
         }
+        let mut wrapped = vec![0.0_f64; self.dof()];
         let mut observation = LammpcNveObservation::default();
         // SAFETY: output buffers have `dof` coordinates.
         let rc_state = unsafe {
             lammpc_session_nve_state(
                 self.session.as_ptr(),
-                self.positions.as_mut_ptr(),
+                wrapped.as_mut_ptr(),
                 self.velocities.as_mut_ptr(),
                 self.dof(),
                 &mut observation as *mut LammpcNveObservation,
@@ -524,11 +591,57 @@ impl LammpcEngine {
         if rc_state != 0 {
             return Err(FluxError::Lammpc(last_error_message()));
         }
+        validate_finite_slice(self.velocities.view(), "LammpcEngine velocities")?;
+        self.restore_unwrapped_positions(&wrapped)?;
+        if !observation.potential_energy_ev.is_finite() {
+            return Err(FluxError::NonFinite("LammpcEngine potential energy"));
+        }
+        // LAMMPS thermo `ke` drops the center of mass and is zero for one atom.
+        // The engine contract is `(1/2) sum m_i v_i^2` in metal energy units.
+        let kinetic_energy = self.kinetic_energy();
+        if !kinetic_energy.is_finite() {
+            return Err(FluxError::NonFinite("LammpcEngine kinetic energy"));
+        }
         Ok(StepReport::new(
             observation.potential_energy_ev,
-            observation.kinetic_energy_ev,
+            kinetic_energy,
             None,
         ))
+    }
+
+    fn restore_unwrapped_positions(&mut self, wrapped: &[f64]) -> Result<(), FluxError> {
+        let mut unwrapped = self.positions.clone();
+        if let Some(cell) = self.cell {
+            let periodic = periodic_axes(&self.boundary);
+            let lengths = [cell[0], cell[4], cell[8]];
+            let xy = cell[3];
+            let xz = cell[6];
+            let yz = cell[7];
+            let n_atoms = wrapped.len() / 3;
+            for atom in 0..n_atoms {
+                let base = atom * 3;
+                let previous = [
+                    self.positions[base],
+                    self.positions[base + 1],
+                    self.positions[base + 2],
+                ];
+                let current = [wrapped[base], wrapped[base + 1], wrapped[base + 2]];
+                let restored =
+                    unwrap_with_image_flags(previous, current, lengths, xy, xz, yz, periodic);
+                unwrapped[base] = restored[0];
+                unwrapped[base + 1] = restored[1];
+                unwrapped[base + 2] = restored[2];
+            }
+        } else if let Some(slice) = unwrapped.as_slice_mut() {
+            slice.copy_from_slice(wrapped);
+        } else {
+            return Err(FluxError::Lammpc(
+                "positions storage is not contiguous".to_string(),
+            ));
+        }
+        validate_finite_slice(unwrapped.view(), "LammpcEngine positions")?;
+        self.positions = unwrapped;
+        Ok(())
     }
 }
 
@@ -587,7 +700,6 @@ impl DynamicsEngine for LammpcEngine {
             self.md_initialized = false;
             self.md_timestep_ps = None;
         }
-        self.pending_md_velocities = true;
         Ok(())
     }
 
@@ -690,14 +802,12 @@ impl DynamicsEngine for LammpcEngine {
         if let Some(plane) = &self.constraint {
             rattle_velocities_in_place(&mut self.velocities, self.masses.view(), plane);
         }
-        self.pending_md_velocities = true;
         self.reseed(seed)
     }
 
     fn reflect_velocity(&mut self, normal: ArrayView1<'_, f64>) -> Result<f64, FluxError> {
         let normal_velocity =
             reflect_velocity_in_place(&mut self.velocities, self.masses.view(), normal)?;
-        self.pending_md_velocities = true;
         self.md_initialized = false;
         self.md_timestep_ps = None;
         Ok(normal_velocity)
@@ -820,6 +930,80 @@ fn result_message(result: &LammpcResult) -> String {
     } else {
         String::from_utf8_lossy(&bytes).into_owned()
     }
+}
+
+fn handshake_capabilities() -> Result<(), FluxError> {
+    let mut required = 0usize;
+    // SAFETY: a null buffer with zero capacity is the documented size query.
+    let _ = unsafe { lammpc_capabilities_result(std::ptr::null_mut(), 0, &mut required) };
+    if required == 0 || !required.is_multiple_of(CAPNP_WORD_BYTES) {
+        return Err(FluxError::Lammpc(
+            "lammpc_capabilities_result reported an invalid size".to_string(),
+        ));
+    }
+    let mut words = vec![0_u64; required / CAPNP_WORD_BYTES];
+    let mut written = 0usize;
+    // SAFETY: `words` holds `required` bytes and outlives the call.
+    let status =
+        unsafe { lammpc_capabilities_result(words.as_mut_ptr().cast(), required, &mut written) };
+    if status != 0 || written != required {
+        return Err(FluxError::Lammpc(format!(
+            "lammpc_capabilities_result failed (status {status}, wrote {written} of {required})"
+        )));
+    }
+    rgpot_core::profile::check_capabilities_bytes(
+        "lammpc",
+        &words,
+        &rgpot_core::compat::Expectation::default(),
+    )
+    .map_err(|err| FluxError::Lammpc(err.to_string()))?;
+    Ok(())
+}
+
+fn periodic_axes(boundary: &str) -> [bool; 3] {
+    let mut axes = [false; 3];
+    for (index, token) in boundary.split_whitespace().take(3).enumerate() {
+        let periodic = token.starts_with('p') || token.starts_with('P');
+        axes[index] = periodic;
+    }
+    axes
+}
+
+/// Recover unwrapped coordinates from wrapped `x` and the LAMMPS image count.
+///
+/// The image count on each periodic axis is the integer that places the
+/// wrapped coordinate on the continuous branch through `previous`. Tilt
+/// factors follow LAMMPS `Domain::unmap` for a restricted triclinic cell.
+fn unwrap_with_image_flags(
+    previous: [f64; 3],
+    wrapped: [f64; 3],
+    lengths: [f64; 3],
+    xy: f64,
+    xz: f64,
+    yz: f64,
+    periodic: [bool; 3],
+) -> [f64; 3] {
+    let usable = |axis: usize| periodic[axis] && lengths[axis].is_finite() && lengths[axis] > 0.0;
+    let iz = if usable(2) {
+        ((previous[2] - wrapped[2]) / lengths[2]).round()
+    } else {
+        0.0
+    };
+    let iy = if usable(1) {
+        ((previous[1] - wrapped[1] - iz * yz) / lengths[1]).round()
+    } else {
+        0.0
+    };
+    let ix = if usable(0) {
+        ((previous[0] - wrapped[0] - iy * xy - iz * xz) / lengths[0]).round()
+    } else {
+        0.0
+    };
+    [
+        wrapped[0] + ix * lengths[0] + iy * xy + iz * xz,
+        wrapped[1] + iy * lengths[1] + iz * yz,
+        wrapped[2] + iz * lengths[2],
+    ]
 }
 
 fn last_error_message() -> String {

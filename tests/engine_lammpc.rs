@@ -2,9 +2,11 @@
 
 use ndarray::{Array1, ArrayView1};
 use rgflux::FluxError;
-use rgflux::engine::lammpc::{LammpcConfig, LammpcEngine};
+use rgflux::engine::lammpc::{LammpcConfig, LammpcEngine, MASS_VELOCITY_TO_EV};
 use rgflux::engine::native::{NativeConfig, NativeEngine};
 use rgflux::engine::{DynamicsEngine, HyperplaneConstraint, ThermostatConfig};
+use rgflux::stats::{StatsConfig, batch_means};
+use rgsaddle::PointSurface;
 
 const ARGON_EPSILON_EV: f64 = 0.010_323;
 const ARGON_SIGMA_ANGSTROM: f64 = 3.405;
@@ -72,6 +74,59 @@ fn make_lammpc_engine(seed: u64) -> LammpcEngine {
     engine
 }
 
+fn metal_masses(amu: &[f64]) -> Array1<f64> {
+    let mut masses = Vec::with_capacity(amu.len() * 3);
+    for &mass in amu {
+        masses.extend_from_slice(&[
+            mass * MASS_VELOCITY_TO_EV,
+            mass * MASS_VELOCITY_TO_EV,
+            mass * MASS_VELOCITY_TO_EV,
+        ]);
+    }
+    Array1::from_vec(masses)
+}
+
+fn lambda_from_surface(
+    surface: &LjDimerSurface,
+    positions: ArrayView1<'_, f64>,
+    masses_amu: ArrayView1<'_, f64>,
+    plane: &HyperplaneConstraint,
+) -> f64 {
+    let (_energy, gradient) = surface.eval(positions).expect("surface");
+    let mut normal_accel = 0.0_f64;
+    let mut metric = 0.0_f64;
+    for i in 0..masses_amu.len() {
+        normal_accel += plane.normal[i] * (-gradient[i]) / masses_amu[i];
+        metric += plane.normal[i] * plane.normal[i] / masses_amu[i];
+    }
+    -normal_accel / metric
+}
+
+fn assert_mean_within_sampling_error(samples: &[f64]) {
+    let estimate = batch_means(samples, &StatsConfig::default()).expect("batch means");
+    let mut scale = 1.0_f64;
+    for value in samples {
+        if value.abs() > scale {
+            scale = value.abs();
+        }
+    }
+    let machine = 64.0 * f64::EPSILON * scale * (samples.len() as f64).sqrt();
+    let statistical = 3.0 * estimate.standard_error;
+    let bound = if statistical > machine {
+        statistical
+    } else {
+        machine
+    };
+    assert!(
+        estimate.mean.abs() <= bound,
+        "mean {} exceeds bound {} (se {}, machine {})",
+        estimate.mean,
+        bound,
+        estimate.standard_error,
+        machine
+    );
+}
+
 fn make_force_free_constrained_engine(seed: u64) -> LammpcEngine {
     let cfg = LammpcConfig::default()
         .with_atomic_numbers(vec![ARGON_ATOMIC_NUMBER, ARGON_ATOMIC_NUMBER])
@@ -120,36 +175,22 @@ fn same_seed_replays_bitwise_and_different_seed_diverges() {
 fn constrained_coordinate_and_constraint_force_match_native_surface() {
     let mut lammpc = make_lammpc_engine(77);
     let plane = dimer_plane();
-    let mut native = NativeEngine::new(
-        LjDimerSurface {
-            epsilon_ev: ARGON_EPSILON_EV,
-            sigma_angstrom: ARGON_SIGMA_ANGSTROM,
-        },
-        NativeConfig::default()
-            .with_masses(Array1::from_vec(vec![
-                ARGON_MASS_AMU,
-                ARGON_MASS_AMU,
-                ARGON_MASS_AMU,
-                ARGON_MASS_AMU,
-                ARGON_MASS_AMU,
-                ARGON_MASS_AMU,
-            ]))
-            .with_constraint(plane.clone())
-            .with_seed(77)
-            .with_thermostat(
-                ThermostatConfig::default()
-                    .with_gamma(1.0)
-                    .with_temperature(0.25),
-            ),
-    )
-    .expect("native engine");
-
+    let surface = LjDimerSurface {
+        epsilon_ev: ARGON_EPSILON_EV,
+        sigma_angstrom: ARGON_SIGMA_ANGSTROM,
+    };
+    let amu = Array1::from_vec(vec![
+        ARGON_MASS_AMU,
+        ARGON_MASS_AMU,
+        ARGON_MASS_AMU,
+        ARGON_MASS_AMU,
+        ARGON_MASS_AMU,
+        ARGON_MASS_AMU,
+    ]);
     let x = Array1::from_vec(vec![0.0, 0.0, 0.0, 4.2, 0.0, 0.0]);
     let v = Array1::from_vec(vec![0.0, 0.1, -0.05, 0.0, -0.1, 0.05]);
     lammpc.set_positions(x.view()).expect("set positions");
     lammpc.set_velocities(v.view()).expect("set velocities");
-    native.set_positions(x.view()).expect("set positions");
-    native.set_velocities(v.view()).expect("set velocities");
 
     for _ in 0..1_000 {
         let rep = lammpc.step(0.001).expect("lammpc step");
@@ -164,15 +205,143 @@ fn constrained_coordinate_and_constraint_force_match_native_surface() {
         assert!(rep.constraint_force.is_some());
     }
 
-    let native_report = native.step(0.001).expect("native step");
-    let lammpc_report = lammpc.step(0.001).expect("lammpc step");
-    let native_force = native_report.constraint_force.expect("native lambda");
-    let lammpc_force = lammpc_report.constraint_force.expect("lammpc lambda");
-    let agreement_tol = 5.0e-3_f64;
-    assert!(
-        (native_force - lammpc_force).abs() <= agreement_tol,
-        "native={native_force} lammpc={lammpc_force}"
-    );
+    // Zero friction keeps the trajectory on one side of the sign error. A
+    // flipped multiplier sits near -1.945e-3 instead of +1.945e-3 here, and
+    // the mean of that bias is many sampling errors, not a 5e-3 window.
+    let mut lammpc = LammpcEngine::new(
+        LammpcConfig::default()
+            .with_atomic_numbers(vec![ARGON_ATOMIC_NUMBER, ARGON_ATOMIC_NUMBER])
+            .with_type_to_atomic_number(vec![ARGON_ATOMIC_NUMBER])
+            .with_masses_by_type(vec![ARGON_MASS_AMU])
+            .with_pair_style("lj/cut 8.5".to_string())
+            .with_pair_coeffs(vec![format!(
+                "1 1 {} {}",
+                ARGON_EPSILON_EV, ARGON_SIGMA_ANGSTROM
+            )])
+            .with_constraint(plane.clone())
+            .with_seed(77)
+            .with_thermostat(
+                ThermostatConfig::default()
+                    .with_gamma(0.0)
+                    .with_temperature(0.0)
+                    .with_boltzmann(1.0),
+            ),
+    )
+    .expect("lammpc engine");
+    let mut native = NativeEngine::new(
+        LjDimerSurface {
+            epsilon_ev: ARGON_EPSILON_EV,
+            sigma_angstrom: ARGON_SIGMA_ANGSTROM,
+        },
+        NativeConfig::default()
+            .with_masses(metal_masses(&[ARGON_MASS_AMU, ARGON_MASS_AMU]))
+            .with_constraint(plane.clone())
+            .with_seed(77)
+            .with_thermostat(
+                ThermostatConfig::default()
+                    .with_gamma(0.0)
+                    .with_temperature(0.0)
+                    .with_boltzmann(1.0),
+            ),
+    )
+    .expect("native engine");
+    lammpc.set_positions(x.view()).expect("set positions");
+    lammpc.set_velocities(v.view()).expect("set velocities");
+    let mut difference = Vec::with_capacity(64);
+    for _ in 0..32 {
+        let pos = lammpc.positions().to_owned();
+        let vel = lammpc.velocities().to_owned();
+        native.set_positions(pos.view()).expect("sync positions");
+        native.set_velocities(vel.view()).expect("sync velocities");
+        let native_force = native
+            .step(0.001)
+            .expect("native")
+            .constraint_force
+            .expect("native lambda");
+        let lammpc_force = lammpc
+            .step(0.001)
+            .expect("lammpc")
+            .constraint_force
+            .expect("lammpc lambda");
+        let expected = lambda_from_surface(&surface, lammpc.positions(), amu.view(), &plane);
+        difference.push(lammpc_force - native_force);
+        difference.push(lammpc_force - expected);
+    }
+    assert_mean_within_sampling_error(&difference);
+}
+
+#[test]
+fn unequal_mass_constraint_force_matches_native_multiplier() {
+    let heavy = 80.0_f64;
+    let light = 16.0_f64;
+    let plane = dimer_plane();
+    let mut lammpc = LammpcEngine::new(
+        LammpcConfig::default()
+            .with_atomic_numbers(vec![ARGON_ATOMIC_NUMBER, 10])
+            .with_type_to_atomic_number(vec![ARGON_ATOMIC_NUMBER, 10])
+            .with_masses_by_type(vec![light, heavy])
+            .with_pair_style("lj/cut 8.5".to_string())
+            .with_pair_coeffs(vec![format!(
+                "* * {} {}",
+                ARGON_EPSILON_EV, ARGON_SIGMA_ANGSTROM
+            )])
+            .with_constraint(plane.clone())
+            .with_seed(11)
+            .with_thermostat(
+                ThermostatConfig::default()
+                    .with_gamma(0.0)
+                    .with_temperature(0.0)
+                    .with_boltzmann(1.0),
+            ),
+    )
+    .expect("lammpc");
+    let mut native = NativeEngine::new(
+        LjDimerSurface {
+            epsilon_ev: ARGON_EPSILON_EV,
+            sigma_angstrom: ARGON_SIGMA_ANGSTROM,
+        },
+        NativeConfig::default()
+            .with_masses(metal_masses(&[light, heavy]))
+            .with_constraint(plane.clone())
+            .with_seed(11)
+            .with_thermostat(
+                ThermostatConfig::default()
+                    .with_gamma(0.0)
+                    .with_temperature(0.0)
+                    .with_boltzmann(1.0),
+            ),
+    )
+    .expect("native");
+    let x = Array1::from_vec(vec![0.0, 0.0, 0.0, 4.2, 0.0, 0.0]);
+    let v = Array1::from_vec(vec![0.0, 0.2, -0.1, 0.0, -0.05, 0.1]);
+    lammpc.set_positions(x.view()).expect("positions");
+    lammpc.set_velocities(v.view()).expect("velocities");
+    let amu = Array1::from_vec(vec![light, light, light, heavy, heavy, heavy]);
+    let surface = LjDimerSurface {
+        epsilon_ev: ARGON_EPSILON_EV,
+        sigma_angstrom: ARGON_SIGMA_ANGSTROM,
+    };
+    let mut difference = Vec::with_capacity(32);
+    for _ in 0..32 {
+        let pos = lammpc.positions().to_owned();
+        let vel = lammpc.velocities().to_owned();
+        native.set_positions(pos.view()).expect("sync positions");
+        native.set_velocities(vel.view()).expect("sync velocities");
+        let native_force = native
+            .step(0.001)
+            .expect("native")
+            .constraint_force
+            .expect("native lambda");
+        let lammpc_force = lammpc
+            .step(0.001)
+            .expect("lammpc")
+            .constraint_force
+            .expect("lammpc lambda");
+        let expected = lambda_from_surface(&surface, lammpc.positions(), amu.view(), &plane);
+        difference.push(lammpc_force - native_force);
+        difference.push(lammpc_force - expected);
+    }
+    assert_mean_within_sampling_error(&difference);
 }
 
 #[test]
@@ -230,4 +399,168 @@ fn constraint_projection_overflow_is_reported() {
         engine.set_positions(positions.view()),
         Err(FluxError::ConstraintViolation { .. })
     ));
+}
+
+fn velocity_bits(engine: &LammpcEngine) -> Vec<u64> {
+    engine
+        .velocities()
+        .iter()
+        .map(|value| value.to_bits())
+        .collect()
+}
+
+#[test]
+fn caller_velocity_survives_reinitialization_and_the_first_step() {
+    let mut fresh = make_force_free_constrained_engine(17);
+    fresh
+        .step(0.001)
+        .expect("first step keeps the zero velocity");
+    assert_eq!(velocity_bits(&fresh), vec![0.0_f64.to_bits(); 6]);
+
+    let mut engine = make_force_free_constrained_engine(17);
+    let caller = Array1::from_vec(vec![0.0, 0.2, -0.1, 0.0, -0.2, 0.1]);
+    engine
+        .set_velocities(caller.view())
+        .expect("set caller velocities");
+    let caller_bits: Vec<u64> = caller.iter().map(|value| value.to_bits()).collect();
+    engine.step(0.001).expect("first constrained step");
+    assert_eq!(velocity_bits(&engine), caller_bits);
+
+    let positions = engine.positions().to_owned();
+    engine
+        .set_positions(positions.view())
+        .expect("reinit via positions");
+    engine.step(0.001).expect("step after set_positions");
+    assert_eq!(velocity_bits(&engine), caller_bits);
+
+    engine
+        .set_cell(engine.cell().copied())
+        .expect("reinit via cell");
+    engine.step(0.001).expect("step after set_cell");
+    assert_eq!(velocity_bits(&engine), caller_bits);
+
+    engine
+        .set_thermostat(*engine.thermostat())
+        .expect("reinit via thermostat");
+    engine.step(0.001).expect("step after set_thermostat");
+    assert_eq!(velocity_bits(&engine), caller_bits);
+
+    engine
+        .set_constraint(Some(dimer_plane()))
+        .expect("reinit via constraint");
+    engine.step(0.001).expect("step after set_constraint");
+    assert_eq!(velocity_bits(&engine), caller_bits);
+
+    engine.reseed(17).expect("reinit via reseed");
+    engine.step(0.001).expect("step after reseed");
+    assert_eq!(velocity_bits(&engine), caller_bits);
+
+    engine.step(0.002).expect("step after a dt change");
+    assert_eq!(velocity_bits(&engine), caller_bits);
+}
+
+#[test]
+fn unconstrained_nve_positions_stay_unwrapped_across_a_periodic_face() {
+    let mut engine = LammpcEngine::new(
+        LammpcConfig::default()
+            .with_atomic_numbers(vec![ARGON_ATOMIC_NUMBER, ARGON_ATOMIC_NUMBER])
+            .with_type_to_atomic_number(vec![ARGON_ATOMIC_NUMBER])
+            .with_masses_by_type(vec![ARGON_MASS_AMU])
+            .with_pair_style("lj/cut 8.5".to_string())
+            .with_pair_coeffs(vec![format!(
+                "1 1 {} {}",
+                ARGON_EPSILON_EV, ARGON_SIGMA_ANGSTROM
+            )])
+            .with_thermostat(
+                ThermostatConfig::default()
+                    .with_gamma(0.0)
+                    .with_temperature(0.0)
+                    .with_boltzmann(1.0),
+            )
+            .with_cell(Some([30.0, 0.0, 0.0, 0.0, 30.0, 0.0, 0.0, 0.0, 30.0])),
+    )
+    .expect("nve engine");
+    // 30.09 Å plus 100 Å/ps for 0.001 ps lands at 30.19. The wrapped image is 0.19.
+    let start = Array1::from_vec(vec![30.09, 0.0, 0.0, 15.0, 15.0, 15.0]);
+    engine.set_positions(start.view()).expect("positions");
+    engine
+        .set_velocities(Array1::from_vec(vec![100.0, 0.0, 0.0, 0.0, 0.0, 0.0]).view())
+        .expect("velocities");
+    engine.step(0.001).expect("crossing step");
+    let crossed = engine.positions()[0];
+    let expected = 30.09_f64 + 100.0 * 0.001;
+    let tol = 4096.0 * f64::EPSILON * expected.abs();
+    assert!(
+        (crossed - expected).abs() <= tol,
+        "wrapped coordinate {crossed}, unwrapped target {expected}"
+    );
+    assert!(crossed > 30.0, "position folded into the cell: {crossed}");
+}
+
+#[test]
+fn single_atom_nve_kinetic_energy_follows_the_mass_and_velocity() {
+    let mut engine = LammpcEngine::new(
+        LammpcConfig::default()
+            .with_atomic_numbers(vec![ARGON_ATOMIC_NUMBER])
+            .with_type_to_atomic_number(vec![ARGON_ATOMIC_NUMBER])
+            .with_masses_by_type(vec![ARGON_MASS_AMU])
+            .with_pair_style("lj/cut 8.5".to_string())
+            .with_pair_coeffs(vec![format!(
+                "1 1 {} {}",
+                ARGON_EPSILON_EV, ARGON_SIGMA_ANGSTROM
+            )])
+            .with_thermostat(
+                ThermostatConfig::default()
+                    .with_gamma(0.0)
+                    .with_temperature(0.0)
+                    .with_boltzmann(1.0),
+            ),
+    )
+    .expect("single atom");
+    engine
+        .set_positions(Array1::from_vec(vec![1.0, 2.0, 3.0]).view())
+        .expect("positions");
+    let velocity = Array1::from_vec(vec![0.2, -0.1, 0.05]);
+    engine.set_velocities(velocity.view()).expect("velocities");
+    let report = engine.step(0.001).expect("step");
+    let speed_sq = 0.2 * 0.2 + 0.1 * 0.1 + 0.05 * 0.05;
+    let expected = 0.5 * ARGON_MASS_AMU * speed_sq * MASS_VELOCITY_TO_EV;
+    let scale = 1.0 + expected.abs();
+    assert!(report.kinetic_energy > 0.0, "single-atom KE was zero");
+    assert!(
+        (report.kinetic_energy - expected).abs() <= 64.0 * f64::EPSILON * scale,
+        "kinetic {} expected {}",
+        report.kinetic_energy,
+        expected
+    );
+}
+
+#[test]
+fn coincident_atoms_return_non_finite_error() {
+    let mut engine = LammpcEngine::new(
+        LammpcConfig::default()
+            .with_atomic_numbers(vec![ARGON_ATOMIC_NUMBER, ARGON_ATOMIC_NUMBER])
+            .with_type_to_atomic_number(vec![ARGON_ATOMIC_NUMBER])
+            .with_masses_by_type(vec![ARGON_MASS_AMU])
+            .with_pair_style("lj/cut 8.5".to_string())
+            .with_pair_coeffs(vec![format!(
+                "1 1 {} {}",
+                ARGON_EPSILON_EV, ARGON_SIGMA_ANGSTROM
+            )])
+            .with_thermostat(
+                ThermostatConfig::default()
+                    .with_gamma(0.0)
+                    .with_temperature(0.0)
+                    .with_boltzmann(1.0),
+            ),
+    )
+    .expect("engine");
+    engine
+        .set_positions(Array1::zeros(6).view())
+        .expect("coincident positions");
+    let err = engine.energy_and_forces().expect_err("non-finite pair");
+    assert!(
+        matches!(err, FluxError::NonFinite(_)),
+        "expected NonFinite, got {err:?}"
+    );
 }

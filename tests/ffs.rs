@@ -1000,6 +1000,20 @@ fn lammpc_engine_supports_ffs_smoke_run_on_lj_dimer() {
     )
     .expect("lammpc engine");
 
+    let crossing = Array1::from_vec(vec![30.09, 0.0, 0.0, 15.0, 15.0, 15.0]);
+    engine
+        .set_positions(crossing.view())
+        .expect("crossing positions");
+    engine
+        .set_velocities(Array1::from_vec(vec![100.0, 0.0, 0.0, 0.0, 0.0, 0.0]).view())
+        .expect("crossing velocity");
+    engine.step(0.001).expect("boundary crossing");
+    assert!(
+        (engine.positions()[0] - 30.19).abs() <= 4096.0 * f64::EPSILON * 30.19,
+        "FFS engine folded the unwrapped coordinate to {}",
+        engine.positions()[0]
+    );
+
     let start = Array1::from_vec(vec![0.0, 0.0, 0.0, 3.2, 0.0, 0.0]);
     engine.set_positions(start.view()).expect("set positions");
     engine.shoot_velocities(20261118).expect("shoot");

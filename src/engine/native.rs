@@ -63,9 +63,9 @@ use rgmin::vecops::dot;
 
 use crate::engine::{
     DynamicsEngine, ForceSurface, HyperplaneConstraint, StepReport, SurfaceVelocityPolicy,
-    ThermostatConfig, inv_mass_metric_norm, rattle_velocities_in_place, reflect_velocity_in_place,
-    sample_maxwell_boltzmann_with_rng, shake_positions_in_place, validate_finite_slice,
-    validate_masses, validate_unit_normal,
+    ThermostatConfig, constraint_lagrange_multiplier, rattle_velocities_in_place,
+    reflect_velocity_in_place, sample_maxwell_boltzmann_with_rng, shake_positions_in_place,
+    validate_finite_slice, validate_masses, validate_unit_normal,
 };
 use crate::error::FluxError;
 
@@ -200,19 +200,6 @@ impl<S: ForceSurface> NativeEngine<S> {
     pub fn reseed(&mut self, seed: u64) -> Result<(), FluxError> {
         self.reseed_rng(seed);
         Ok(())
-    }
-
-    fn constraint_lagrange_multiplier(
-        forces: ArrayView1<'_, f64>,
-        masses: ArrayView1<'_, f64>,
-        plane: &HyperplaneConstraint,
-    ) -> f64 {
-        let z = inv_mass_metric_norm(plane.normal.view(), masses);
-        let mut normal_accel = 0.0_f64;
-        for i in 0..forces.len() {
-            normal_accel += plane.normal[i] * forces[i] / masses[i];
-        }
-        -normal_accel / z
     }
 
     fn project_state_onto_constraint(&mut self) -> Result<(), FluxError> {
@@ -434,7 +421,7 @@ impl<S: ForceSurface> DynamicsEngine for NativeEngine<S> {
         }
 
         let constraint_force = if let Some(plane) = &self.constraint {
-            let lambda = Self::constraint_lagrange_multiplier(f1.view(), self.masses.view(), plane);
+            let lambda = constraint_lagrange_multiplier(f1.view(), self.masses.view(), plane);
             rattle_velocities_in_place(&mut self.velocities, self.masses.view(), plane);
             Some(lambda)
         } else {

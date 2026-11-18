@@ -576,6 +576,24 @@ pub(crate) fn inv_mass_metric_norm(
     z
 }
 
+/// Holonomic multiplier `lambda = -(n^T M^{-1} F) / (n^T M^{-1} n)`.
+///
+/// `F` is the physical force. The canonical mean of `lambda` is `dF/dc`
+/// (Sprik and Ciccotti 1998). A global rescaling of `masses` cancels, so an
+/// engine may pass either bare masses or the metal-unit dynamical masses.
+pub(crate) fn constraint_lagrange_multiplier(
+    forces: ArrayView1<'_, f64>,
+    masses: ArrayView1<'_, f64>,
+    plane: &HyperplaneConstraint,
+) -> f64 {
+    let z = inv_mass_metric_norm(plane.normal.view(), masses);
+    let mut normal_accel = 0.0_f64;
+    for i in 0..forces.len() {
+        normal_accel += plane.normal[i] * forces[i] / masses[i];
+    }
+    -normal_accel / z
+}
+
 /// Project positions onto a hyperplane and reject numerically unresolved residuals.
 pub(crate) fn shake_positions_in_place(
     positions: &mut Array1<f64>,
