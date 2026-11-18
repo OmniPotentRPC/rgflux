@@ -113,13 +113,29 @@ jobs:
           condarc: |
             channels:
               - conda-forge
+      - name: Fetch lammpc (pinned rev)
+        run: |
+          set -euo pipefail
+          git clone https://github.com/OmniPotentRPC/lammpc "${RUNNER_TEMP}/lammpc"
+          git -C "${RUNNER_TEMP}/lammpc" checkout b9e6a1e984782aa674c94cccde46d1914bb4cd86
+      - name: LAMMPS release tag
+        id: lammps
+        working-directory: ${{ runner.temp }}/lammpc
+        run: |
+          set -euo pipefail
+          tag="$(sed -n 's/^LAMMPS_TAG=.*:-\([^}]*\)}.*/\1/p' scripts/build_lammps.sh)"
+          test -n "$tag"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+      - name: Cache LAMMPS build
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/lammpc/.lammps-install
+          key: lammps-${{ steps.lammps.outputs.tag }}-${{ runner.os }}-b9e6a1e984782aa674c94cccde46d1914bb4cd86
       - name: Build and install lammpc (pinned rev)
         shell: bash -l {0}
         run: |
           set -euo pipefail
-          git clone https://github.com/OmniPotentRPC/lammpc "${RUNNER_TEMP}/lammpc"
           cd "${RUNNER_TEMP}/lammpc"
-          git checkout b9e6a1e984782aa674c94cccde46d1914bb4cd86
           bash scripts/build_lammps.sh
           meson setup build --prefix="${RUNNER_TEMP}/lammpc-install" -Dwith_tests=false -Dwith_lammps=true -Dlammps_root="$PWD/.lammps-install"
           meson compile -C build
