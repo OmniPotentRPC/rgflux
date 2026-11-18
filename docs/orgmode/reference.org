@@ -12,5 +12,5 @@
 | =hyperplane= | Constrained hyperplane sampling and zero-variance control variates | Mean constraint force implemented; torque and control variates move from =rgsaddle= |
 | =pafi= | Projected Average Force Integration along reaction paths | Implementation moves from =rgsaddle= |
 | =ohtst= | OH-TST with a fixed hyperplane normal | Implemented for a fixed normal; normal optimization moves from =rgsaddle= |
-| =ffs= | Forward Flux Sampling across ordered interfaces | Scaffold config and types |
+| =ffs= | Forward Flux Sampling across ordered interfaces | Implemented: flux collection, staged trials, and uncertainty propagation. Exit restores positions, velocities, the periodic cell, the thermostat, and the constraint; the stochastic stream is left where the run put it |
 | =network= | Symmetry-resolved rate networks and kinetic Monte Carlo rate tables | Implementation moves from =rgsaddle= |
