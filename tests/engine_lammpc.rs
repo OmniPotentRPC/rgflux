@@ -457,8 +457,32 @@ fn command_injection_text_is_rejected_with_the_field_name() {
             "LammpcConfig::pair_style",
         ),
         (
+            LammpcConfig::default().with_pair_coeffs(vec!["1 1 0.010323 3.405\0 x".to_string()]),
+            "LammpcConfig::pair_coeffs",
+        ),
+        (
+            LammpcConfig::default().with_pair_coeffs(vec!["1 1 0.010323 3.405\rclear".to_string()]),
+            "LammpcConfig::pair_coeffs",
+        ),
+        (
+            LammpcConfig::default().with_pair_coeffs(vec!["1 1 0.010323 3.405;clear".to_string()]),
+            "LammpcConfig::pair_coeffs",
+        ),
+        (
             LammpcConfig::default().with_boundary("p p p\nclear".to_string()),
             "LammpcConfig::boundary",
+        ),
+        (
+            LammpcConfig::default().with_suffix("omp\nclear".to_string()),
+            "LammpcConfig::suffix",
+        ),
+        (
+            LammpcConfig::default().with_suffix("omp\rclear".to_string()),
+            "LammpcConfig::suffix",
+        ),
+        (
+            LammpcConfig::default().with_suffix("omp;clear".to_string()),
+            "LammpcConfig::suffix",
         ),
         (
             LammpcConfig::default().with_extra_setup(vec!["neighbor 2.0 bin\0clear".to_string()]),
@@ -475,6 +499,30 @@ fn command_injection_text_is_rejected_with_the_field_name() {
             error,
             FluxError::InvalidLammpcCommand {
                 field: expected_field
+            }
+        );
+    }
+}
+
+#[test]
+fn extra_setup_rejects_shell_and_include_directives() {
+    for command in [
+        "shell touch rgflux-sentinel",
+        "include setup.in",
+        "jump setup.in",
+        "python test input 1 return v_val format i",
+    ] {
+        let error = match LammpcEngine::new(
+            LammpcConfig::default().with_extra_setup(vec![command.to_string()]),
+        ) {
+            Ok(_) => panic!("forbidden directive should fail"),
+            Err(error) => error,
+        };
+        assert_eq!(
+            error,
+            FluxError::ForbiddenLammpcDirective {
+                field: "LammpcConfig::extra_setup",
+                directive: command.split_whitespace().next().expect("directive"),
             }
         );
     }

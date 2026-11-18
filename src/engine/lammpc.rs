@@ -204,11 +204,14 @@ pub struct LammpcConfig {
     ///
     /// Default: `"lj/cut 8.5"`.
     pub pair_style: String,
-    /// `pair_coeff` lines, one entry per command.
+    /// `pair_coeff` lines, one entry per command. Non-ASCII text, NULs,
+    /// newlines, carriage returns, and command separators are rejected.
     ///
     /// Default: `vec!["1 1 0.010323 3.405"]`.
     pub pair_coeffs: Vec<String>,
-    /// Optional single-command setup lines without embedded command separators.
+    /// Optional setup commands without embedded command separators.
+    ///
+    /// `shell`, `include`, `jump`, and `python` directives are rejected.
     ///
     /// Default: empty `Vec`.
     pub extra_setup: Vec<String>,
@@ -217,7 +220,8 @@ pub struct LammpcConfig {
     ///
     /// Default: `"p p p"`.
     pub boundary: String,
-    /// Optional LAMMPS suffix (`omp`, `gpu`, `kk`).
+    /// Optional LAMMPS suffix (`omp`, `gpu`, `kk`). Non-ASCII text, NULs,
+    /// newlines, carriage returns, and command separators are rejected.
     ///
     /// Default: empty `String`.
     pub suffix: String,
@@ -279,6 +283,7 @@ with_setters!(LammpcConfig {
 /// `DynamicsEngine` implemented over `lammpc_session_*`.
 pub struct LammpcEngine {
     session: NonNull<LammpcSession>,
+    config_bytes: Vec<u8>,
     positions: Array1<f64>,
     velocities: Array1<f64>,
     masses: Array1<f64>,
@@ -315,9 +320,14 @@ impl LammpcEngine {
             ));
         }
         validate_lammps_command_text(&config.pair_style, "LammpcConfig::pair_style")?;
+        for coeff in &config.pair_coeffs {
+            validate_lammps_command_text(coeff, "LammpcConfig::pair_coeffs")?;
+        }
         validate_lammps_command_text(&config.boundary, "LammpcConfig::boundary")?;
+        validate_lammps_command_text(&config.suffix, "LammpcConfig::suffix")?;
         for command in &config.extra_setup {
             validate_lammps_command_text(command, "LammpcConfig::extra_setup")?;
+            validate_extra_setup_directive(command)?;
         }
         let _ = validate_lammpc_thermostat(&config.thermostat)?;
 
@@ -358,6 +368,7 @@ impl LammpcEngine {
 
         let mut engine = Self {
             session,
+            config_bytes: cfg_bytes,
             positions: Array1::zeros(dof),
             velocities: Array1::zeros(dof),
             masses,
@@ -373,6 +384,24 @@ impl LammpcEngine {
         };
         engine.project_state_onto_constraint()?;
         Ok(engine)
+    }
+
+    fn recreate_session_after_error(&mut self) -> Result<(), FluxError> {
+        // SAFETY: We pass a stable encoded config buffer and validate non-null output.
+        let raw = unsafe {
+            lammpc_session_create_from_config(
+                self.config_bytes.as_ptr().cast(),
+                self.config_bytes.len(),
+            )
+        };
+        let fresh = NonNull::new(raw).ok_or_else(|| FluxError::Lammpc(last_error_message()))?;
+        // SAFETY: `self.session` was created by lammpc and is owned by this engine.
+        unsafe { lammpc_session_destroy(self.session.as_ptr()) };
+        self.session = fresh;
+        self.md_initialized = false;
+        self.md_timestep_ps = None;
+        self.nve_instance_ready = false;
+        Ok(())
     }
 
     fn project_state_onto_constraint(&mut self) -> Result<(), FluxError> {
@@ -896,6 +925,13 @@ impl DynamicsEngine for LammpcEngine {
             self.md_initialized = false;
             self.md_timestep_ps = None;
             self.nve_instance_ready = false;
+            if let Err(FluxError::Lammpc(original)) = &result {
+                if let Err(recovery) = self.recreate_session_after_error() {
+                    return Err(FluxError::Lammpc(format!(
+                        "{original}; session recovery failed: {recovery}"
+                    )));
+                }
+            }
         }
         result
     }
@@ -1052,6 +1088,30 @@ fn validate_lammps_command_text(value: &str, field: &'static str) -> Result<(), 
             .any(|character| matches!(character, '\0' | '\n' | '\r' | ';'))
     {
         return Err(FluxError::InvalidLammpcCommand { field });
+    }
+    Ok(())
+}
+
+fn validate_extra_setup_directive(command: &str) -> Result<(), FluxError> {
+    let Some(first_token) = command.split_whitespace().next() else {
+        return Ok(());
+    };
+    let directive = if first_token.eq_ignore_ascii_case("shell") {
+        Some("shell")
+    } else if first_token.eq_ignore_ascii_case("include") {
+        Some("include")
+    } else if first_token.eq_ignore_ascii_case("jump") {
+        Some("jump")
+    } else if first_token.eq_ignore_ascii_case("python") {
+        Some("python")
+    } else {
+        None
+    };
+    if let Some(directive) = directive {
+        return Err(FluxError::ForbiddenLammpcDirective {
+            field: "LammpcConfig::extra_setup",
+            directive,
+        });
     }
     Ok(())
 }
@@ -1225,6 +1285,33 @@ mod tests {
         assert_eq!(engine.velocities, velocities);
         assert!(!engine.md_initialized);
         assert_eq!(engine.md_timestep_ps, None);
+
+        engine.positions = Array1::from_vec(vec![0.0, 0.0, 0.0, 4.2, 0.0, 0.0]);
+        let report = engine
+            .step(0.001)
+            .expect("session recovery should reinitialize");
+        assert!(report.potential_energy.is_finite());
+        assert!(report.kinetic_energy.is_finite());
+        assert!(report.constraint_force.is_some());
+    }
+
+    #[test]
+    fn failed_constrained_step_recreates_the_lammpc_session() {
+        let plane = HyperplaneConstraint::from_direction(
+            Array1::from_vec(vec![1.0, 0.0, 0.0, 0.0, 0.0, 0.0]).view(),
+            0.0,
+        )
+        .expect("plane");
+        let mut engine =
+            LammpcEngine::new(LammpcConfig::default().with_constraint(plane)).expect("engine");
+        let before = engine.session.as_ptr();
+        engine.md_initialized = true;
+        engine.md_timestep_ps = Some(0.001);
+
+        let _ = engine.step(0.001).expect_err("session was not initialized");
+
+        let after = engine.session.as_ptr();
+        assert_ne!(before, after);
     }
 
     #[test]

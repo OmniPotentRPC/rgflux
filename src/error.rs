@@ -112,6 +112,15 @@ pub enum FluxError {
         field: &'static str,
     },
 
+    /// A lammpc setup line starts with a forbidden LAMMPS directive.
+    #[error("forbidden LAMMPS directive `{directive}` in {field}")]
+    ForbiddenLammpcDirective {
+        /// Configuration field containing the directive.
+        field: &'static str,
+        /// First command token rejected by policy.
+        directive: &'static str,
+    },
+
     /// A public entry point that is not yet implemented was called.
     #[error("not yet implemented: {0}")]
     Unimplemented(&'static str),
