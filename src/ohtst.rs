@@ -511,8 +511,8 @@ mod tests {
     use ndarray::{Array1, ArrayView1};
 
     use super::{
-        OhtstConfig, dividing_surface, flux_mass, optimize_hyperplane, probe_sampling,
-        rate_standard_error, validate_config,
+        OhtstConfig, directional_curvature, dividing_surface, flux_mass, force_is_stationary,
+        optimize_hyperplane, probe_sampling, rate_standard_error, slope_vanishes, validate_config,
     };
     use crate::engine::native::{NativeConfig, NativeEngine};
     use crate::engine::{DynamicsEngine, ForceSurface, HyperplaneConstraint, ThermostatConfig};
@@ -584,13 +584,7 @@ mod tests {
         let base = OhtstConfig::default();
         assert!(validate_config(&base).is_ok());
         assert!(
-            validate_config(
-                &base
-                    .clone()
-                    .with_max_rotation(0.0)
-                    .with_min_sample_steps(2)
-            )
-            .is_ok()
+            validate_config(&base.clone().with_max_rotation(0.0).with_min_sample_steps(2)).is_ok()
         );
         assert_eq!(
             config_error(&base.clone().with_max_outer_steps(0)),
@@ -630,6 +624,20 @@ mod tests {
         let expected = 1.0 / (0.36 / 2.0 + 0.64 / 4.0);
         let actual = flux_mass(normal.view(), masses.view())?;
         assert!((actual - expected).abs() <= 4.0 * f64::EPSILON * expected);
+        assert!(matches!(
+            flux_mass(
+                Array1::zeros(2).view(),
+                Array1::from_vec(vec![2.0, 4.0]).view()
+            ),
+            Err(FluxError::InvalidConfig(_))
+        ));
+        assert!(matches!(
+            flux_mass(
+                Array1::from_vec(vec![f64::INFINITY, 0.0]).view(),
+                Array1::from_vec(vec![2.0, 4.0]).view()
+            ),
+            Err(FluxError::InvalidConfig(_))
+        ));
         Ok(())
     }
 
@@ -674,12 +682,17 @@ mod tests {
     }
 
     fn check_off_stationary_seed_brackets_and_bisects_the_analytic_root() -> Result<(), FluxError> {
-        let mut engine = engine_at(-1.0, 1.0)?;
-        let minimum = Array1::from_vec(vec![-1.0]);
-        let seed = HyperplaneConstraint::from_direction(Array1::from_vec(vec![1.0]).view(), -0.4)?;
-        let dividing = dividing_surface(&mut engine, &minimum, 0.0, &seed, &short_config())?;
-        assert!(dividing.offset.abs() <= 2.0 * SERIES_FLAT_TOL);
-        assert!(dividing.point[0].abs() <= 2.0 * SERIES_FLAT_TOL);
+        for (minimum_position, seed_offset) in [(-1.0, -0.4), (1.0, 0.4)] {
+            let mut engine = engine_at(minimum_position, 1.0)?;
+            let minimum = Array1::from_vec(vec![minimum_position]);
+            let seed = HyperplaneConstraint::from_direction(
+                Array1::from_vec(vec![1.0]).view(),
+                seed_offset,
+            )?;
+            let dividing = dividing_surface(&mut engine, &minimum, 0.0, &seed, &short_config())?;
+            assert!(dividing.offset.abs() <= 2.0 * SERIES_FLAT_TOL);
+            assert!(dividing.point[0].abs() <= 2.0 * SERIES_FLAT_TOL);
+        }
         Ok(())
     }
 
@@ -693,6 +706,24 @@ mod tests {
             rates.push(estimate.rate);
         }
         assert!((rates[0] - rates[1]).abs() <= 64.0 * f64::EPSILON * rates[0]);
+
+        let mut engine = engine_at(-1.0, 1.0)?;
+        let minimum = Array1::from_vec(vec![-1.0]);
+        let normal = Array1::from_vec(vec![1.0]);
+        let curvature =
+            directional_curvature(&mut engine, minimum.view(), normal.view(), TEST_STEP)?;
+        let expected_curvature = 2.0 + TEST_STEP * TEST_STEP;
+        assert!((curvature - expected_curvature).abs() <= 16.0 * f64::EPSILON * expected_curvature);
+        assert!(force_is_stationary(Array1::zeros(2).view()));
+        assert!(force_is_stationary(
+            Array1::from_vec(vec![SERIES_FLAT_TOL]).view()
+        ));
+        assert!(!force_is_stationary(
+            Array1::from_vec(vec![0.5 * SERIES_FLAT_TOL, 2.0 * SERIES_FLAT_TOL]).view()
+        ));
+        assert!(slope_vanishes(0.0));
+        assert!(slope_vanishes(SERIES_FLAT_TOL));
+        assert!(!slope_vanishes(2.0 * SERIES_FLAT_TOL));
         Ok(())
     }
 

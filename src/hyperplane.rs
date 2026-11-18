@@ -395,7 +395,19 @@ mod restore_tests {
         let before_ok = state(&ok_engine);
         let sampled = sample_hyperplane(&mut ok_engine, &plane, &config).unwrap();
         assert!(sampled.mean_force.is_finite());
+        assert_eq!(sampled.configurations, ndarray::array![[1.2], [2.2]]);
+        assert_eq!(sampled.mean_projected_force, Array1::zeros(1));
+        assert!((sampled.mean_position[0] - 1.7).abs() <= f64::EPSILON);
+        assert!((sampled.position_covariance[[0, 0]] - 0.25).abs() <= f64::EPSILON);
         assert_eq!(state(&ok_engine), before_ok);
+
+        for invalid_time_step in [f64::NAN, f64::INFINITY] {
+            let invalid = config.clone().with_time_step(invalid_time_step);
+            assert!(matches!(
+                sample_hyperplane(&mut ok_engine, &plane, &invalid),
+                Err(FluxError::InvalidConfig(_))
+            ));
+        }
 
         let mut err_engine = ScriptedEngine::new(true, false);
         let before_err = state(&err_engine);
