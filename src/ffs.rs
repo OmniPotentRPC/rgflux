@@ -220,6 +220,19 @@ fn stage_probability(clusters: &[TrialCluster]) -> Result<(f64, f64), FluxError>
     Ok((p, se))
 }
 
+fn finalize_and_restore<E: DynamicsEngine + ?Sized>(
+    engine: &mut E,
+    initial: &PhasePoint,
+    result: Result<FfsEstimate, FluxError>,
+) -> Result<FfsEstimate, FluxError> {
+    let restore = set_point(engine, initial);
+    match (result, restore) {
+        (Ok(estimate), Ok(())) => Ok(estimate),
+        (Ok(_), Err(restore_err)) => Err(restore_err),
+        (Err(run_err), _) => Err(run_err),
+    }
+}
+
 /// Run Forward Flux Sampling on `engine` using order parameter `order_param`.
 pub fn forward_flux_rate<E, F>(
     engine: &mut E,
@@ -238,132 +251,175 @@ where
     let mut rng = StdRng::seed_from_u64(config.seed);
 
     let initial = capture_point(engine);
-    let start_lambda = order_param(engine.positions());
-    if !start_lambda.is_finite() {
-        return Err(FluxError::NonFinite("FFS order parameter at initial state"));
-    }
-    if start_lambda > lambda_a {
-        return Err(FluxError::InvalidConfig(
-            "FFS initial state must begin in basin A (lambda <= lambda_0)",
-        ));
-    }
-
-    let mut points: Vec<PhasePoint> = Vec::with_capacity(config.points_per_interface);
-    let mut intervals: Vec<f64> = Vec::with_capacity(config.points_per_interface);
-    let mut armed = true;
-    let mut burn_in = config.burn_in_steps;
-    let mut since_crossing = 0.0_f64;
-    let mut flux_steps = 0_usize;
-
-    while points.len() < config.points_per_interface {
-        if flux_steps >= config.max_flux_steps {
+    let run = (|| -> Result<FfsEstimate, FluxError> {
+        let start_lambda = order_param(engine.positions());
+        if !start_lambda.is_finite() {
+            return Err(FluxError::NonFinite("FFS order parameter at initial state"));
+        }
+        if start_lambda > lambda_a {
             return Err(FluxError::InvalidConfig(
-                "FFS flux budget exceeded before collecting interface points",
+                "FFS initial state must begin in basin A (lambda <= lambda_0)",
             ));
         }
-        let _ = engine.step(dt)?;
-        flux_steps += 1;
-        let counting = burn_in == 0;
-        if counting {
-            since_crossing += dt;
-        } else {
-            burn_in -= 1;
-        }
-        let lambda = order_param(engine.positions());
-        if !lambda.is_finite() {
-            return Err(FluxError::NonFinite("FFS order parameter during flux run"));
-        }
-        if lambda <= lambda_a {
-            armed = true;
-        } else if armed && lambda >= lambda_a {
-            armed = false;
+
+        // Drive flux sampling from the config seed as well as trial launches.
+        engine.reseed(rng.random())?;
+
+        let mut points: Vec<PhasePoint> = Vec::with_capacity(config.points_per_interface);
+        let mut intervals: Vec<f64> = Vec::with_capacity(config.points_per_interface);
+        let mut armed = true;
+        let mut burn_in = config.burn_in_steps;
+        let mut since_crossing = 0.0_f64;
+        let mut flux_steps = 0_usize;
+
+        while points.len() < config.points_per_interface {
+            if flux_steps >= config.max_flux_steps {
+                return Err(FluxError::InvalidConfig(
+                    "FFS flux budget exceeded before collecting interface points",
+                ));
+            }
+            let _ = engine.step(dt)?;
+            flux_steps += 1;
+            let counting = burn_in == 0;
             if counting {
-                intervals.push(since_crossing);
-                since_crossing = 0.0;
-                points.push(capture_point(engine));
+                since_crossing += dt;
+            } else {
+                burn_in -= 1;
+            }
+            let lambda = order_param(engine.positions());
+            if !lambda.is_finite() {
+                return Err(FluxError::NonFinite("FFS order parameter during flux run"));
+            }
+            if lambda <= lambda_a {
+                armed = true;
+            } else if armed && lambda >= lambda_a {
+                armed = false;
+                if counting {
+                    intervals.push(since_crossing);
+                    since_crossing = 0.0;
+                    points.push(capture_point(engine));
+                }
+            }
+            if lambda >= product_level {
+                set_point(engine, &initial)?;
+                armed = true;
             }
         }
-        if lambda >= product_level {
-            set_point(engine, &initial)?;
-            armed = true;
-        }
-    }
-    let (initial_flux, initial_flux_se) = flux_from_intervals(&intervals)?;
+        let (initial_flux, initial_flux_se) = flux_from_intervals(&intervals)?;
 
-    let mut stage_probabilities = Vec::with_capacity(interfaces.len() - 1);
-    let mut stage_ses = Vec::with_capacity(interfaces.len() - 1);
-    let mut stage_points = points;
+        let mut stage_probabilities = Vec::with_capacity(interfaces.len() - 1);
+        let mut stage_ses = Vec::with_capacity(interfaces.len() - 1);
+        let mut stage_points = points;
 
-    for stage in 0..(interfaces.len() - 1) {
-        if stage_points.len() < 2 {
-            return Err(FluxError::InvalidConfig(
-                "FFS stage has fewer than two starting points",
-            ));
-        }
-        let target = interfaces[stage + 1];
-        let is_last = stage + 1 == interfaces.len() - 1;
-        let mut clusters = vec![TrialCluster::default(); stage_points.len()];
-        let mut reached = Vec::new();
+        for stage in 0..(interfaces.len() - 1) {
+            if stage_points.len() < 2 {
+                return Err(FluxError::InvalidConfig(
+                    "FFS stage has fewer than two starting points",
+                ));
+            }
+            let target = interfaces[stage + 1];
+            let is_last = stage + 1 == interfaces.len() - 1;
+            let mut clusters = vec![TrialCluster::default(); stage_points.len()];
+            let mut reached = Vec::new();
 
-        for _ in 0..config.trials_per_interface {
-            let index = rng.random_range(0..stage_points.len());
-            set_point(engine, &stage_points[index])?;
-            engine.reseed(rng.random())?;
+            for _ in 0..config.trials_per_interface {
+                let index = rng.random_range(0..stage_points.len());
+                set_point(engine, &stage_points[index])?;
+                engine.reseed(rng.random())?;
 
-            let mut trial_steps = 0_usize;
-            let mut success = false;
-            loop {
-                if trial_steps >= config.max_trial_steps {
-                    return Err(FluxError::InvalidConfig(
-                        "FFS trial budget exceeded before commitment",
-                    ));
-                }
-                let _ = engine.step(dt)?;
-                trial_steps += 1;
-                let lambda = order_param(engine.positions());
-                if !lambda.is_finite() {
-                    return Err(FluxError::NonFinite("FFS order parameter during trial"));
-                }
-                if lambda >= target {
-                    success = true;
-                    if !is_last {
-                        reached.push(capture_point(engine));
+                let mut trial_steps = 0_usize;
+                let mut success = false;
+                loop {
+                    if trial_steps >= config.max_trial_steps {
+                        return Err(FluxError::InvalidConfig(
+                            "FFS trial budget exceeded before commitment",
+                        ));
                     }
-                    break;
+                    let _ = engine.step(dt)?;
+                    trial_steps += 1;
+                    let lambda = order_param(engine.positions());
+                    if !lambda.is_finite() {
+                        return Err(FluxError::NonFinite("FFS order parameter during trial"));
+                    }
+                    if lambda >= target {
+                        success = true;
+                        if !is_last {
+                            reached.push(capture_point(engine));
+                        }
+                        break;
+                    }
+                    if lambda <= lambda_a {
+                        break;
+                    }
                 }
-                if lambda <= lambda_a {
-                    break;
+                clusters[index].trials += 1;
+                if success {
+                    clusters[index].successes += 1;
                 }
             }
-            clusters[index].trials += 1;
-            if success {
-                clusters[index].successes += 1;
-            }
+
+            let (probability, se) = stage_probability(&clusters)?;
+            stage_probabilities.push(probability);
+            stage_ses.push(se);
+            stage_points = reached;
         }
 
-        let (probability, se) = stage_probability(&clusters)?;
-        stage_probabilities.push(probability);
-        stage_ses.push(se);
-        stage_points = reached;
+        let mut rate = initial_flux;
+        let mut relative_se_sq = (initial_flux_se / initial_flux).powi(2);
+        for i in 0..stage_probabilities.len() {
+            let p = stage_probabilities[i];
+            let se = stage_ses[i];
+            rate *= p;
+            relative_se_sq += (se / p).powi(2);
+        }
+        let standard_error = rate * relative_se_sq.sqrt();
+        if !rate.is_finite() || !standard_error.is_finite() {
+            return Err(FluxError::NonFinite("FFS rate estimate"));
+        }
+
+        Ok(FfsEstimate {
+            initial_flux,
+            interface_probabilities: stage_probabilities,
+            rate,
+            standard_error,
+        })
+    })();
+
+    finalize_and_restore(engine, &initial, run)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{TrialCluster, flux_from_intervals, stage_probability};
+
+    #[test]
+    fn flux_from_intervals_matches_hand_calculation() {
+        let intervals = [2.0, 3.0, 5.0];
+        let (flux, se) = flux_from_intervals(&intervals).expect("valid intervals");
+        let expected_flux = 3.0 / 10.0;
+        let mean = 10.0 / 3.0;
+        let variance =
+            ((2.0_f64 - mean).powi(2) + (3.0_f64 - mean).powi(2) + (5.0_f64 - mean).powi(2))
+                / 2.0_f64;
+        let expected_se = expected_flux * variance.sqrt() / (mean * (3.0_f64).sqrt());
+        assert!((flux - expected_flux).abs() <= f64::EPSILON);
+        assert!((se - expected_se).abs() <= f64::EPSILON);
     }
 
-    let mut rate = initial_flux;
-    let mut relative_se_sq = (initial_flux_se / initial_flux).powi(2);
-    for i in 0..stage_probabilities.len() {
-        let p = stage_probabilities[i];
-        let se = stage_ses[i];
-        rate *= p;
-        relative_se_sq += (se / p).powi(2);
+    #[test]
+    fn stage_probability_matches_hand_calculation() {
+        let clusters = [
+            TrialCluster {
+                trials: 2,
+                successes: 2,
+            },
+            TrialCluster {
+                trials: 2,
+                successes: 0,
+            },
+        ];
+        let (p, se) = stage_probability(&clusters).expect("valid clusters");
+        assert!((p - 0.5).abs() <= f64::EPSILON);
+        assert!((se - 0.5).abs() <= f64::EPSILON);
     }
-    let standard_error = rate * relative_se_sq.sqrt();
-    if !rate.is_finite() || !standard_error.is_finite() {
-        return Err(FluxError::NonFinite("FFS rate estimate"));
-    }
-
-    Ok(FfsEstimate {
-        initial_flux,
-        interface_probabilities: stage_probabilities,
-        rate,
-        standard_error,
-    })
 }
