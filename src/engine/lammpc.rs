@@ -1741,6 +1741,12 @@ mod tests {
         .expect("plane");
         let mut engine =
             LammpcEngine::new(LammpcConfig::default().with_constraint(plane)).expect("engine");
+        // set_positions writes only the Rust-side coordinates. The flag
+        // below skips session initialization, so the session never receives
+        // this separation. The closing assertion compares that Rust state.
+        engine
+            .set_positions(Array1::from_vec(vec![0.0, 0.0, 0.0, 4.2, 0.0, 0.0]).view())
+            .expect("rust-side coordinates");
         let positions = engine.positions.clone();
         engine.config_bytes = vec![0_u8; CAPNP_WORD_BYTES];
         engine.md_initialized = true;
