@@ -747,6 +747,8 @@ def main():
             f'converged in {vacancy_path["neb_iterations"]} iterations at maximum '
             f'force {vacancy_path["neb_max_force"]:.6g}.',
             "",
+            "This is a periodic 3 by 4 by 4 FCC vacancy hop using the same shifted platinum-parameter Morse potential on both sides. rgpot supplies the native link-cell/minimum-image neighbour stack; LAMMPS uses `morse/omp`. The explicit grid is 17 and 33 planes at kBT=0.025, 0.05, and 0.075 eV, with 12 seeds at one and four threads. The native potential time covers the complete rgpot surface call; overhead is the remaining rgflux wall time.",
+            "",
             "| planes | T (eV) | threads | hits rgflux/reference | max |dF| | combined profile SE | A/A rgflux/reference | barrier rgflux (eV) | barrier reference (eV) | barrier SE rgflux/reference | wall rgflux/reference (s) | calls/plane rgflux/reference | potential/overhead per plane (s) | Fisher p |",
             "|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
         ]
