@@ -72,7 +72,7 @@ class CodeSpanTests(unittest.TestCase):
         line = (
             (ROOT / "docs" / "orgmode" / "contributing" / "index.org")
             .read_text(encoding="utf-8")
-            .splitlines()[36]
+            .splitlines()[47]
         )
         rendered = generate_llms.clean_inline(line)
         self.assertIn('`version = "0.5.0"`', rendered)

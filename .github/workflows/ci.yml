@@ -196,21 +196,21 @@ jobs:
       - name: Clippy (all features)
         env:
           LAMMPC_LIB_DIR: ${{ runner.temp }}/lammpc-install/lib/x86_64-linux-gnu
-          LD_LIBRARY_PATH: ${{ runner.temp }}/lammpc-install/lib/x86_64-linux-gnu:${{ runner.temp }}/lammpc/.lammps-install/lib:${{ env.LD_LIBRARY_PATH }}
+          LD_LIBRARY_PATH: ${{ runner.temp }}/lammpc-install/lib/x86_64-linux-gnu:${{ runner.temp }}/lammpc/.lammps-install/lib
         run: cargo clippy --locked --all-targets --all-features -- -D warnings
       - name: Test all features with lammpc
         env:
           LAMMPC_LIB_DIR: ${{ runner.temp }}/lammpc-install/lib/x86_64-linux-gnu
-          LD_LIBRARY_PATH: ${{ runner.temp }}/lammpc-install/lib/x86_64-linux-gnu:${{ runner.temp }}/lammpc/.lammps-install/lib:${{ env.LD_LIBRARY_PATH }}
+          LD_LIBRARY_PATH: ${{ runner.temp }}/lammpc-install/lib/x86_64-linux-gnu:${{ runner.temp }}/lammpc/.lammps-install/lib
         run: cargo test --locked --all-features --verbose
       - name: Doc tests (all features)
         env:
           LAMMPC_LIB_DIR: ${{ runner.temp }}/lammpc-install/lib/x86_64-linux-gnu
-          LD_LIBRARY_PATH: ${{ runner.temp }}/lammpc-install/lib/x86_64-linux-gnu:${{ runner.temp }}/lammpc/.lammps-install/lib:${{ env.LD_LIBRARY_PATH }}
+          LD_LIBRARY_PATH: ${{ runner.temp }}/lammpc-install/lib/x86_64-linux-gnu:${{ runner.temp }}/lammpc/.lammps-install/lib
         run: cargo test --locked --doc --all-features --verbose
       - name: Rustdoc (all features)
         env:
           LAMMPC_LIB_DIR: ${{ runner.temp }}/lammpc-install/lib/x86_64-linux-gnu
-          LD_LIBRARY_PATH: ${{ runner.temp }}/lammpc-install/lib/x86_64-linux-gnu:${{ runner.temp }}/lammpc/.lammps-install/lib:${{ env.LD_LIBRARY_PATH }}
+          LD_LIBRARY_PATH: ${{ runner.temp }}/lammpc-install/lib/x86_64-linux-gnu:${{ runner.temp }}/lammpc/.lammps-install/lib
           RUSTDOCFLAGS: -D warnings
         run: cargo doc --locked --no-deps --all-features --document-private-items

@@ -1,0 +1,3 @@
+Lammpc configuration updates and failed steps now preserve the last accepted
+Rust-side state, invalidate stale constrained-MD sessions, compare timesteps
+relatively, and reject text that could inject additional LAMMPS commands.

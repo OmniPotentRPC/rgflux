@@ -6,11 +6,18 @@
 - Current stable Rust with =clippy= and =rustfmt=.
 - =jq= and =rustup= for minimum supported Rust version (=rust-version = "1.88"=) checks.
 - Python 3.12+ and Emacs 29+ (=emacs-nox=) when building the Sphinx documentation from =docs/orgmode=.
+- An installed =liblammpc= and its LAMMPS runtime when checking the =lammpc=
+  feature or =--all-features=.
 
 * Build and test
 
+The default, =rgpot=, and =rgpot-session= feature sets need no external MD
+library:
+
 #+begin_src sh
 cargo fmt --all -- --check
+cargo clippy --locked --all-targets -- -D warnings
+cargo test --locked
 cargo clippy --locked --all-targets --features rgpot,rgpot-session -- -D warnings
 cargo test --locked --features rgpot,rgpot-session
 cargo test --locked --doc --features rgpot,rgpot-session
@@ -23,9 +30,13 @@ sphinx-build -b linkcheck -n -W --keep-going docs/source target/docs-linkcheck
 sphinx-build -b html -n -W --keep-going docs/source docs/build
 #+end_src
 
-When =liblammpc= is installed, also run =--all-features= clippy, tests, and rustdoc:
+Install =liblammpc= before enabling =lammpc=. Expose it through pkg-config,
+=LAMMPC_DIR=, or =LAMMPC_LIB_DIR=, and include both =liblammpc= and LAMMPS on
+the runtime loader path. Then =--features lammpc= or =--all-features= works:
 
 #+begin_src sh
+export LAMMPC_LIB_DIR=/path/to/lammpc/lib
+export LD_LIBRARY_PATH="/path/to/lammpc/lib:/path/to/lammps/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 cargo clippy --locked --all-targets --all-features -- -D warnings
 cargo test --locked --all-features
 cargo test --locked --doc --all-features

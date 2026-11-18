@@ -104,6 +104,14 @@ pub enum FluxError {
     #[error("lammpc backend error: {0}")]
     Lammpc(String),
 
+    /// A lammpc configuration field could inject another command or hide text.
+    #[error("unsafe LAMMPS command text in {field}")]
+    InvalidLammpcCommand {
+        /// Configuration field containing a NUL, newline, carriage return,
+        /// semicolon, or non-ASCII text.
+        field: &'static str,
+    },
+
     /// A public entry point that is not yet implemented was called.
     #[error("not yet implemented: {0}")]
     Unimplemented(&'static str),

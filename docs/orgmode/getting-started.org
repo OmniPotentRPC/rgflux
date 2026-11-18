@@ -17,7 +17,7 @@ $ cargo add rgflux --features rgpot-session
 $ cargo add rgflux --features lammpc
 #+end_src
 
-The =lammpc= feature links =liblammpc= from =LAMMPC_LIB_DIR=, from =pkg-config= when available, or from =LAMMPC_DIR= (install prefix with =lib/= or =lib64/= and =include/=) when =pkg-config= is not configured. Its build also needs the =capnp= command-line tool on =PATH=; the =rgpot= and =rgpot-session= features do not.
+The =lammpc= feature links =liblammpc= from =LAMMPC_LIB_DIR=, from =pkg-config= when available, or from =LAMMPC_DIR= (install prefix with =lib/= or =lib64/= and =include/=) when =pkg-config= is not configured. Include both =liblammpc= and its LAMMPS runtime on the loader path. Its build also needs the =capnp= command-line tool on =PATH=. =--all-features= therefore requires those libraries; builds with no features, or with =rgpot= or =rgpot-session=, do not.
 
 * 1. Engine-free Bennett-Chandler recrossing
 

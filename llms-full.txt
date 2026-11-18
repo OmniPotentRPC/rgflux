@@ -64,7 +64,7 @@ $ cargo add rgflux --features rgpot-session
 $ cargo add rgflux --features lammpc
 ```
 
-The `lammpc` feature links `liblammpc` from `LAMMPC_LIB_DIR`, from `pkg-config` when available, or from `LAMMPC_DIR` (install prefix with `lib/` or `lib64/` and `include/`) when `pkg-config` is not configured. Its build also needs the `capnp` command-line tool on `PATH`; the `rgpot` and `rgpot-session` features do not.
+The `lammpc` feature links `liblammpc` from `LAMMPC_LIB_DIR`, from `pkg-config` when available, or from `LAMMPC_DIR` (install prefix with `lib/` or `lib64/` and `include/`) when `pkg-config` is not configured. Include both `liblammpc` and its LAMMPS runtime on the loader path. Its build also needs the `capnp` command-line tool on `PATH`. `--all-features` therefore requires those libraries; builds with no features, or with `rgpot` or `rgpot-session`, do not.
 
 ## 1. Engine-free Bennett-Chandler recrossing
 
@@ -991,10 +991,10 @@ Constructors and methods: `HyperplaneConstraint::new(normal, offset)`, `from_dir
 | `atomic_numbers` | `Vec<i32>` | `vec![18, 18]` | Non-empty atomic numbers in live atom order (\(N_{\mathrm{atoms}}\) entries; `dof = 3 * N_atoms`) |
 | `type_to_atomic_number` | `Vec<i32>` | `vec![18]` | Non-empty LAMMPS type map (\(\text{type } i+1 \mapsto Z\)) |
 | `masses_by_type` | `Vec<f64>` | `vec![39.948]` | Strictly positive per-type masses in amu (length must match `type_to_atomic_number`) |
-| `pair_style` | `String` | `"lj/cut 8.5"` | Non-empty LAMMPS `pair_style` specification |
+| `pair_style` | `String` | `"lj/cut 8.5"` | Non-empty LAMMPS `pair_style` specification. Non-ASCII text, NULs, newlines, carriage returns, and semicolons are rejected |
 | `pair_coeffs` | `Vec<String>` | `vec!["1 1 0.010323 3.405"]` | LAMMPS `pair_coeff` argument strings |
 | `extra_setup` | `Vec<String>` | `vec![]` | Optional additional LAMMPS setup lines applied after pair setup |
-| `boundary` | `String` | `"p p p"` | LAMMPS boundary specification string |
+| `boundary` | `String` | `"p p p"` | LAMMPS boundary specification. Non-ASCII text, NULs, newlines, carriage returns, and semicolons are rejected |
 | `suffix` | `String` | `""` | Optional LAMMPS accelerator suffix (`omp`, `gpu`, `kk`) |
 | `thermostat` | `ThermostatConfig` | `ThermostatConfig::default()` | White-noise Langevin thermostat in metal units (\(\gamma\) in \(\mathrm{ps}^{-1}\), \(k_{\mathrm{B}}T\) in eV); colored-noise models are unsupported and return `FluxError::InvalidConfig` |
 | `constraint` | `Option<HyperplaneConstraint>` | `None` | Optional holonomic hyperplane constraint |
@@ -1318,6 +1318,7 @@ field set is listed above.
 | `Surface` | `String` | Potential energy surface callback failure, converted `rgsaddle::SaddleError`, or an I/O failure reading or writing an OPES state |
 | `BackendUnavailable` | `&'static str` | Unlinked external MD session call on `RgpotSessionEngine` or unsupported unconstrained Langevin / constrained NVE mode in `LammpcEngine` |
 | `Lammpc` | `String` | Error returned by the `lammpc_session_*` C ABI or Cap'n Proto message decoding |
+| `InvalidLammpcCommand` | `field` | Lammpc command text contains a NUL, newline, carriage return, semicolon, or non-ASCII text |
 | `Unimplemented` | `&'static str` | Entry point that is not yet implemented (`build_rate_table`) |
 
 ## Binding surface
@@ -1385,7 +1386,7 @@ stale, and refuses a hand-written count outside the block.
 ### Complete qualified Rust inventory
 
 # BEGIN GENERATED PUBLIC API
-This inventory lists 851 qualified public item paths.
+This inventory lists 855 qualified public item paths.
 
 #### `DynamicsEngine`
 
@@ -1429,6 +1430,8 @@ This inventory lists 851 qualified public item paths.
 - `rgflux::FluxError::ConstraintViolation::tolerance`
 - `rgflux::FluxError::EmptyInput`
 - `rgflux::FluxError::InvalidConfig`
+- `rgflux::FluxError::InvalidLammpcCommand`
+- `rgflux::FluxError::InvalidLammpcCommand::field`
 - `rgflux::FluxError::Lammpc`
 - `rgflux::FluxError::NoPositiveFlux`
 - `rgflux::FluxError::NonFinite`
@@ -1762,6 +1765,8 @@ This inventory lists 851 qualified public item paths.
 - `rgflux::error::FluxError::ConstraintViolation::tolerance`
 - `rgflux::error::FluxError::EmptyInput`
 - `rgflux::error::FluxError::InvalidConfig`
+- `rgflux::error::FluxError::InvalidLammpcCommand`
+- `rgflux::error::FluxError::InvalidLammpcCommand::field`
 - `rgflux::error::FluxError::Lammpc`
 - `rgflux::error::FluxError::NoPositiveFlux`
 - `rgflux::error::FluxError::NonFinite`
@@ -2618,11 +2623,18 @@ The method references are stored in ~docs/source/references.bib~.
 - Current stable Rust with `clippy` and `rustfmt`.
 - `jq` and `rustup` for minimum supported Rust version (`rust-version = "1.88"`) checks.
 - Python 3.12+ and Emacs 29+ (`emacs-nox`) when building the Sphinx documentation from `docs/orgmode`.
+- An installed `liblammpc` and its LAMMPS runtime when checking the `lammpc`
+  feature or `--all-features`.
 
 ## Build and test
 
+The default, `rgpot`, and `rgpot-session` feature sets need no external MD
+library:
+
 ```sh
 cargo fmt --all -- --check
+cargo clippy --locked --all-targets -- -D warnings
+cargo test --locked
 cargo clippy --locked --all-targets --features rgpot,rgpot-session -- -D warnings
 cargo test --locked --features rgpot,rgpot-session
 cargo test --locked --doc --features rgpot,rgpot-session
@@ -2635,9 +2647,13 @@ sphinx-build -b linkcheck -n -W --keep-going docs/source target/docs-linkcheck
 sphinx-build -b html -n -W --keep-going docs/source docs/build
 ```
 
-When `liblammpc` is installed, also run `--all-features` clippy, tests, and rustdoc:
+Install `liblammpc` before enabling `lammpc`. Expose it through pkg-config,
+`LAMMPC_DIR`, or `LAMMPC_LIB_DIR`, and include both `liblammpc` and LAMMPS on
+the runtime loader path. Then `--features lammpc` or `--all-features` works:
 
 ```sh
+export LAMMPC_LIB_DIR=/path/to/lammpc/lib
+export LD_LIBRARY_PATH="/path/to/lammpc/lib:/path/to/lammps/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 cargo clippy --locked --all-targets --all-features -- -D warnings
 cargo test --locked --all-features
 cargo test --locked --doc --all-features

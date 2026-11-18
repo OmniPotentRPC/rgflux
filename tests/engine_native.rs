@@ -1,6 +1,7 @@
 //! Analytic validation suite for `rgflux::engine::native`.
 
 use ndarray::{Array1, ArrayView1};
+use rgflux::FluxError;
 use rgflux::engine::gle::ColoredNoise;
 use rgflux::engine::native::{ConstraintProjection, NativeConfig, NativeEngine};
 use rgflux::engine::{
@@ -173,6 +174,37 @@ fn double_well_2d_constraint_holds_machine_precision_zero_under_rattle_and_shake
             );
         }
     }
+}
+
+#[test]
+fn projection_overflow_reports_a_constraint_violation() {
+    let plane =
+        HyperplaneConstraint::from_direction(Array1::from_vec(vec![1.0, 1.0, 0.0]).view(), 0.0)
+            .expect("plane");
+    let mut engine = NativeEngine::new(
+        AnisotropicHarmonic {
+            stiffness: [1.0, 1.0, 1.0],
+        },
+        NativeConfig::default()
+            .with_masses(Array1::from_elem(3, 1.0))
+            .with_constraint(plane),
+    )
+    .expect("engine");
+    let positions = Array1::from_vec(vec![f64::MAX, f64::MAX, 0.0]);
+
+    let error = engine
+        .set_positions(positions.view())
+        .expect_err("non-finite projection residual");
+    assert!(
+        matches!(
+            error,
+            FluxError::ConstraintViolation {
+                residual,
+                tolerance,
+            } if !residual.is_finite() && tolerance == HYPERPLANE_PROJECTION_TOL
+        ),
+        "{error:?}"
+    );
 }
 
 #[test]

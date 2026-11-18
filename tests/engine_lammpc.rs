@@ -419,12 +419,65 @@ fn constraint_projection_overflow_is_reported() {
         .with_masses_by_type(vec![ARGON_MASS_AMU])
         .with_constraint(plane);
     let mut engine = LammpcEngine::new(cfg).expect("lammpc engine");
+    let original_positions = engine.positions().to_owned();
+    let original_velocities = engine.velocities().to_owned();
     let positions = Array1::from_vec(vec![f64::MAX, 0.0, 0.0, f64::MAX, 0.0, 0.0]);
 
     assert!(matches!(
         engine.set_positions(positions.view()),
         Err(FluxError::ConstraintViolation { .. })
     ));
+    assert_eq!(engine.positions(), original_positions.view());
+    assert_eq!(engine.velocities(), original_velocities.view());
+}
+
+#[test]
+fn rejected_constraint_update_preserves_the_previous_engine_state() {
+    let mut engine = LammpcEngine::new(LammpcConfig::default()).expect("lammpc engine");
+    let positions = Array1::from_vec(vec![f64::MAX, 0.0, 0.0, f64::MAX, 0.0, 0.0]);
+    engine
+        .set_positions(positions.view())
+        .expect("unconstrained positions");
+    let normal = Array1::from_vec(vec![1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
+    let plane = HyperplaneConstraint::from_direction(normal.view(), 0.0).expect("plane");
+
+    assert!(matches!(
+        engine.set_constraint(Some(plane)),
+        Err(FluxError::ConstraintViolation { .. })
+    ));
+    assert_eq!(engine.constraint(), None);
+    assert_eq!(engine.positions(), positions.view());
+}
+
+#[test]
+fn command_injection_text_is_rejected_with_the_field_name() {
+    let cases = [
+        (
+            LammpcConfig::default().with_pair_style("lj/cut 8.5; clear".to_string()),
+            "LammpcConfig::pair_style",
+        ),
+        (
+            LammpcConfig::default().with_boundary("p p p\nclear".to_string()),
+            "LammpcConfig::boundary",
+        ),
+        (
+            LammpcConfig::default().with_extra_setup(vec!["neighbor 2.0 bin\0clear".to_string()]),
+            "LammpcConfig::extra_setup",
+        ),
+    ];
+
+    for (config, expected_field) in cases {
+        let error = match LammpcEngine::new(config) {
+            Ok(_) => panic!("unsafe command text was accepted"),
+            Err(error) => error,
+        };
+        assert_eq!(
+            error,
+            FluxError::InvalidLammpcCommand {
+                field: expected_field
+            }
+        );
+    }
 }
 
 fn velocity_bits(engine: &LammpcEngine) -> Vec<u64> {
