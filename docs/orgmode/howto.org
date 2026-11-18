@@ -8,3 +8,23 @@ Construct a =HyperplaneConstraint= from a unit normal \(\mathbf{n}\) and scalar 
 * Estimate a Bennett-Chandler transmission coefficient
 
 Pass recorded =ReactiveTrajectory= histories to =estimate_bennett_chandler= for engine-free analysis, or call =shoot_bennett_chandler= with a mutable =DynamicsEngine= and dividing-surface configurations to generate and reduce reactive-flux trajectories in one pass @@rst::cite:`bennettMolecularDynamics1977,chandlerStatisticalMechanics1978`@@.
+
+* Evolve a finite-temperature string
+
+Start with at least three path images. Build a =FiniteTemperatureStringConfig= from =Default=, then set its =sampling= field with a =HyperplaneConfig=. =finite_temperature_string= constructs the plane through each image, normal to the centered path tangent; runs constrained dynamics through =DynamicsEngine=; evolves interior images with the mean in-plane force; and redistributes them at equal arc length with =rgsaddle::reparametrize= @@rst::cite:`eFiniteTemperatureString2005,vandenEijndenRevisitingFiniteTemperature2009`@@.
+
+#+begin_src rust
+let sampling = HyperplaneConfig::default()
+    .with_burn_in_steps(500)
+    .with_sample_steps(4_000);
+let config = FiniteTemperatureStringConfig::default()
+    .with_sampling(sampling)
+    .with_seed(17);
+let result = finite_temperature_string(&mut engine, images.view(), &config)?;
+#+end_src
+
+The string-with-swarms entry point is =swarm_string=. Each image launches independently seeded constrained trajectories and moves by their mean sampled displacement before the same equal-arc redistribution @@rst::cite:`panFindingTransitionPathways2008`@@. Both entry points restore positions, velocities, thermostat, cell, and pre-existing constraint before returning.
+
+* Connect rgsaddle PAFI to the shared sampler
+
+PAFI remains in =rgsaddle= because its published estimator includes path curvature and Jacobian terms that are not generic engine operations. An adapter should obtain each spline image and tangent from =rgsaddle::pafi=, call =plane_from_path_image=, then call =sample_hyperplane=. The returned =mean_projected_force=, =mean_position=, =position_covariance=, raw normal =mean_force=, and retained configurations provide the shared constrained trajectory. The adapter must apply PAFI's curvature/Jacobian observable and profile quadrature in =rgsaddle=; it must not reinterpret the raw RATTLE multiplier as the full PAFI estimator.

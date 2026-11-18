@@ -9,8 +9,15 @@
 | =stats= | Batch means, effective sample size =n_eff=, and stationarity diagnostics | Implemented; spline propagation moves from =rgsaddle= |
 | =kappa::bennett_chandler= | Engine-free reactive-flux estimator and =DynamicsEngine= trajectory shooter | Implemented |
 | =kappa= | Surface-shooting quench classifiers and first-crossing estimators | Implementation moves from =rgsaddle= |
-| =hyperplane= | Constrained hyperplane sampling and zero-variance control variates | Implementation moves from =rgsaddle= |
+| =hyperplane= | Constrained hyperplane sampling with running mean force, projected force, position, covariance, and retained configurations | Implemented |
 | =pafi= | Projected Average Force Integration along reaction paths | Implementation moves from =rgsaddle= |
-| =ohtst= | Optimal Hyperplanar Transition State Theory | Implementation moves from =rgsaddle= |
-| =ffs= | Forward Flux Sampling across ordered interfaces | Scaffold config and types |
+| =ohtst= | Fixed-normal harmonic Optimal Hyperplanar Transition State Theory using the shared hyperplane sampler | Implemented; rotating-plane optimization moves from =rgsaddle= |
+| =string= | Finite-temperature string and string method with swarms over shared constrained trajectories | Implemented |
+| =ffs= | Forward Flux Sampling across ordered interfaces | Implemented |
 | =network= | Symmetry-resolved rate networks and kinetic Monte Carlo rate tables | Implementation moves from =rgsaddle= |
+
+* String method API
+
+=finite_temperature_string= accepts any mutable =DynamicsEngine=, an =(images, dof)= array, and =FiniteTemperatureStringConfig=. Its result contains final images and the final-cycle projected forces, sampled positions, and position covariances. =swarm_string= accepts =SwarmStringConfig= and reports final images and mean swarm displacements. Both configuration structs are =#[non_exhaustive]=, implement =Default=, and provide chainable =with_*= builders.
+
+The current implementation uses non-periodic equal-chord redistribution through the public =rgsaddle::reparametrize= utility. Hyperplane integration itself continues to respect the cell owned by the dynamics engine.

@@ -1,0 +1,1 @@
+Shared hyperplane observables now drive finite-temperature strings and strings with swarms of trajectories through any =DynamicsEngine=.

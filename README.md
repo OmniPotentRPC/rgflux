@@ -9,9 +9,10 @@ Kinetics code is engine-agnostic: trajectory samplers drive the `engine::Dynamic
 - `engine` — object-safe `DynamicsEngine` trait, `ForceSurface`, the in-process `engine::native` BAOAB Langevin + RATTLE/SHAKE reference backend, the optional `rgpot` static PES wrapper, and the optional `rgpot-session` adapter wrapping `rgpot`'s engine-agnostic MD session ABI (`openmm`, `nblib`, `lammps`).
 - `stats` — batch means, Geyer effective sample size (`n_eff`), and Geweke two-window stationarity diagnostics.
 - `kappa` and `kappa::bennett_chandler` — Bennett-Chandler reactive-flux transmission coefficient estimator over recorded dividing-surface velocity and side histories, plus generic trajectory shooting over any `DynamicsEngine`.
-- `hyperplane` — holonomic hyperplane free-energy gradient and torque sampling (*implementation moves from rgsaddle*).
+- `hyperplane` — shared holonomic hyperplane sampler with normal and projected forces, mean positions, covariances, and retained configurations.
 - `pafi` — Projected Average Force Integration along reaction paths (*implementation moves from rgsaddle*).
-- `ohtst` — OH-TST with a fixed hyperplane normal; the normal is not variationally optimized (*implementation moves from rgsaddle*).
+- `ohtst` — fixed-normal harmonic OH-TST over the shared hyperplane sampler; the normal is not variationally optimized.
+- `string` — finite-temperature strings and strings with swarms of trajectories over the shared sampler.
 - `ffs` — Forward Flux Sampling across ordered interfaces.
 - `network` — symmetry-resolved kinetic rate networks and kinetic Monte Carlo rate tables (*implementation moves from rgsaddle*).
 
