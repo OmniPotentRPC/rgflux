@@ -869,6 +869,10 @@ mod tests {
         assert_eq!(profile.normalized_rate_error, 0.0);
     }
 
+    fn quartic_gradient_slope(x: f64) -> f64 {
+        12.0 * x * x
+    }
+
     struct AnisotropicHarmonic {
         ax: f64,
         ay: f64,
@@ -1005,14 +1009,19 @@ mod tests {
         let original_velocities = engine.velocities().to_owned();
 
         let path = Array2::from_shape_vec((2, 1), vec![0.0, 1.0]).expect("shape");
-        let spacing = 0.5_f64;
-        let maximum_gradient_curvature = 24.0_f64;
-        let trapezoid_error_bound = spacing * spacing * maximum_gradient_curvature / 12.0;
+        let planes = 3usize;
+        let spacing = 1.0 / ((planes - 1) as f64);
+        // For `V(x) = x^4` the path force `g(x) = V'(x) = 4 x^3` is a cubic, so
+        // the trapezoid error is exactly the leading Euler-Maclaurin term
+        // `spacing^2 / 12 * (g'(1) - g'(0))`, with `g'(x) = 12 x^2`. A tolerance
+        // of half that error makes the check reject this path.
+        let trapezoid_error =
+            spacing * spacing / 12.0 * (quartic_gradient_slope(1.0) - quartic_gradient_slope(0.0));
         let config = PafiConfig::default()
-            .with_planes(3)
+            .with_planes(planes)
             .with_burn_in_steps(1)
             .with_sample_steps(2)
-            .with_zero_temperature_tol(trapezoid_error_bound / 4.0);
+            .with_zero_temperature_tol(trapezoid_error / 2.0);
         let result = pafi_profile_dyn(&mut engine, path.view(), &config);
         assert_eq!(
             result,

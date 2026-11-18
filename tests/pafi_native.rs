@@ -322,10 +322,22 @@ fn arc_lengths_reflect_mass_weighting() {
     let thermal = 0.03_f64;
     let planes = 9usize;
     let slope = 0.3_f64;
-    let path = tilted_path(-1.0, 0.0, planes, slope);
+    let start = -1.0_f64;
+    let end = 0.0_f64;
+    let path = tilted_path(start, end, planes, slope);
     let spacing = 1.0 / ((planes - 1) as f64);
-    let maximum_gradient_curvature = 24.0_f64;
-    let trapezoid_error_bound = spacing * spacing * maximum_gradient_curvature / 12.0;
+    // Along the path the potential is
+    // `V(x, slope * x) = (1 - x^2)^2 + 0.5 * (1.5 + 0.5 * x) * (slope * x)^2`.
+    // The quartic part has third derivative `4 * 3 * 2 * x`, and the cubic part
+    // `0.5 * 0.5 * slope^2 * x^3` has the constant `3 * 2 * 0.5 * 0.5 * slope^2`.
+    // The path force `V'` therefore has curvature at most `third_derivative_bound`,
+    // and the trapezoid error over `[start, end]` is at most
+    // `spacing^2 * (end - start) * third_derivative_bound / 12`.
+    // Masses only rescale arc length uniformly on a straight path, so the same
+    // bound holds for both mass sets.
+    let third_derivative_bound =
+        4.0 * 3.0 * 2.0 * start.abs().max(end.abs()) + 3.0 * 2.0 * 0.5 * 0.5 * slope * slope;
+    let trapezoid_error_bound = spacing * spacing * (end - start) * third_derivative_bound / 12.0;
     let config = PafiConfig::default()
         .with_planes(planes)
         .with_burn_in_steps(200)
