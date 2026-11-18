@@ -244,6 +244,9 @@ fn lammpc_langevin_temperature_agrees_with_target_and_native() {
     const BURN_IN: usize = 1_000;
     const SAMPLES: usize = 1_200;
     const ARGON_MASS_AMU: f64 = 39.948;
+    // Native time is `sqrt(m / F)`. LAMMPS metal units divide that mass by
+    // `mvv2e`, so the same amu value runs about 98x slower than lammpc.
+    let native_mass = ARGON_MASS_AMU * rgflux::engine::lammpc::MASS_VELOCITY_TO_EV;
     const ARGON_Z: i32 = 18;
     const EPSILON_EV: f64 = 0.010_323;
     const SIGMA_ANGSTROM: f64 = 3.405;
@@ -262,14 +265,7 @@ fn lammpc_langevin_temperature_agrees_with_target_and_native() {
                 sigma_angstrom: SIGMA_ANGSTROM,
             },
             NativeConfig::default()
-                .with_masses(Array1::from_vec(vec![
-                    ARGON_MASS_AMU,
-                    ARGON_MASS_AMU,
-                    ARGON_MASS_AMU,
-                    ARGON_MASS_AMU,
-                    ARGON_MASS_AMU,
-                    ARGON_MASS_AMU,
-                ]))
+                .with_masses(Array1::from_elem(6, native_mass))
                 .with_constraint(plane.clone())
                 .with_seed(100)
                 .with_thermostat(
