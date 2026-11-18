@@ -242,6 +242,7 @@ pub struct LammpcEngine {
     md_initialized: bool,
     md_timestep_ps: Option<f64>,
     nve_instance_ready: bool,
+    poisoned: bool,
 }
 
 impl LammpcEngine {
@@ -327,6 +328,7 @@ impl LammpcEngine {
             md_initialized: false,
             md_timestep_ps: None,
             nve_instance_ready: false,
+            poisoned: false,
         };
         engine.project_state_onto_constraint()?;
         Ok(engine)
@@ -340,13 +342,30 @@ impl LammpcEngine {
                 self.config_bytes.len(),
             )
         };
-        let fresh = NonNull::new(raw).ok_or_else(|| FluxError::Lammpc(last_error_message()))?;
+        let Some(fresh) = NonNull::new(raw) else {
+            // The old handle stays owned for `Drop` but is never used again.
+            self.poisoned = true;
+            self.md_initialized = false;
+            self.md_timestep_ps = None;
+            self.nve_instance_ready = false;
+            return Err(FluxError::Lammpc(last_error_message()));
+        };
         // SAFETY: `self.session` was created by lammpc and is owned by this engine.
         unsafe { lammpc_session_destroy(self.session.as_ptr()) };
         self.session = fresh;
         self.md_initialized = false;
         self.md_timestep_ps = None;
         self.nve_instance_ready = false;
+        Ok(())
+    }
+
+    fn ensure_usable(&self) -> Result<(), FluxError> {
+        if self.poisoned {
+            return Err(FluxError::Lammpc(
+                "lammpc engine is poisoned after a failed session recovery; drop it and create a new engine"
+                    .to_string(),
+            ));
+        }
         Ok(())
     }
 
@@ -402,6 +421,7 @@ impl LammpcEngine {
     }
 
     fn call_calculate(&mut self) -> Result<(f64, Array1<f64>), FluxError> {
+        self.ensure_usable()?;
         let input = self.force_input_bytes()?;
         // SAFETY: size query takes the `ForceInput` bytes and a null output, as in
         // `rgpot_core::profile::ProfileSession::evaluate`.
@@ -732,6 +752,7 @@ impl DynamicsEngine for LammpcEngine {
     }
 
     fn set_positions(&mut self, positions: ArrayView1<'_, f64>) -> Result<(), FluxError> {
+        self.ensure_usable()?;
         if positions.len() != self.dof() {
             return Err(FluxError::Shape {
                 expected: self.dof(),
@@ -757,6 +778,7 @@ impl DynamicsEngine for LammpcEngine {
     }
 
     fn set_velocities(&mut self, velocities: ArrayView1<'_, f64>) -> Result<(), FluxError> {
+        self.ensure_usable()?;
         if velocities.len() != self.dof() {
             return Err(FluxError::Shape {
                 expected: self.dof(),
@@ -779,6 +801,7 @@ impl DynamicsEngine for LammpcEngine {
     }
 
     fn set_cell(&mut self, cell: Option<[f64; 9]>) -> Result<(), FluxError> {
+        self.ensure_usable()?;
         if let Some(matrix) = &cell {
             for value in matrix {
                 if !value.is_finite() {
@@ -797,6 +820,7 @@ impl DynamicsEngine for LammpcEngine {
     }
 
     fn set_thermostat(&mut self, thermostat: ThermostatConfig) -> Result<(), FluxError> {
+        self.ensure_usable()?;
         let _ = thermostat.thermal_energy()?;
         self.thermostat = thermostat;
         self.md_initialized = false;
@@ -812,6 +836,7 @@ impl DynamicsEngine for LammpcEngine {
         &mut self,
         constraint: Option<HyperplaneConstraint>,
     ) -> Result<(), FluxError> {
+        self.ensure_usable()?;
         if let Some(plane) = &constraint {
             plane.validate()?;
             if plane.normal.len() != self.dof() {
@@ -848,6 +873,7 @@ impl DynamicsEngine for LammpcEngine {
     }
 
     fn step(&mut self, dt: f64) -> Result<StepReport, FluxError> {
+        self.ensure_usable()?;
         if !dt.is_finite() || dt <= 0.0 {
             return Err(FluxError::InvalidConfig(
                 "LammpcEngine::step requires a finite positive timestep",
@@ -882,6 +908,7 @@ impl DynamicsEngine for LammpcEngine {
     }
 
     fn reseed(&mut self, seed: u64) -> Result<(), FluxError> {
+        self.ensure_usable()?;
         self.seed = seed;
         self.md_initialized = false;
         self.md_timestep_ps = None;
@@ -889,6 +916,7 @@ impl DynamicsEngine for LammpcEngine {
     }
 
     fn shoot_velocities(&mut self, seed: u64) -> Result<(), FluxError> {
+        self.ensure_usable()?;
         let kbt = self.thermostat.thermal_energy()?;
         let scaled_masses = self.masses.mapv(|m| m * MASS_VELOCITY_TO_EV);
         let mut rng = StdRng::seed_from_u64(seed);
@@ -900,6 +928,7 @@ impl DynamicsEngine for LammpcEngine {
     }
 
     fn reflect_velocity(&mut self, normal: ArrayView1<'_, f64>) -> Result<f64, FluxError> {
+        self.ensure_usable()?;
         let normal_velocity =
             reflect_velocity_in_place(&mut self.velocities, self.masses.view(), normal)?;
         self.md_initialized = false;
@@ -912,6 +941,7 @@ impl DynamicsEngine for LammpcEngine {
         normal: ArrayView1<'_, f64>,
         policy: SurfaceVelocityPolicy,
     ) -> Result<f64, FluxError> {
+        self.ensure_usable()?;
         validate_unit_normal(normal, self.dof())?;
         let current_nv = rgmin::vecops::dot(normal, self.velocities.view());
         if current_nv > 0.0 {
@@ -1366,5 +1396,35 @@ mod tests {
 
         let after = engine.session.as_ptr();
         assert_ne!(before, after);
+    }
+
+    #[test]
+    fn failed_session_recovery_poisons_the_engine() {
+        let plane = HyperplaneConstraint::from_direction(
+            Array1::from_vec(vec![1.0, 0.0, 0.0, 0.0, 0.0, 0.0]).view(),
+            0.0,
+        )
+        .expect("plane");
+        let mut engine =
+            LammpcEngine::new(LammpcConfig::default().with_constraint(plane)).expect("engine");
+        let positions = engine.positions.clone();
+        engine.config_bytes = vec![0_u8; CAPNP_WORD_BYTES];
+        engine.md_initialized = true;
+        engine.md_timestep_ps = Some(0.001);
+
+        let error = engine.step(0.001).expect_err("session was not initialized");
+        let FluxError::Lammpc(message) = &error else {
+            panic!("unexpected error {error:?}");
+        };
+        assert!(message.contains("session recovery failed"), "{message}");
+
+        let velocities = Array1::zeros(6);
+        assert!(engine.step(0.001).is_err());
+        assert!(engine.energy_and_forces().is_err());
+        assert!(engine.set_positions(positions.view()).is_err());
+        assert!(engine.set_velocities(velocities.view()).is_err());
+        assert!(engine.reseed(7).is_err());
+        assert!(engine.shoot_velocities(7).is_err());
+        assert_eq!(engine.positions, positions);
     }
 }
