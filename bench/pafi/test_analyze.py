@@ -17,6 +17,12 @@ class AnalysisFailureTests(unittest.TestCase):
     def setUpClass(cls):
         cls.result = json.loads((ROOT / "results.json").read_text())
 
+    def test_committed_result_passes(self):
+        self.assertEqual(
+            ANALYZE.validate_result(self.result)["status"],
+            "passed",
+        )
+
     def test_nan_profile_fails(self):
         result = copy.deepcopy(self.result)
         result["cells"][0]["exact_reference"]["profile"][0] = float("nan")
