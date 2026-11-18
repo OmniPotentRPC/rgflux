@@ -5,6 +5,21 @@
 //! [`rgsaddle::PointSurface`], [`eindir_core::DifferentiableObjective`], or
 //! the optional `rgpot` feature, while samplers drive [`engine::DynamicsEngine`].
 //!
+//! ## Modules
+//!
+//! - [`engine`]: [`DynamicsEngine`] trait, [`ForceSurface`], the pure-Rust
+//!   [`engine::native`] BAOAB + RATTLE/SHAKE backend, and optional `rgpot`
+//!   and `rgpot-session` adapters.
+//! - [`stats`]: non-overlapping batch means, Geyer effective sample size
+//!   (`n_eff`), and Geweke two-window stationarity checks.
+//! - [`kappa`] and [`kappa::bennett_chandler`]: Bennett-Chandler reactive-flux
+//!   transmission coefficient estimator and generic [`DynamicsEngine`] shooter.
+//! - [`hyperplane`]: holonomic hyperplane free-energy gradient sampling.
+//! - [`pafi`]: Projected Average Force Integration along reaction paths.
+//! - [`ohtst`]: Optimal Hyperplanar Transition State Theory.
+//! - [`ffs`]: Forward Flux Sampling across ordered interfaces.
+//! - [`network`]: symmetry-resolved kinetic networks and kMC rate tables.
+//!
 //! ## References
 //!
 //! - Goswami, R. (2025). *Efficient Exploration of Chemical Kinetics*.
@@ -22,6 +37,7 @@ pub mod engine;
 pub mod error;
 pub mod ffs;
 pub mod hyperplane;
+pub mod kappa;
 pub mod network;
 pub mod ohtst;
 pub mod pafi;

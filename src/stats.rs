@@ -7,7 +7,7 @@
 //!
 //! Note: implementation moves from rgsaddle for spline-propagated profile
 //! covariance helpers; the core batch-means, `n_eff`, and stationarity
-//! estimators used by `kappa::bennett_chandler` and engine validation
+//! estimators used by [`crate::kappa::bennett_chandler`] and engine validation
 //! live here directly.
 //!
 //! ## Example
