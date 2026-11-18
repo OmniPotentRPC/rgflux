@@ -1,4 +1,4 @@
-//! Optimal Hyperplanar Transition State Theory (OH-TST).
+//! OH-TST with a fixed hyperplane normal.
 //!
 //! [`optimize_hyperplane`] holds the seed normal fixed and places the offset on
 //! the dividing surface that is stationary along that normal. The reported
@@ -40,12 +40,12 @@ use std::f64::consts::TAU;
 use ndarray::{Array1, ArrayView1};
 use rgmin::vecops::dot;
 
-use crate::engine::{DynamicsEngine, HyperplaneConstraint, ThermostatConfig};
+use crate::engine::{DynamicsEngine, EngineSnapshot, HyperplaneConstraint};
 use crate::error::FluxError;
 use crate::hyperplane::{HyperplaneConfig, sample_hyperplane};
 use crate::stats::{SERIES_FLAT_TOL, StatsConfig};
 
-/// Configuration for variational hyperplane optimization and OH-TST rate evaluation.
+/// Configuration for fixed-normal hyperplane placement and OH-TST rate evaluation.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct OhtstConfig {
@@ -125,13 +125,13 @@ with_setters!(OhtstConfig {
     with_time_step => time_step: val f64,
 });
 
-/// Variational OH-TST rate estimate and optimal dividing hyperplane.
+/// Fixed-normal OH-TST rate estimate and dividing hyperplane.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct OhtstEstimate {
     /// Optimized dividing hyperplane.
     pub plane: HyperplaneConstraint,
-    /// Variational hyperplanar transition-state rate constant `k_OHTST`.
+    /// Fixed-normal hyperplanar transition-state rate constant `k_OHTST`.
     pub rate: f64,
     /// Propagated standard error of [`Self::rate`].
     pub standard_error: f64,
@@ -160,8 +160,7 @@ pub fn optimize_hyperplane<E: DynamicsEngine + ?Sized>(
     }
     let snapshot = EngineSnapshot::capture(engine);
     let result = evaluate_harmonic_rate(engine, seed_plane, config);
-    snapshot.restore(engine)?;
-    result
+    snapshot.restore_result(engine, result)
 }
 
 fn validate_config(config: &OhtstConfig) -> Result<(), FluxError> {
@@ -350,7 +349,11 @@ fn reactant_minimum<E: DynamicsEngine + ?Sized>(
     config: &OhtstConfig,
 ) -> Result<Array1<f64>, FluxError> {
     let normal = seed_plane.normal.clone();
-    let limit = config.max_outer_steps.saturating_mul(8);
+    // Allow several minimization updates per dividing-surface search iteration.
+    const MINIMIZATION_BUDGET_FACTOR: usize = 8;
+    let limit = config
+        .max_outer_steps
+        .saturating_mul(MINIMIZATION_BUDGET_FACTOR);
     for _ in 0..limit {
         let position = engine.positions().to_owned();
         let (energy, force) = engine.energy_and_forces()?;
@@ -383,9 +386,14 @@ fn descend_once<E: DynamicsEngine + ?Sized>(
     energy: f64,
     force: ArrayView1<'_, f64>,
 ) -> Result<bool, FluxError> {
+    // Start with a full force-vector displacement before backtracking.
+    const INITIAL_LINE_SEARCH_STEP: f64 = 1.0;
+    // Twenty-four halvings span the useful binary64 step range for this search.
+    const MAX_LINE_SEARCH_HALVINGS: usize = 24;
+
     let start = engine.positions().to_owned();
-    let mut step = 1.0_f64;
-    for _ in 0..24 {
+    let mut step = INITIAL_LINE_SEARCH_STEP;
+    for _ in 0..MAX_LINE_SEARCH_HALVINGS {
         let trial = shifted(start.view(), force, step);
         engine.set_positions(trial.view())?;
         let (trial_energy, _) = engine.energy_and_forces()?;
@@ -491,30 +499,4 @@ fn probe_sampling(config: &OhtstConfig) -> HyperplaneConfig {
         .with_time_step(config.time_step)
         .with_seed(config.seed)
         .with_stats(config.stats.clone())
-}
-
-struct EngineSnapshot {
-    constraint: Option<HyperplaneConstraint>,
-    thermostat: ThermostatConfig,
-    positions: Array1<f64>,
-    velocities: Array1<f64>,
-}
-
-impl EngineSnapshot {
-    fn capture<E: DynamicsEngine + ?Sized>(engine: &E) -> Self {
-        Self {
-            constraint: engine.constraint().cloned(),
-            thermostat: *engine.thermostat(),
-            positions: engine.positions().to_owned(),
-            velocities: engine.velocities().to_owned(),
-        }
-    }
-
-    fn restore<E: DynamicsEngine + ?Sized>(self, engine: &mut E) -> Result<(), FluxError> {
-        engine.set_constraint(self.constraint)?;
-        engine.set_thermostat(self.thermostat)?;
-        engine.set_positions(self.positions.view())?;
-        engine.set_velocities(self.velocities.view())?;
-        Ok(())
-    }
 }

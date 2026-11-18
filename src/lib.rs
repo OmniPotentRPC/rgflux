@@ -16,7 +16,7 @@
 //!   transmission coefficient estimator and generic [`DynamicsEngine`] shooter.
 //! - [`hyperplane`]: holonomic hyperplane free-energy gradient sampling.
 //! - [`pafi`]: Projected Average Force Integration along reaction paths.
-//! - [`ohtst`]: Optimal Hyperplanar Transition State Theory.
+//! - [`ohtst`]: OH-TST with a fixed hyperplane normal; the normal is not optimized.
 //! - [`ffs`]: Forward Flux Sampling across ordered interfaces.
 //! - [`network`]: symmetry-resolved kinetic networks and kMC rate tables.
 //!

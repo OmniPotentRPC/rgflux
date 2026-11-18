@@ -6,8 +6,8 @@
 //! harmonic TST rate is the OH-TST rate. A separate harmonic oscillator checks
 //! the mean constraint force at more than one plane offset.
 //!
-//! Acceptance is `max_z_score` times the reported standard error. A flat rgflux
-//! sample reports a zero error, so the harmonic TST comparison is exact.
+//! Acceptance is `max_z_score` times the reported standard error. For a flat
+//! sample, a 64-ULP relative bound covers the floating-point rate evaluation.
 //! rgsaddle's [`rgsaddle::OhTstRate::error`] is only the statistical part;
 //! the leave-one-out error of `ln ρ` is [`rgsaddle::BasinDensity::quadrature_error`]
 //! and is added in quadrature. The temperature puts the anharmonic seam many
@@ -31,6 +31,7 @@ use rgflux::ohtst::{OhtstConfig, optimize_hyperplane};
 const SEED: u64 = 17;
 const THERMAL: f64 = 0.005;
 const SEAM: f64 = 0.25;
+const HARMONIC_RATE_ROUNDOFF_ULPS: f64 = 64.0;
 
 struct HarmonicBarrier;
 
@@ -88,6 +89,16 @@ fn harmonic_tst_rate(barrier: f64, thermal: f64) -> f64 {
 
 fn within_reported_error(actual: f64, reference: f64, standard_error: f64, coverage: f64) -> bool {
     (actual - reference).abs() <= coverage * standard_error
+}
+
+fn within_harmonic_rate_error(
+    actual: f64,
+    reference: f64,
+    standard_error: f64,
+    coverage: f64,
+) -> bool {
+    let roundoff_bound = HARMONIC_RATE_ROUNDOFF_ULPS * f64::EPSILON * reference.abs();
+    (actual - reference).abs() <= coverage * standard_error + roundoff_bound
 }
 
 fn engine<S: PointSurface + Send + Sync>(
@@ -164,7 +175,7 @@ fn ohtst_rate_matches_harmonic_tst_and_rgsaddle() -> Result<(), Box<dyn std::err
     assert_eq!(sampler.constraint(), constraint.as_ref());
     assert_eq!(sampler.thermostat(), &thermostat);
     assert!(
-        within_reported_error(estimate.rate, analytic, estimate.standard_error, coverage),
+        within_harmonic_rate_error(estimate.rate, analytic, estimate.standard_error, coverage),
         "rgflux rate {} ± {} against harmonic TST {analytic}",
         estimate.rate,
         estimate.standard_error
