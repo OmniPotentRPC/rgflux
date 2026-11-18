@@ -211,13 +211,32 @@ const QUARTER_ARC_TRAPEZOID_COEFFICIENT: f64 = PI * PI / 12.0;
 
 /// Margin by which the default zero-temperature tolerance exceeds the
 /// quarter-arc trapezoid error at [`DEFAULT_PLANES`].
-const ZERO_TEMPERATURE_SAFETY_FACTOR: f64 = 2.0;
+///
+/// The leading relative trapezoid error for `N` planes is
+/// `pi^2 / (12 (N - 1)^2)`. At `N = 9` this is about `1.29%`, while the
+/// historical default tolerance is about `2.57%`. The excess `1.29%` is one
+/// additional leading term, so the safety margin is one leading term.
+const ZERO_TEMPERATURE_SAFETY_MARGIN: f64 = 1.0;
+
+const fn default_zero_temperature_tol(planes: usize) -> f64 {
+    let intervals = (planes - 1) as f64;
+    let leading_term = QUARTER_ARC_TRAPEZOID_COEFFICIENT / (intervals * intervals);
+    leading_term * (1.0 + ZERO_TEMPERATURE_SAFETY_MARGIN)
+}
 
 /// Default [`PafiConfig::zero_temperature_tol`]: the quarter-arc trapezoid
-/// error at [`DEFAULT_PLANES`] (1.29%) times [`ZERO_TEMPERATURE_SAFETY_FACTOR`].
-const DEFAULT_ZERO_TEMPERATURE_TOL: f64 = ZERO_TEMPERATURE_SAFETY_FACTOR
-    * QUARTER_ARC_TRAPEZOID_COEFFICIENT
-    / (((DEFAULT_PLANES - 1) * (DEFAULT_PLANES - 1)) as f64);
+/// error at [`DEFAULT_PLANES`] (1.29%) plus the safety margin.
+const DEFAULT_ZERO_TEMPERATURE_TOL: f64 = default_zero_temperature_tol(DEFAULT_PLANES);
+
+fn effective_zero_temperature_tol(config: &PafiConfig) -> f64 {
+    let tol = config.zero_temperature_tol;
+    let default_tol = DEFAULT_ZERO_TEMPERATURE_TOL;
+    if (tol - default_tol).abs() <= 64.0 * f64::EPSILON * default_tol.abs().max(1.0) {
+        default_zero_temperature_tol(config.planes)
+    } else {
+        tol
+    }
+}
 
 /// Configuration for Projected Average Force Integration (PAFI).
 #[derive(Clone, Debug, PartialEq)]
@@ -938,7 +957,7 @@ pub fn pafi_profile<E: DynamicsEngine + ?Sized>(
             path_gradients.push(-dot(geometry.tangent.view(), forces.view()));
         }
         let relative_error = path_force_relative_error(&arcs, &path_energies, &path_gradients);
-        if relative_error > config.zero_temperature_tol {
+        if relative_error > effective_zero_temperature_tol(config) {
             return Err(FluxError::InvalidConfig(
                 "PAFI zero-temperature path-force quadrature exceeds tolerance",
             ));
@@ -1010,6 +1029,17 @@ mod tests {
             x: ArrayView1<'_, f64>,
         ) -> Result<(f64, Array1<f64>), rgsaddle::SaddleError> {
             Ok((x[0].powi(4), Array1::from_vec(vec![4.0 * x[0].powi(3)])))
+        }
+    }
+
+    struct InconsistentLinearGradient;
+
+    impl rgsaddle::PointSurface for InconsistentLinearGradient {
+        fn eval(
+            &self,
+            x: ArrayView1<'_, f64>,
+        ) -> Result<(f64, Array1<f64>), rgsaddle::SaddleError> {
+            Ok((x[0], Array1::from_vec(vec![0.98])))
         }
     }
 
@@ -1225,7 +1255,7 @@ mod tests {
             config.zero_temperature_tol
         );
         assert!(
-            config.zero_temperature_tol < 2.0 * ZERO_TEMPERATURE_SAFETY_FACTOR * error,
+            config.zero_temperature_tol < 2.0 * (1.0 + ZERO_TEMPERATURE_SAFETY_MARGIN) * error,
             "default tolerance {} is no longer calibrated to {error}",
             config.zero_temperature_tol
         );
@@ -1312,6 +1342,46 @@ mod tests {
             result,
             Err(FluxError::NonFinite("PAFI integrated free energy"))
         );
+    }
+
+    #[test]
+    fn default_tolerance_scales_with_planes_for_consistency_check() {
+        let path = Array2::from_shape_vec((2, 1), vec![0.0, 1.0]).expect("shape");
+        let mut engine = NativeEngine::new(
+            InconsistentLinearGradient,
+            NativeConfig::default()
+                .with_masses(Array1::from_vec(vec![1.0]))
+                .with_thermostat(ThermostatConfig::default().with_temperature(0.2))
+                .with_seed(23),
+        )
+        .expect("engine");
+        let config = PafiConfig::default()
+            .with_planes(33)
+            .with_burn_in_steps(1)
+            .with_sample_steps(2);
+        let result = pafi_profile(&mut engine, path.view(), &config);
+        assert_eq!(
+            result,
+            Err(FluxError::InvalidConfig(
+                "PAFI zero-temperature path-force quadrature exceeds tolerance"
+            ))
+        );
+
+        let mut legacy_engine = NativeEngine::new(
+            InconsistentLinearGradient,
+            NativeConfig::default()
+                .with_masses(Array1::from_vec(vec![1.0]))
+                .with_thermostat(ThermostatConfig::default().with_temperature(0.2))
+                .with_seed(23),
+        )
+        .expect("engine");
+        let legacy_like = PafiConfig::default()
+            .with_planes(33)
+            .with_zero_temperature_tol(0.0257)
+            .with_burn_in_steps(1)
+            .with_sample_steps(2)
+            .with_stats(StatsConfig::default().with_min_batches(2));
+        assert!(pafi_profile(&mut legacy_engine, path.view(), &legacy_like).is_ok());
     }
 
     #[test]
