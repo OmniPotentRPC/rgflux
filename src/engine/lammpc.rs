@@ -870,12 +870,12 @@ impl DynamicsEngine for LammpcEngine {
             self.md_initialized = false;
             self.md_timestep_ps = None;
             self.nve_instance_ready = false;
-            if let Err(FluxError::Lammpc(original)) = &result {
-                if let Err(recovery) = self.recreate_session_after_error() {
-                    return Err(FluxError::Lammpc(format!(
-                        "{original}; session recovery failed: {recovery}"
-                    )));
-                }
+            if let Err(FluxError::Lammpc(original)) = &result
+                && let Err(recovery) = self.recreate_session_after_error()
+            {
+                return Err(FluxError::Lammpc(format!(
+                    "{original}; session recovery failed: {recovery}"
+                )));
             }
         }
         result
