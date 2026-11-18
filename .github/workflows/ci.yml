@@ -89,3 +89,40 @@ jobs:
         run: cargo clippy --locked --all-targets --all-features -- -D warnings
       - name: Test (all features)
         run: cargo test --locked --all-features
+
+  lammpc:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-name: lammpc
+          create-args: >-
+            meson
+            ninja
+            pkg-config
+            minimage
+            capnproto
+            cmake
+          condarc: |
+            channels:
+              - conda-forge
+      - name: Build and install lammpc (pinned rev)
+        shell: bash -l {0}
+        run: |
+          set -euo pipefail
+          git clone https://github.com/OmniPotentRPC/lammpc "${RUNNER_TEMP}/lammpc"
+          cd "${RUNNER_TEMP}/lammpc"
+          git checkout b9e6a1e984782aa674c94cccde46d1914bb4cd86
+          bash scripts/build_lammps.sh
+          meson setup build --prefix="${RUNNER_TEMP}/lammpc-install" -Dwith_tests=false -Dwith_lammps=true -Dlammps_root="$PWD/.lammps-install"
+          meson compile -C build
+          meson install -C build
+      - name: Test all features with lammpc
+        env:
+          LAMMPC_LIB_DIR: ${{ runner.temp }}/lammpc-install/lib/x86_64-linux-gnu
+          LD_LIBRARY_PATH: ${{ runner.temp }}/lammpc-install/lib/x86_64-linux-gnu:${{ env.LD_LIBRARY_PATH }}
+        run: cargo test --locked --all-features --verbose
