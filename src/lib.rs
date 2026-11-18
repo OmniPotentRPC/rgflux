@@ -3,8 +3,7 @@
 //! `rgflux` separates rate theory and trajectory sampling from potential
 //! energy surfaces and molecular dynamics codes. Surfaces enter through
 //! [`rgsaddle::PointSurface`], [`eindir_core::DifferentiableObjective`], or
-//! the optional `rgpot` feature, while samplers drive a uniform dynamics
-//! interface.
+//! the optional `rgpot` feature, while samplers drive [`engine::DynamicsEngine`].
 //!
 //! ## References
 //!
@@ -19,7 +18,12 @@
 #[macro_use]
 mod config;
 
+pub mod engine;
 pub mod error;
 pub mod stats;
 
+pub use engine::{
+    DynamicsEngine, EindirSurface, ForceSurface, HyperplaneConstraint, StepReport,
+    SurfaceVelocityPolicy, ThermostatConfig,
+};
 pub use error::FluxError;
