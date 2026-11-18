@@ -183,7 +183,7 @@
 //!   molecular dynamics*. The Journal of Chemical Physics, 109, 7737 to 7744.
 //!   <https://doi.org/10.1063/1.477419>
 
-use std::f64::consts::{PI, TAU};
+use std::f64::consts::{LN_2, PI, TAU};
 
 use ndarray::{Array1, ArrayView1, ArrayView2};
 use rgmin::vecops::{dot, nrm2};
@@ -331,9 +331,14 @@ pub struct FreeEnergyProfile {
     /// Reactant-side normalization
     /// `Z_R = 2 * \int_0^{s*} exp(-F(s) / k_B T) ds`.
     pub reactant_partition: f64,
+    /// Natural logarithm of the reactant-side normalization
+    /// `ln Z_R = ln(2 * \int_0^{s*} exp(-F(s) / k_B T) ds)`.
+    pub reactant_log_partition: f64,
     /// Normalized PAFI rate
     /// `k = sqrt(k_B T / (2 pi)) * exp(-F(s*) / k_B T) / Z_R`.
     pub normalized_rate: f64,
+    /// Natural logarithm of [`Self::normalized_rate`].
+    pub normalized_log_rate: f64,
     /// Propagated standard error of [`Self::normalized_rate`].
     pub normalized_rate_error: f64,
 }
@@ -658,8 +663,7 @@ fn estimate_plane(samples: &[f64], config: &PafiConfig) -> Result<PlaneEstimate,
 fn integrate_means(
     arc_lengths: &[f64],
     gradients: &[f64],
-    kbt: f64,
-) -> Result<(Vec<f64>, f64, f64, usize), FluxError> {
+) -> Result<(Vec<f64>, f64, usize), FluxError> {
     let n = arc_lengths.len();
     if n < 2 || gradients.len() != n {
         return Err(FluxError::Shape {
@@ -688,20 +692,53 @@ fn integrate_means(
         }
     }
     let barrier = free_energy[dividing];
-    let mut zr_half = 0.0_f64;
+    Ok((free_energy, barrier, dividing))
+}
+
+fn reactant_log_partition_and_sensitivity(
+    arc_lengths: &[f64],
+    free_energy: &[f64],
+    dividing: usize,
+    kbt: f64,
+) -> Result<(f64, Vec<f64>), FluxError> {
+    let n = free_energy.len();
+    let mut exponent_shift = f64::NEG_INFINITY;
+    for &value in &free_energy[..=dividing] {
+        let exponent = -value / kbt;
+        if !exponent.is_finite() {
+            return Err(FluxError::NonFinite("PAFI reactant partition exponent"));
+        }
+        exponent_shift = exponent_shift.max(exponent);
+    }
+
+    let mut scaled_half_partition = 0.0_f64;
+    let mut scaled_numerator = vec![0.0_f64; n];
     for i in 1..=dividing {
         let ds = arc_lengths[i] - arc_lengths[i - 1];
-        let w0 = (-free_energy[i - 1] / kbt).exp();
-        let w1 = (-free_energy[i] / kbt).exp();
-        zr_half += 0.5 * ds * (w0 + w1);
+        let left_exp = (-free_energy[i - 1] / kbt - exponent_shift).exp();
+        let right_exp = (-free_energy[i] / kbt - exponent_shift).exp();
+        let left_weight = 0.5 * ds * left_exp;
+        let right_weight = 0.5 * ds * right_exp;
+        scaled_half_partition += left_weight + right_weight;
+        scaled_numerator[i - 1] += left_weight;
+        scaled_numerator[i] += right_weight;
     }
-    let reactant_partition = 2.0 * zr_half;
-    if !reactant_partition.is_finite() || reactant_partition <= 0.0 {
+    if !scaled_half_partition.is_finite() || scaled_half_partition <= 0.0 {
         return Err(FluxError::InvalidConfig(
-            "PAFI reactant partition must be finite and positive",
+            "PAFI reactant partition must be positive",
         ));
     }
-    Ok((free_energy, barrier, reactant_partition, dividing))
+
+    let reactant_log_partition = LN_2 + exponent_shift + scaled_half_partition.ln();
+    if !reactant_log_partition.is_finite() {
+        return Err(FluxError::NonFinite("PAFI reactant log partition"));
+    }
+    let mut d_ln_zr_d_f = vec![0.0_f64; n];
+    for i in 0..=dividing {
+        d_ln_zr_d_f[i] = -scaled_numerator[i] / (kbt * scaled_half_partition);
+    }
+
+    Ok((reactant_log_partition, d_ln_zr_d_f))
 }
 
 fn integrate_profile(
@@ -718,8 +755,7 @@ fn integrate_profile(
             context: "PAFI profile integration vectors",
         });
     }
-    let (free_energy, barrier, reactant_partition, dividing) =
-        integrate_means(arc_lengths, gradients, kbt)?;
+    let (free_energy, barrier, dividing) = integrate_means(arc_lengths, gradients)?;
 
     let mut integration_weights = vec![vec![0.0_f64; n]; n];
     for i in 1..n {
@@ -745,32 +781,31 @@ fn integrate_profile(
         standard_error[i] = variance.sqrt();
     }
 
-    let mut d_zr_d_f = vec![0.0_f64; n];
-    for i in 1..=dividing {
-        let ds = arc_lengths[i] - arc_lengths[i - 1];
-        let w0 = (-free_energy[i - 1] / kbt).exp();
-        let w1 = (-free_energy[i] / kbt).exp();
-        d_zr_d_f[i - 1] += -0.5 * ds * w0 / kbt;
-        d_zr_d_f[i] += -0.5 * ds * w1 / kbt;
-    }
-
+    let (reactant_log_partition, d_ln_zr_d_f) =
+        reactant_log_partition_and_sensitivity(arc_lengths, &free_energy, dividing, kbt)?;
+    let reactant_partition = reactant_log_partition.exp();
     let barrier_error = standard_error[dividing];
-    let normalized_rate = (kbt / TAU).sqrt() * (-barrier / kbt).exp() / reactant_partition;
-    if !normalized_rate.is_finite() || normalized_rate <= 0.0 {
+    let normalized_log_rate = 0.5 * (kbt / TAU).ln() - barrier / kbt - reactant_log_partition;
+    if !normalized_log_rate.is_finite() {
         return Err(FluxError::InvalidConfig(
-            "PAFI normalized rate must be finite and positive",
+            "PAFI normalized log rate must be finite",
+        ));
+    }
+    let normalized_rate = normalized_log_rate.exp();
+    if !normalized_rate.is_finite() || normalized_rate < 0.0 {
+        return Err(FluxError::InvalidConfig(
+            "PAFI normalized rate must be finite",
         ));
     }
     let mut variance_ln_rate = 0.0_f64;
     for (gradient_index, sigma) in gradient_errors.iter().copied().enumerate() {
         let barrier_sensitivity = integration_weights[dividing][gradient_index];
-        let mut partition_sensitivity = 0.0_f64;
+        let mut partition_log_sensitivity = 0.0_f64;
         for profile_index in 0..=dividing {
-            partition_sensitivity +=
-                2.0 * d_zr_d_f[profile_index] * integration_weights[profile_index][gradient_index];
+            partition_log_sensitivity +=
+                d_ln_zr_d_f[profile_index] * integration_weights[profile_index][gradient_index];
         }
-        let log_rate_sensitivity =
-            -barrier_sensitivity / kbt - partition_sensitivity / reactant_partition;
+        let log_rate_sensitivity = -barrier_sensitivity / kbt - partition_log_sensitivity;
         variance_ln_rate += log_rate_sensitivity * log_rate_sensitivity * sigma * sigma;
     }
     let sigma_ln_k = variance_ln_rate.sqrt();
@@ -794,7 +829,9 @@ fn integrate_profile(
         barrier_error,
         dividing_index: dividing,
         reactant_partition,
+        reactant_log_partition,
         normalized_rate,
+        normalized_log_rate,
         normalized_rate_error,
     })
 }
@@ -1204,6 +1241,77 @@ mod tests {
                 .with_stats(StatsConfig::default().with_min_batches(2)),
         );
         assert!(result.is_ok(), "default configuration returned {result:?}");
+    }
+
+    #[test]
+    fn reactant_log_partition_stays_finite_for_deep_free_energy_wells() {
+        let arcs = [0.0, 1.0, 2.0, 3.0];
+        let gradients = [-800.0, -800.0, 800.0, 820.0];
+        let errors = [0.0; 4];
+        let profile = integrate_profile(&arcs, &gradients, &errors, 1.0).expect("profile");
+
+        let mut naive_half_partition = 0.0_f64;
+        for i in 1..=profile.dividing_index {
+            let ds = arcs[i] - arcs[i - 1];
+            let left = (-profile.free_energy[i - 1]).exp();
+            let right = (-profile.free_energy[i]).exp();
+            naive_half_partition += 0.5 * ds * (left + right);
+        }
+        assert!(!naive_half_partition.is_finite());
+
+        let expected_ln_partition = 800.0 + (4.0 + (-800.0_f64).exp() + (-810.0_f64).exp()).ln();
+        assert_abs_diff_eq!(
+            profile.reactant_log_partition,
+            expected_ln_partition,
+            epsilon = f64::EPSILON * expected_ln_partition.abs()
+        );
+        assert!(profile.normalized_log_rate.is_finite());
+    }
+
+    #[test]
+    fn log_partition_matches_legacy_path_for_well_conditioned_profile() {
+        let arcs = [0.0, 0.5, 1.0, 1.5];
+        let gradients = [0.3, 0.1, -0.4, -0.6];
+        let errors = [0.02, 0.03, 0.01, 0.02];
+        let profile = integrate_profile(&arcs, &gradients, &errors, 1.2).expect("profile");
+
+        let mut legacy_half_partition = 0.0_f64;
+        for i in 1..=profile.dividing_index {
+            let ds = arcs[i] - arcs[i - 1];
+            let left = (-profile.free_energy[i - 1] / 1.2).exp();
+            let right = (-profile.free_energy[i] / 1.2).exp();
+            legacy_half_partition += 0.5 * ds * (left + right);
+        }
+        let legacy_partition = 2.0 * legacy_half_partition;
+        let legacy_rate = (1.2 / TAU).sqrt() * (-profile.barrier / 1.2).exp() / legacy_partition;
+
+        assert_abs_diff_eq!(
+            profile.reactant_partition,
+            legacy_partition,
+            epsilon = f64::EPSILON * legacy_partition.abs()
+        );
+        assert_abs_diff_eq!(
+            profile.normalized_rate,
+            legacy_rate,
+            epsilon = f64::EPSILON * legacy_rate.abs()
+        );
+        assert_abs_diff_eq!(
+            profile.reactant_log_partition,
+            legacy_partition.ln(),
+            epsilon = 16.0 * f64::EPSILON * legacy_partition.ln().abs().max(1.0)
+        );
+    }
+
+    #[test]
+    fn non_finite_profile_input_is_rejected() {
+        let arcs = [0.0, 1.0, 2.0];
+        let gradients = [0.0, f64::NAN, 1.0];
+        let errors = [0.0, 0.0, 0.0];
+        let result = integrate_profile(&arcs, &gradients, &errors, 1.0);
+        assert_eq!(
+            result,
+            Err(FluxError::NonFinite("PAFI integrated free energy"))
+        );
     }
 
     #[test]
