@@ -26,7 +26,7 @@ use rand::{Rng, SeedableRng};
 
 use crate::engine::DynamicsEngine;
 use crate::error::FluxError;
-use crate::stats::StatsConfig;
+use crate::stats::{StatsConfig, batch_means};
 
 /// Configuration for direct Forward Flux Sampling across ordered interfaces.
 #[derive(Clone, Debug, PartialEq)]
@@ -159,7 +159,7 @@ fn capture_point<E: DynamicsEngine + ?Sized>(engine: &E) -> PhasePoint {
     }
 }
 
-fn flux_from_intervals(intervals: &[f64]) -> Result<(f64, f64), FluxError> {
+fn flux_from_intervals(intervals: &[f64], stats: &StatsConfig) -> Result<(f64, f64), FluxError> {
     let n = intervals.len();
     if n < 2 {
         return Err(FluxError::InvalidConfig(
@@ -171,19 +171,14 @@ fn flux_from_intervals(intervals: &[f64]) -> Result<(f64, f64), FluxError> {
             "FFS flux intervals must be finite and positive",
         ));
     }
-    let count = n as f64;
-    let total_time: f64 = intervals.iter().sum();
-    let mean = total_time / count;
-    let variance = intervals
-        .iter()
-        .map(|d| {
-            let centered = d - mean;
-            centered * centered
-        })
-        .sum::<f64>()
-        / (count - 1.0);
-    let flux = count / total_time;
-    let se = flux * variance.sqrt() / (mean * count.sqrt());
+    let interval_est = batch_means(intervals, stats)?;
+    if interval_est.mean <= 0.0 {
+        return Err(FluxError::InvalidConfig(
+            "FFS flux intervals must have positive mean interval",
+        ));
+    }
+    let flux = 1.0 / interval_est.mean;
+    let se = interval_est.standard_error / (interval_est.mean * interval_est.mean);
     if !flux.is_finite() || !se.is_finite() {
         return Err(FluxError::NonFinite("FFS initial flux estimate"));
     }
@@ -292,7 +287,7 @@ where
             }
             if lambda <= lambda_a {
                 armed = true;
-            } else if armed && lambda >= lambda_a {
+            } else if armed && lambda > lambda_a {
                 armed = false;
                 if counting {
                     intervals.push(since_crossing);
@@ -305,7 +300,7 @@ where
                 armed = true;
             }
         }
-        let (initial_flux, initial_flux_se) = flux_from_intervals(&intervals)?;
+        let (initial_flux, initial_flux_se) = flux_from_intervals(&intervals, &config.stats)?;
 
         let mut stage_probabilities = Vec::with_capacity(interfaces.len() - 1);
         let mut stage_ses = Vec::with_capacity(interfaces.len() - 1);
@@ -391,11 +386,13 @@ where
 #[cfg(test)]
 mod tests {
     use super::{TrialCluster, flux_from_intervals, stage_probability};
+    use crate::stats::StatsConfig;
 
     #[test]
     fn flux_from_intervals_matches_hand_calculation() {
         let intervals = [2.0, 3.0, 5.0];
-        let (flux, se) = flux_from_intervals(&intervals).expect("valid intervals");
+        let stats = StatsConfig::default().with_batch_size(1);
+        let (flux, se) = flux_from_intervals(&intervals, &stats).expect("valid intervals");
         let expected_flux = 3.0 / 10.0;
         let mean = 10.0 / 3.0;
         let variance =

@@ -32,8 +32,8 @@ impl ReferenceVerlet {
     fn new() -> Self {
         Self {
             masses: Array1::from_vec(vec![1.0]),
-            positions: Array1::from_vec(vec![-1.0]),
-            velocities: Array1::from_vec(vec![0.0]),
+            positions: Array1::from_vec(vec![-0.8]),
+            velocities: Array1::from_vec(vec![0.15]),
             thermostat: ThermostatConfig::default()
                 .with_gamma(0.0)
                 .with_temperature(0.0),
@@ -145,7 +145,7 @@ impl DynamicsEngine for ReferenceVerlet {
 
 #[test]
 fn native_engine_matches_scripted_reference_on_deterministic_system() {
-    const TOL: f64 = 256.0 * f64::EPSILON;
+    const TRAJECTORY_TOLERANCE: f64 = 256.0 * f64::EPSILON;
     let cfg = NativeConfig::default()
         .with_masses(Array1::from_vec(vec![1.0]))
         .with_thermostat(
@@ -156,10 +156,10 @@ fn native_engine_matches_scripted_reference_on_deterministic_system() {
         .with_seed(77);
     let mut native = NativeEngine::new(QuarticDoubleWell1D, cfg).expect("native engine");
     native
-        .set_positions(Array1::from_vec(vec![-1.0]).view())
+        .set_positions(Array1::from_vec(vec![-0.8]).view())
         .expect("set state");
     native
-        .set_velocities(Array1::from_vec(vec![0.0]).view())
+        .set_velocities(Array1::from_vec(vec![0.15]).view())
         .expect("set velocities");
 
     let mut reference = ReferenceVerlet::new();
@@ -167,10 +167,10 @@ fn native_engine_matches_scripted_reference_on_deterministic_system() {
     for _ in 0..200 {
         let nr = native.step(0.01).expect("native step");
         let rr = reference.step(0.01).expect("ref step");
-        assert!((native.positions()[0] - reference.positions()[0]).abs() <= TOL);
-        assert!((native.velocities()[0] - reference.velocities()[0]).abs() <= TOL);
-        assert!((nr.potential_energy - rr.potential_energy).abs() <= TOL);
-        assert!((nr.kinetic_energy - rr.kinetic_energy).abs() <= TOL);
+        assert!((native.positions()[0] - reference.positions()[0]).abs() <= TRAJECTORY_TOLERANCE);
+        assert!((native.velocities()[0] - reference.velocities()[0]).abs() <= TRAJECTORY_TOLERANCE);
+        assert!((nr.potential_energy - rr.potential_energy).abs() <= TRAJECTORY_TOLERANCE);
+        assert!((nr.kinetic_energy - rr.kinetic_energy).abs() <= TRAJECTORY_TOLERANCE);
     }
 }
 
