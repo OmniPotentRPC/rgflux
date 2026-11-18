@@ -434,4 +434,37 @@ mod tests {
         assert!((p - 0.5).abs() <= f64::EPSILON);
         assert!((se - 0.5).abs() <= f64::EPSILON);
     }
+
+    #[test]
+    fn flux_from_intervals_rejects_non_finite_and_non_positive_intervals() {
+        let stats = StatsConfig::default().with_batch_size(1);
+        for bad in [f64::NAN, f64::INFINITY, 0.0, -1.0] {
+            let err = flux_from_intervals(&[1.0, bad, 2.0], &stats).expect_err("bad interval");
+            assert!(
+                matches!(err, FluxError::InvalidConfig(msg) if msg.contains("finite and positive")),
+                "{bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn flux_from_intervals_rejects_non_finite_standard_error_with_finite_flux() {
+        // Flat series: se = 0 and mean^2 underflows, so se / mean^2 is NaN
+        // while the flux 1 / mean = 1e200 stays finite.
+        let stats = StatsConfig::default().with_batch_size(1);
+        let err = flux_from_intervals(&[1.0e-200; 4], &stats).expect_err("NaN standard error");
+        assert_eq!(err, FluxError::NonFinite("FFS initial flux estimate"));
+    }
+
+    #[test]
+    fn stage_probability_rejects_zero_successes_among_real_trials() {
+        let clusters = [TrialCluster {
+            trials: 3,
+            successes: 0,
+        }; 2];
+        let err = stage_probability(&clusters).expect_err("no successes");
+        assert!(
+            matches!(err, FluxError::InvalidConfig(msg) if msg.contains("at least one successful trial"))
+        );
+    }
 }

@@ -1,5 +1,7 @@
 //! Direct Forward Flux Sampling tests.
 
+use std::cell::Cell;
+
 use ndarray::{Array1, ArrayView1};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
@@ -117,6 +119,7 @@ struct ScriptedFfsEngine {
     force_trial_success: bool,
     flux_script: Option<Vec<f64>>,
     trial_script: Option<TrialScript>,
+    velocity_reads: Cell<usize>,
 }
 
 type TrialScript = fn(f64, usize, u64) -> f64;
@@ -143,6 +146,7 @@ impl ScriptedFfsEngine {
             force_trial_success: false,
             flux_script: None,
             trial_script: None,
+            velocity_reads: Cell::new(0),
         }
     }
 
@@ -210,6 +214,7 @@ impl DynamicsEngine for ScriptedFfsEngine {
     }
 
     fn velocities(&self) -> ArrayView1<'_, f64> {
+        self.velocity_reads.set(self.velocity_reads.get() + 1);
         self.velocities.view()
     }
 
@@ -858,4 +863,117 @@ fn rate_standard_error_propagates_flux_and_every_stage_error() {
     assert_close(estimate.standard_error, rate * relative_variance.sqrt());
     // Each omitted or substituted term would shift the result by far more.
     assert!(estimate.standard_error > rate * (flux_se / flux).hypot(se0 / p0) * 1.01);
+}
+
+fn two_interface_engine() -> ScriptedFfsEngine {
+    ScriptedFfsEngine::new()
+        .with_flux_script(&[0.5, 1.5])
+        .with_trial_script(advance_by_one)
+}
+
+fn config_error(cfg: &FfsConfig) -> String {
+    let mut engine = two_interface_engine();
+    let err = forward_flux_rate(&mut engine, |x| x[0], cfg).expect_err("config must be rejected");
+    format!("{err}")
+}
+
+#[test]
+fn interface_count_boundary_is_two_levels() {
+    let base = scripted_cfg(vec![0.0, 1.0], 7);
+    let mut engine = two_interface_engine();
+    let estimate = forward_flux_rate(&mut engine, |x| x[0], &base).expect("two levels are valid");
+    assert_eq!(estimate.interface_probabilities, vec![1.0]);
+    assert_close(estimate.rate, FLUX_FOUR_OVER_SEVEN);
+
+    for levels in [vec![], vec![0.0]] {
+        let msg = config_error(&base.clone().with_interfaces(levels));
+        assert!(msg.contains("at least two levels"), "{msg}");
+    }
+}
+
+#[test]
+fn trials_per_interface_boundary_is_one() {
+    let base = scripted_cfg(vec![0.0, 1.0], 7);
+    let mut engine = two_interface_engine();
+    let estimate = forward_flux_rate(
+        &mut engine,
+        |x| x[0],
+        &base.clone().with_trials_per_interface(1),
+    )
+    .expect("a single trial is valid");
+    assert_eq!(estimate.interface_probabilities, vec![1.0]);
+
+    let msg = config_error(&base.with_trials_per_interface(0));
+    assert!(
+        msg.contains("trials_per_interface must be positive"),
+        "{msg}"
+    );
+}
+
+#[test]
+fn step_budgets_must_each_be_positive() {
+    let base = scripted_cfg(vec![0.0, 1.0], 7);
+    let msg = config_error(&base.clone().with_max_trial_steps(0));
+    assert!(msg.contains("step budgets must be positive"), "{msg}");
+    let msg = config_error(&base.clone().with_max_flux_steps(0));
+    assert!(msg.contains("step budgets must be positive"), "{msg}");
+
+    let mut engine = two_interface_engine();
+    let estimate = forward_flux_rate(&mut engine, |x| x[0], &base.clone().with_max_trial_steps(1))
+        .expect("one trial step is a valid budget");
+    assert_eq!(estimate.interface_probabilities, vec![1.0]);
+
+    let msg = config_error(&base.with_max_flux_steps(1));
+    assert!(msg.contains("flux budget exceeded"), "{msg}");
+}
+
+#[test]
+fn time_step_must_be_finite_and_positive() {
+    let base = scripted_cfg(vec![0.0, 1.0], 7);
+    for dt in [0.0, -1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        let msg = config_error(&base.clone().with_time_step(dt));
+        assert!(
+            msg.contains("time_step must be finite and positive"),
+            "{dt}: {msg}"
+        );
+    }
+}
+
+fn slow_commitment(origin: f64, step: usize, _token: u64) -> f64 {
+    if step >= 2 {
+        origin + 1.0
+    } else {
+        origin + 0.25
+    }
+}
+
+#[test]
+fn trial_budget_is_exhausted_exactly_when_commitment_takes_longer() {
+    let cfg = scripted_cfg(vec![0.0, 1.0, 2.0], 7);
+    let run = |max_trial_steps: usize| {
+        let mut engine = ScriptedFfsEngine::new()
+            .with_flux_script(&[0.5, 2.0])
+            .with_trial_script(slow_commitment);
+        forward_flux_rate(
+            &mut engine,
+            |x| x[0],
+            &cfg.clone().with_max_trial_steps(max_trial_steps),
+        )
+    };
+    let estimate = run(2).expect("commitment arrives on step 2");
+    assert_eq!(estimate.interface_probabilities, vec![1.0, 1.0]);
+    let err = run(1).expect_err("commitment arrives after step 1");
+    assert!(format!("{err}").contains("trial budget exceeded"));
+}
+
+#[test]
+fn last_stage_does_not_capture_reached_configurations() {
+    let cfg = scripted_cfg(vec![0.0, 1.0, 2.0], 7);
+    let mut engine = ScriptedFfsEngine::new()
+        .with_flux_script(&[0.5, 2.0])
+        .with_trial_script(advance_by_one);
+    let _ = forward_flux_rate(&mut engine, |x| x[0], &cfg).expect("estimate");
+    // One initial capture, four flux crossings, and eight stage-0 successes;
+    // the final stage only counts successes.
+    assert_eq!(engine.velocity_reads.get(), 1 + 4 + 8);
 }
