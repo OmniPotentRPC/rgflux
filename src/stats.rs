@@ -290,30 +290,27 @@ pub fn effective_sample_size(samples: &[f64]) -> Result<f64, FluxError> {
 /// Compute the mean, non-overlapping batch-means standard error, and `n_eff` of `samples`.
 ///
 /// Follows Flegal, Haran, and Jones (2008): `sigma_BM^2 = (b / (a - 1)) * sum (Y_j - Y_bar)^2`
-/// over `a` batches of width `b`, yielding `SE = sqrt(sigma_BM^2 / n)`.
+/// over `a` batches of width `b`, yielding `SE = sqrt(sigma_BM^2 / n)`. A series whose
+/// values all lie within [`SERIES_FLAT_TOL`] of the first sample is that constant:
+/// its mean is the first sample and its standard error is zero.
 pub fn batch_means(samples: &[f64], config: &StatsConfig) -> Result<BatchEstimate, FluxError> {
     validate_samples(samples)?;
     validate_config(config)?;
 
     let n = samples.len();
-    let (mean, max_dev) = mean_and_max_dev(samples);
-    if n == 1 {
-        return Ok(BatchEstimate {
-            mean,
-            standard_error: 0.0,
-            variance: 0.0,
-            batch_count: 1,
-            batch_size: 1,
-            n_samples: 1,
-            n_eff: 1.0,
-            tau_int: 0.5,
-        });
+    let anchor = samples[0];
+    let mut spread = 0.0_f64;
+    for &sample in &samples[1..] {
+        let deviation = (sample - anchor).abs();
+        if deviation > spread {
+            spread = deviation;
+        }
     }
-
-    let scale = 1.0 + mean.abs();
-    if max_dev <= SERIES_FLAT_TOL * scale {
+    // A series constant up to rounding is that constant. Summing identical
+    // non-dyadic values and dividing does not round back to the value.
+    if spread <= SERIES_FLAT_TOL * (1.0 + anchor.abs()) {
         return Ok(BatchEstimate {
-            mean,
+            mean: anchor,
             standard_error: 0.0,
             variance: 0.0,
             batch_count: n,
@@ -323,6 +320,8 @@ pub fn batch_means(samples: &[f64], config: &StatsConfig) -> Result<BatchEstimat
             tau_int: 0.5,
         });
     }
+
+    let (mean, _) = mean_and_max_dev(samples);
 
     let (tau_int, n_eff) = geyer_inefficiency(samples, mean);
 
@@ -528,6 +527,31 @@ mod tests {
         let rep = check_stationarity(&xs, &StatsConfig::default()).expect("stationary");
         assert!(rep.is_stationary);
         assert_eq!(rep.z_score, 0.0);
+    }
+
+    #[test]
+    fn constant_series_is_returned_without_summation_rounding() {
+        for (value, count) in [(0.1_f64, 10_usize), (0.4, 7), (0.3, 3), (-0.7, 11)] {
+            let xs = vec![value; count];
+            let est = batch_means(&xs, &StatsConfig::default()).expect("valid constant series");
+            assert_eq!(est.mean, value, "{count} copies of {value}");
+            assert_eq!(est.standard_error, 0.0);
+            assert_eq!(est.variance, 0.0);
+            assert_eq!(est.batch_count, count);
+            assert_eq!(est.batch_size, 1);
+            assert_eq!(est.n_samples, count);
+        }
+    }
+
+    #[test]
+    fn series_flat_to_rounding_is_its_first_sample() {
+        let anchor = 0.4_f64;
+        let nudged = anchor + 4.0 * f64::EPSILON;
+        let xs = [anchor, nudged, anchor, anchor, nudged, anchor, anchor];
+        let est = batch_means(&xs, &StatsConfig::default()).expect("valid flat series");
+        assert_eq!(est.mean, anchor);
+        assert_eq!(est.standard_error, 0.0);
+        assert_eq!(est.n_eff, 7.0);
     }
 
     #[test]
