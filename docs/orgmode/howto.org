@@ -1,10 +1,343 @@
 #+TITLE: How-to guides
 #+OPTIONS: toc:nil num:nil
 
-* Run constrained Langevin dynamics on a hyperplane
+* Sample holonomic hyperplane mean forces and configurations
 
-Construct a =HyperplaneConstraint= from a unit normal \(\mathbf{n}\) and scalar offset \(c\), attach it to =NativeEngine=, and step with BAOAB + RATTLE. Each =StepReport= carries the holonomic Lagrange multiplier \(\lambda\), whose canonical mean equals \(dF/dc\) @@rst::cite:`sprikFreeEnergyConstrained1998,leimkuhlerGeodesicIntegration2016`@@.
+Construct a =HyperplaneConstraint= from a direction vector and scalar offset \(c\), configure =HyperplaneConfig=, and call =hyperplane::sample_hyperplane= over any =DynamicsEngine= @@rst::cite:`sprikFreeEnergyConstrained1998,leimkuhlerGeodesicIntegration2016`@@. =sample_hyperplane= installs the constraint, runs BAOAB + RATTLE equilibration and production steps, estimates \(\langle \lambda \rangle = dA/dc\) with a block-averaged standard error, retains dividing-surface configurations every =retention_stride= steps, and restores the engine's initial positions, velocities, periodic cell, thermostat, and constraint before returning:
 
-* Estimate a Bennett-Chandler transmission coefficient
+#+begin_src rust
+use ndarray::{Array1, ArrayView1};
+use rgflux::engine::native::{NativeConfig, NativeEngine};
+use rgflux::engine::{DynamicsEngine, HyperplaneConstraint, ThermostatConfig};
+use rgflux::hyperplane::{HyperplaneConfig, sample_hyperplane};
 
-Pass recorded =ReactiveTrajectory= histories to =estimate_bennett_chandler= for engine-free analysis, or call =shoot_bennett_chandler= with a mutable =DynamicsEngine= and dividing-surface configurations to generate and reduce reactive-flux trajectories in one pass @@rst::cite:`bennettMolecularDynamics1977,chandlerStatisticalMechanics1978`@@.
+struct DoubleWell2D;
+
+impl rgsaddle::PointSurface for DoubleWell2D {
+    fn eval(&self, r: ArrayView1<f64>) -> Result<(f64, Array1<f64>), rgsaddle::SaddleError> {
+        let (x, y) = (r[0], r[1]);
+        let well = x * x - 1.0;
+        Ok((
+            0.25 * well * well + 0.5 * y * y,
+            Array1::from_vec(vec![x * well, y]),
+        ))
+    }
+}
+
+fn main() -> Result<(), rgflux::FluxError> {
+    let mut engine = NativeEngine::new(
+        DoubleWell2D,
+        NativeConfig::default()
+            .with_masses(Array1::from_vec(vec![1.0, 1.0]))
+            .with_thermostat(
+                ThermostatConfig::default()
+                    .with_gamma(1.0)
+                    .with_temperature(0.2),
+            )
+            .with_seed(11),
+    )?;
+    engine.set_positions(Array1::from_vec(vec![-0.3, 0.0]).view())?;
+
+    let plane =
+        HyperplaneConstraint::from_direction(Array1::from_vec(vec![1.0, 0.0]).view(), -0.3)?;
+    let cfg = HyperplaneConfig::default()
+        .with_burn_in_steps(100)
+        .with_sample_steps(400)
+        .with_retention_stride(20)
+        .with_time_step(0.01)
+        .with_seed(11);
+
+    let sample = sample_hyperplane(&mut engine, &plane, &cfg)?;
+    assert!(sample.mean_force.is_finite());
+    assert!(sample.standard_error >= 0.0);
+    assert_eq!(sample.configurations.dim(), (20, 2));
+    assert!(engine.constraint().is_none());
+    Ok(())
+}
+#+end_src
+
+* Place a fixed-normal OH-TST dividing hyperplane and evaluate the rate
+
+Pass a seed =HyperplaneConstraint= and =OhtstConfig= to =ohtst::optimize_hyperplane= @@rst::cite:`goswamiAdaptivePruning2026,johannessonOptimizationHyperplanar2001,bligaardOptimizationHyperplanar2005,vineyardFrequencyFactors1957`@@. Even when the seed offset is displaced from the saddle (here \(c_0 = -0.4\) while the barrier sits at \(c^\ddagger = 0\)), =optimize_hyperplane= relaxes into the reactant minimum, brackets and bisects the stationary dividing hyperplane along the seed normal, samples the curvature probe plane, and returns \(k_{\mathrm{OHTST}} = \frac{1}{2\pi}\sqrt{\kappa / \mu}\exp(-\Delta V / k_{\mathrm{B}}T)\) (with \(\mu\) from =rgsaddle::flux_mass=) alongside its delta-method standard error:
+
+#+begin_src rust
+use ndarray::{Array1, ArrayView1};
+use rgflux::engine::native::{NativeConfig, NativeEngine};
+use rgflux::engine::{DynamicsEngine, HyperplaneConstraint, ThermostatConfig};
+use rgflux::ohtst::{OhtstConfig, optimize_hyperplane};
+
+struct ObliqueDoubleWell2D;
+
+impl rgsaddle::PointSurface for ObliqueDoubleWell2D {
+    fn eval(&self, r: ArrayView1<f64>) -> Result<(f64, Array1<f64>), rgsaddle::SaddleError> {
+        let u = 0.6 * r[0] + 0.8 * r[1];
+        let v = -0.8 * r[0] + 0.6 * r[1];
+        let well = u * u - 1.0;
+        let du = u * well;
+        let dv = 2.0 * v;
+        Ok((
+            0.25 * well * well + v * v,
+            Array1::from_vec(vec![0.6 * du - 0.8 * dv, 0.8 * du + 0.6 * dv]),
+        ))
+    }
+}
+
+fn main() -> Result<(), rgflux::FluxError> {
+    let mut engine = NativeEngine::new(
+        ObliqueDoubleWell2D,
+        NativeConfig::default()
+            .with_masses(Array1::from_vec(vec![2.0, 8.0]))
+            .with_thermostat(
+                ThermostatConfig::default()
+                    .with_gamma(1.0)
+                    .with_temperature(0.1),
+            )
+            .with_seed(33),
+    )?;
+    engine.set_positions(Array1::from_vec(vec![-0.6, -0.8]).view())?;
+
+    // Seed normal (3, 4) / 5 = (0.6, 0.8) with a displaced offset c_0 = -0.4.
+    let seed_plane =
+        HyperplaneConstraint::from_direction(Array1::from_vec(vec![3.0, 4.0]).view(), -0.4)?;
+    let cfg = OhtstConfig::default()
+        .with_max_outer_steps(16)
+        .with_max_translation(0.25)
+        .with_burn_in_steps(64)
+        .with_min_sample_steps(128)
+        .with_sample_step_factor(8)
+        .with_time_step(0.01)
+        .with_seed(33);
+
+    let est = optimize_hyperplane(&mut engine, &seed_plane, &cfg)?;
+    assert!(est.plane.offset.abs() < 1e-12);
+    assert!(est.rate > 0.0 && est.standard_error.is_finite());
+    Ok(())
+}
+#+end_src
+
+* Compute a transition rate with direct Forward Flux Sampling (FFS)
+
+Initialize the engine inside reactant basin \(A\) (\(\lambda(\mathbf{x}_0) \le \lambda_0\)) with positive Langevin friction \(\gamma > 0\), specify strictly increasing interfaces \(\lambda_0 < \lambda_1 < \dots < \lambda_n\) in =FfsConfig=, and pass an order-parameter closure \(\lambda(\mathbf{x})\) to =ffs::forward_flux_rate= @@rst::cite:`goswamiEfficientExploration2025,allenSamplingRareSwitching2005,allenSimulatingRareEvents2006,allenForwardFluxEfficiency2006,allenForwardFluxReview2009`@@:
+
+#+begin_src rust
+use ndarray::{Array1, ArrayView1};
+use rgflux::engine::native::{NativeConfig, NativeEngine};
+use rgflux::engine::{DynamicsEngine, ThermostatConfig};
+use rgflux::ffs::{FfsConfig, forward_flux_rate};
+
+struct QuarticDoubleWell1D;
+
+impl rgsaddle::PointSurface for QuarticDoubleWell1D {
+    fn eval(&self, x: ArrayView1<f64>) -> Result<(f64, Array1<f64>), rgsaddle::SaddleError> {
+        let dx = x[0] * x[0] - 1.0;
+        Ok((dx * dx, Array1::from_vec(vec![4.0 * x[0] * dx])))
+    }
+}
+
+fn main() -> Result<(), rgflux::FluxError> {
+    let cfg = NativeConfig::default()
+        .with_masses(Array1::from_vec(vec![1.0]))
+        .with_thermostat(
+            ThermostatConfig::default()
+                .with_gamma(2.0)
+                .with_temperature(0.9),
+        )
+        .with_seed(11);
+    let mut engine = NativeEngine::new(QuarticDoubleWell1D, cfg)?;
+    engine.set_positions(Array1::from_vec(vec![-1.0]).view())?;
+    engine.shoot_velocities(11)?;
+
+    let ffs_cfg = FfsConfig::default()
+        .with_interfaces(vec![-0.8, -0.4, -0.1, 0.2])
+        .with_points_per_interface(16)
+        .with_trials_per_interface(64)
+        .with_max_trial_steps(3_000)
+        .with_max_flux_steps(400_000)
+        .with_burn_in_steps(50)
+        .with_time_step(0.01)
+        .with_seed(11);
+
+    let est = forward_flux_rate(&mut engine, |x| x[0], &ffs_cfg)?;
+    assert!(est.initial_flux > 0.0);
+    assert_eq!(est.interface_probabilities.len(), 3);
+    assert!(est.rate > 0.0 && est.standard_error > 0.0);
+    assert_eq!(engine.positions()[0], -1.0);
+    Ok(())
+}
+#+end_src
+
+* Compute a free-energy profile, barrier and rate along a reaction path (PAFI workflow)
+
+Projected Average Force Integration (PAFI) @@rst::cite:`goswamiEnhancedClimbingImage2026,goswamiReproducibleOrchestration2026,swinburneUnsupervisedCalculation2018`@@ takes the images of a converged minimum-energy path, for example from a nudged elastic band, and returns the free-energy profile \(F(s)\), the barrier \(\Delta F\), the dividing plane, and the normalized rate \(k\) through =pafi::pafi_profile=. The method is described under /Projected Average Force Integration/ in the explanation page and the defaults in the reference page.
+
+The example runs a straight path from the minimum \(x = -1\) to the saddle \(x = 0\) of the widening double well \(V(x, y) = (1 - x^2)^2 + \tfrac{1}{2}(1.5 + 0.5x)y^2\) at \(k_{\mathrm{B}}T = 0.2\), where the exact barrier is \(\Delta F = 1 + \tfrac{1}{2}k_{\mathrm{B}}T \ln 1.5\). It uses 33 planes. The trapezoid rule over the planes biases \(\Delta F\) low by about \(0.0156\,(8/(\text{planes} - 1))^2\) here, which is 0.025 with the default 9 planes (eight standard errors of this short run) and 0.0016 with 33, so the run checks the result within five standard errors.
+
+#+begin_src rust
+use ndarray::{Array1, Array2, ArrayView1};
+use rgflux::engine::ThermostatConfig;
+use rgflux::engine::native::{NativeConfig, NativeEngine};
+use rgflux::pafi::{PafiConfig, pafi_profile};
+use rgflux::stats::StatsConfig;
+
+struct WideningWell2D;
+
+impl rgsaddle::PointSurface for WideningWell2D {
+    fn eval(&self, r: ArrayView1<f64>) -> Result<(f64, Array1<f64>), rgsaddle::SaddleError> {
+        let (x, y) = (r[0], r[1]);
+        let well = 1.0 - x * x;
+        let k = 1.5 + 0.5 * x;
+        Ok((
+            well * well + 0.5 * k * y * y,
+            Array1::from_vec(vec![-4.0 * x * well + 0.25 * y * y, k * y]),
+        ))
+    }
+}
+
+fn main() -> Result<(), rgflux::FluxError> {
+    let temperature = 0.2;
+    let mut engine = NativeEngine::new(
+        WideningWell2D,
+        NativeConfig::default()
+            .with_masses(Array1::from_vec(vec![1.0, 1.0]))
+            .with_thermostat(
+                ThermostatConfig::default()
+                    .with_gamma(1.5)
+                    .with_temperature(temperature),
+            )
+            .with_seed(19),
+    )?;
+
+    // PAFI samples at `config.planes` planes along a spline through these
+    // images. Two images would do for a straight path; a curved path needs
+    // the images of the converged band.
+    let config = PafiConfig::default()
+        .with_planes(33)
+        .with_burn_in_steps(500)
+        .with_sample_steps(8_000)
+        .with_stats(StatsConfig::default().with_min_batches(4))
+        .with_seed(19);
+    let images = 5;
+    let mut path = Array2::<f64>::zeros((images, 2));
+    for k in 0..images {
+        path[[k, 0]] = -1.0 + (k as f64) / ((images - 1) as f64);
+    }
+
+    let profile = pafi_profile(&mut engine, path.view(), &config)?;
+    assert_eq!(profile.arc_lengths.len(), config.planes);
+    assert_eq!(profile.free_energy[0], 0.0);
+    assert_eq!(profile.dividing_index, config.planes - 1);
+
+    let analytic = 1.0 + 0.5 * temperature * 1.5_f64.ln();
+    assert!(profile.barrier_error > 0.0);
+    assert!((profile.barrier - analytic).abs() < 5.0 * profile.barrier_error);
+    assert!(profile.normalized_rate > 0.0 && profile.normalized_rate_error > 0.0);
+    Ok(())
+}
+#+end_src
+
+Points to adapt for a real path:
+
+- *Images*: =path_images= has one row per image and one column per degree of freedom, in the units and ordering of the engine. The planes are placed by the spline, not at the images, so the number of images and =planes= are independent.
+- *Planes and tolerance*: The zero-temperature check integrates \(dV/ds\) over the plane anchors with the trapezoid rule, so its relative error scales as \((\text{planes} - 1)^{-2}\). The default =zero_temperature_tol= of about 2.6% matches the default 9 planes on a path that turns by up to a quarter circle. With fewer planes or a sharper path, raise it with =with_zero_temperature_tol=, or increase =with_planes=. A failing check returns =FluxError::InvalidConfig= before any sampling.
+- *Statistical error*: Set =with_target_error(0.01)= and =with_max_rounds(8)= to repeat sampling in rounds of =sample_steps= until =barrier_error= reaches the target. Reaching =max_rounds= first is not an error, so compare =barrier_error= with the target yourself.
+- *Reproducibility*: The seed of plane \(k\) in round \(r\) is =seed + 4099 * k + 1000003 * r=, so a fixed =with_seed= gives the same profile for a deterministic engine.
+- *Engine*: =pafi_profile_dyn= accepts =&mut dyn DynamicsEngine=. The engine is restored on return, with the stochastic stream the only exception.
+
+* Shoot Bennett-Chandler reactive-flux trajectories and compare with Kramers
+
+Combine =hyperplane::sample_hyperplane= (to harvest thermalized configurations on the dividing surface \(x = 0\)) with =kappa::bennett_chandler::shoot_bennett_chandler= and compare the resulting plateau transmission coefficient against =kappa::kramers_transmission_coefficient= @@rst::cite:`goswamiEfficientExploration2025,bennettMolecularDynamics1977,chandlerStatisticalMechanics1978,kramersBrownianMotion1940`@@:
+
+#+begin_src rust
+use ndarray::{Array1, ArrayView1};
+use rgflux::engine::native::{NativeConfig, NativeEngine};
+use rgflux::engine::{HyperplaneConstraint, ThermostatConfig};
+use rgflux::hyperplane::{HyperplaneConfig, sample_hyperplane};
+use rgflux::kappa::bennett_chandler::{ShootingConfig, shoot_bennett_chandler};
+use rgflux::kappa::kramers_transmission_coefficient;
+
+struct SeparableDoubleWell2D;
+
+impl rgsaddle::PointSurface for SeparableDoubleWell2D {
+    fn eval(&self, r: ArrayView1<f64>) -> Result<(f64, Array1<f64>), rgsaddle::SaddleError> {
+        let (x, y) = (r[0], r[1]);
+        let dx = x * x - 1.0;
+        Ok((dx * dx + y * y, Array1::from_vec(vec![4.0 * x * dx, 2.0 * y])))
+    }
+}
+
+fn main() -> Result<(), rgflux::FluxError> {
+    let gamma = 6.0;
+    let omega_b = 2.0;
+    let kramers = kramers_transmission_coefficient(gamma, omega_b)?;
+
+    let dividing_surface =
+        HyperplaneConstraint::new(Array1::from_vec(vec![1.0, 0.0]), 0.0)?;
+    let mut engine = NativeEngine::new(
+        SeparableDoubleWell2D,
+        NativeConfig::default()
+            .with_masses(Array1::from_vec(vec![1.0, 1.0]))
+            .with_thermostat(
+                ThermostatConfig::default()
+                    .with_gamma(gamma)
+                    .with_temperature(0.08),
+            )
+            .with_seed(42),
+    )?;
+
+    let surface_sample = sample_hyperplane(
+        &mut engine,
+        &dividing_surface,
+        &HyperplaneConfig::default()
+            .with_burn_in_steps(100)
+            .with_sample_steps(400)
+            .with_retention_stride(10)
+            .with_time_step(0.02)
+            .with_seed(42),
+    )?;
+
+    let shoot_cfg = ShootingConfig::default()
+        .with_steps(120)
+        .with_time_step(0.05)
+        .with_antithetic(true)
+        .with_seed(99);
+    let bc = shoot_bennett_chandler(
+        &mut engine,
+        &dividing_surface,
+        surface_sample.configurations.view(),
+        &shoot_cfg,
+    )?;
+
+    assert!(bc.plateau > 0.0 && bc.standard_error > 0.0);
+    assert!(kramers > 0.3 && kramers < 0.31);
+    Ok(())
+}
+#+end_src
+
+* Wrap an =rgmin= objective with =EindirSurface=
+
+Any =eindir_core::DifferentiableObjective<f64>= (such as =rgmin::Oracle=) can be adapted into a =ForceSurface= via =engine::EindirSurface= and passed to =NativeEngine=:
+
+#+begin_src rust
+use ndarray::Array1;
+use rgflux::engine::native::{NativeConfig, NativeEngine};
+use rgflux::engine::{DynamicsEngine, EindirSurface};
+
+fn main() -> Result<(), rgflux::FluxError> {
+    let oracle = rgmin::Oracle::unbounded(2, |x| {
+        let energy = 0.5 * (x[0] * x[0] + 4.0 * x[1] * x[1]);
+        let grad = Array1::from_vec(vec![x[0], 4.0 * x[1]]);
+        (energy, grad)
+    });
+    let surface = EindirSurface::new(oracle);
+    let mut engine = NativeEngine::new(
+        surface,
+        NativeConfig::default()
+            .with_masses(Array1::from_vec(vec![1.0, 2.0]))
+            .with_seed(7),
+    )?;
+    engine.shoot_velocities(7)?;
+    let report = engine.step(0.01)?;
+    assert!(report.potential_energy.is_finite() && report.kinetic_energy.is_finite());
+    Ok(())
+}
+#+end_src
