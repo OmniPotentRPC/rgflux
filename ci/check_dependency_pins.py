@@ -31,10 +31,13 @@ LOCKED_GIT = re.compile(
     r"git\+(?P<url>[^?#]+)\?rev=(?P<rev>[0-9a-f]{40})#(?P<precise>[0-9a-f]{40})"
 )
 TREE_LINE = re.compile(r"(?P<name>\S+) v(?P<version>\S+)(?P<rest>.*)")
+# `lammpc` links liblammpc. The duplicate check runs in the test job, which
+# does not install that library, so the tree stays on the library features.
 TREE_ARGS = [
     "tree",
     "-d",
-    "--all-features",
+    "--features",
+    "rgpot,rgpot-session",
     "--target",
     "all",
     "-e",
