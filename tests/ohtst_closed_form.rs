@@ -15,16 +15,14 @@ mod ohtst_support;
 
 use ohtst_support::*;
 
+fn expected_probe_length(config: &OhtstConfig, separation: f64) -> f64 {
+    f64::min(config.max_translation, 0.5 * separation)
+}
+
 #[test]
 fn rate_matches_harmonic_tst_on_both_sides_of_the_minimum() {
     let expected = harmonic_rate(CURVATURE, 1.0, BARRIER, THERMAL);
-    // (start, normal component, offset the probe plane must take).
-    let cases = [
-        (-HALF_WIDTH, 1.0, -HALF_WIDTH + 0.25),
-        (HALF_WIDTH, 1.0, HALF_WIDTH - 0.25),
-        (-HALF_WIDTH, -1.0, HALF_WIDTH - 0.25),
-    ];
-    for (start, sign, probe_offset) in cases {
+    for (start, sign) in [(-HALF_WIDTH, 1.0), (HALF_WIDTH, 1.0), (-HALF_WIDTH, -1.0)] {
         let mut engine = Scripted::new(
             vec![start],
             vec![1.0],
@@ -32,11 +30,16 @@ fn rate_matches_harmonic_tst_on_both_sides_of_the_minimum() {
             harmonic_force(CURVATURE, sign * start),
         );
         let seed = plane(&[sign], 0.0);
-        let found = estimate(&mut engine, &seed, &quiet());
+        let config = quiet();
+        let found = estimate(&mut engine, &seed, &config);
         assert_close(found.rate, expected, RELATIVE, "rate");
         assert_eq!(found.standard_error, 0.0, "a flat series has no error");
         assert_eq!(found.plane.offset, 0.0);
         assert_eq!(found.plane.normal, seed.normal);
+        let s_min = sign * start;
+        let probe = expected_probe_length(&config, (0.0 - s_min).abs());
+        let toward = if 0.0 >= s_min { 1.0 } else { -1.0 };
+        let probe_offset = s_min + toward * probe;
         assert!(
             engine.log.step_offsets.iter().all(|&c| c == probe_offset),
             "start {start}, normal {sign}: probe plane at {:?}",
@@ -65,11 +68,12 @@ fn reactant_curvature_is_positive_below_the_minimum_coordinate() {
 
 #[test]
 fn probe_length_is_capped_by_the_translation_limit_and_half_the_separation() {
-    // Separation 2: the cap 0.25 binds, then half the separation binds.
-    for (max_translation, probe) in [(0.25, 0.25), (5.0, 1.0)] {
+    // Separation 2: finite-difference probe stays small even for large cap.
+    for max_translation in [0.25, 5.0] {
         let mut engine = well_engine(-HALF_WIDTH);
         let config = quiet().with_max_translation(max_translation);
         let found = estimate(&mut engine, &plane(&[1.0], 0.0), &config);
+        let probe = expected_probe_length(&config, 2.0);
         let offset = -HALF_WIDTH + probe;
         assert!(engine.log.step_offsets.iter().all(|&c| c == offset));
         assert_eq!(engine.log.first_step_positions[0][0], offset);
@@ -90,9 +94,10 @@ fn probe_point_moves_the_minimum_along_the_normal() {
         oblique_well(),
         harmonic_force(CURVATURE, -HALF_WIDTH),
     );
-    estimate(&mut engine, &plane(&[3.0, 4.0], 0.0), &quiet());
+    let config = quiet();
+    estimate(&mut engine, &plane(&[3.0, 4.0], 0.0), &config);
     let start = engine.log.first_step_positions[0].clone();
-    let along = 0.25_f64;
+    let along = expected_probe_length(&config, 2.0);
     assert_close(start[0], -1.2 + 0.6 * along, RELATIVE, "x");
     assert_close(start[1], -1.6 + 0.8 * along, RELATIVE, "y");
 }
@@ -129,24 +134,20 @@ fn flux_mass_rejects_inconsistent_or_unphysical_masses() {
     };
     let seed = plane(&[3.0, 4.0], 0.0);
     let err = error(&mut build(vec![1.0]), &seed, &quiet());
-    assert_eq!(
+    assert!(matches!(
         err,
-        FluxError::Shape {
-            expected: 1,
-            got: 2,
-            context: "OH-TST flux mass"
-        }
-    );
+        FluxError::Surface(message) if message.contains("differ in length")
+    ));
     for masses in [
         vec![-1.0, -1.0],
         vec![f64::INFINITY, f64::INFINITY],
         vec![f64::NAN, 1.0],
     ] {
         let err = error(&mut build(masses), &seed, &quiet());
-        assert_eq!(
+        assert!(matches!(
             err,
-            invalid("OH-TST flux mass metric must be finite and positive")
-        );
+            FluxError::Surface(message) if message.contains("masses must be finite and positive")
+        ));
     }
 }
 
@@ -168,19 +169,25 @@ fn batched() -> OhtstConfig {
 
 #[test]
 fn standard_error_is_the_delta_method_image_of_the_batch_means_error() {
-    // Two batches of four: means `0.5 -/+ 0.1`. Then
-    // `sigma_BM^2 = (4 / 1) * (0.1^2 + 0.1^2) = 0.08`, `SE_lambda = sqrt(0.08 / 8) = 0.1`,
-    // `sigma_ln = 0.5 * 0.1 / 0.5 = 0.1` and `SE = 0.1 * rate`.
+    // Two batches of four: means differ by `±0.1`, so `SE_lambda = 0.1`.
     let mut engine = Scripted::new(
         vec![-HALF_WIDTH],
         vec![1.0],
         well(HALF_WIDTH),
         two_batch_force(0.1),
     );
-    let found = estimate(&mut engine, &plane(&[1.0], 0.0), &batched());
+    let config = batched();
+    let found = estimate(&mut engine, &plane(&[1.0], 0.0), &config);
     let rate = harmonic_rate(CURVATURE, 1.0, BARRIER, THERMAL);
+    let lambda = CURVATURE * expected_probe_length(&config, 2.0);
+    let expected_relative = 0.5 * 0.1 / lambda;
     assert_close(found.rate, rate, RELATIVE, "rate");
-    assert_close(found.standard_error, 0.1 * rate, RELATIVE, "standard error");
+    assert_close(
+        found.standard_error,
+        expected_relative * rate,
+        RELATIVE,
+        "standard error",
+    );
     assert_eq!(engine.log.step_sizes.len(), 8);
 }
 
@@ -195,10 +202,18 @@ fn standard_error_stays_positive_when_the_constraint_force_is_negative() {
             harmonic + if step < 4 { -0.1 } else { 0.1 }
         }),
     );
-    let found = estimate(&mut engine, &plane(&[1.0], 0.0), &batched());
+    let config = batched();
+    let found = estimate(&mut engine, &plane(&[1.0], 0.0), &config);
     let rate = harmonic_rate(CURVATURE, 1.0, BARRIER, THERMAL);
+    let lambda = CURVATURE * expected_probe_length(&config, 2.0);
+    let expected_relative = 0.5 * 0.1 / lambda;
     assert_close(found.rate, rate, RELATIVE, "rate");
-    assert_close(found.standard_error, 0.1 * rate, RELATIVE, "standard error");
+    assert_close(
+        found.standard_error,
+        expected_relative * rate,
+        RELATIVE,
+        "standard error",
+    );
 }
 
 #[test]
@@ -259,8 +274,7 @@ fn rate_scales_with_the_boltzmann_factor_of_the_thermal_energy() {
 
 #[test]
 fn probe_length_follows_the_signed_separation_of_an_off_center_surface() {
-    // Minimum at -1.7 and stationary top at 0.3: separation 2.0 (not the
-    // 1.4 of `0.3 + -1.7`), so the probe is half of it and lies above.
+    // Minimum at -1.7 and stationary top at 0.3: separation is 2.0.
     let mut engine = Scripted::new(
         vec![-1.7],
         vec![1.0],
@@ -270,13 +284,29 @@ fn probe_length_follows_the_signed_separation_of_an_off_center_surface() {
     let config = quiet().with_max_translation(5.0);
     let found = estimate(&mut engine, &plane(&[1.0], 0.3), &config);
     assert_eq!(found.plane.offset, 0.3);
-    let probe_offset = -1.7 + 1.0;
+    let probe_offset = -1.7 + expected_probe_length(&config, 2.0);
     assert!(engine.log.step_offsets.iter().all(|&c| c == probe_offset));
     assert_close(
         found.rate,
         harmonic_rate(CURVATURE, 1.0, BARRIER, THERMAL),
         RELATIVE,
         "rate",
+    );
+}
+
+#[test]
+fn large_translation_does_not_set_the_curvature_probe_step() {
+    let mut engine = well_engine(-HALF_WIDTH);
+    let config = quiet().with_max_translation(50.0).with_time_step(0.01);
+    let _ = estimate(&mut engine, &plane(&[1.0], 0.0), &config);
+    let probe_offset = engine.log.step_offsets[0];
+    assert!(
+        probe_offset > -HALF_WIDTH && probe_offset < 0.0,
+        "probe should remain between minimum and barrier"
+    );
+    assert!(
+        probe_offset - (-HALF_WIDTH) < config.max_translation,
+        "probe should not jump by max_translation"
     );
 }
 

@@ -87,6 +87,11 @@ fn harmonic_tst_rate(barrier: f64, thermal: f64) -> f64 {
     2.0_f64.sqrt() / TAU * (-barrier / thermal).exp()
 }
 
+fn inferred_curvature(rate: f64, barrier: f64, thermal: f64, mu: f64) -> f64 {
+    let prefactor = rate * TAU * (barrier / thermal).exp();
+    mu * prefactor * prefactor
+}
+
 fn within_reported_error(actual: f64, reference: f64, standard_error: f64, coverage: f64) -> bool {
     (actual - reference).abs() <= coverage * standard_error
 }
@@ -191,6 +196,37 @@ fn ohtst_rate_matches_harmonic_tst_and_rgsaddle() -> Result<(), Box<dyn std::err
         rg.0,
         rg.1
     );
+    Ok(())
+}
+
+#[test]
+fn anharmonic_well_curvature_agrees_with_reported_error_from_both_sides() -> Result<(), FluxError> {
+    let (barrier, _, _) = barrier_polynomial();
+    let config = OhtstConfig::default()
+        .with_max_translation(0.05)
+        .with_seed(SEED);
+    let coverage = config.stats.max_z_score;
+    let seed = HyperplaneConstraint::from_direction(Array1::from_vec(vec![1.0]).view(), 0.0)?;
+    let expected_curvature: f64 = 2.0;
+    let arithmetic_roundoff = 4.0 * f64::EPSILON * expected_curvature.abs().max(1.0);
+
+    for start in [-1.0, 1.0] {
+        let mut sampler = engine(HarmonicBarrier, THERMAL)?;
+        sampler.set_positions(Array1::from_vec(vec![start]).view())?;
+        let estimate = optimize_hyperplane(&mut sampler, &seed, &config)?;
+        let inferred = inferred_curvature(estimate.rate, barrier, THERMAL, 1.0);
+        let inferred_error = 2.0 * inferred * estimate.standard_error / estimate.rate;
+        assert!(
+            (inferred - expected_curvature).abs()
+                <= coverage * inferred_error + arithmetic_roundoff,
+            "start {start}: inferred curvature {} ± {} against {} (roundoff {})",
+            inferred,
+            inferred_error,
+            expected_curvature,
+            arithmetic_roundoff
+        );
+    }
+
     Ok(())
 }
 

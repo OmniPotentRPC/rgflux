@@ -48,6 +48,7 @@ use std::f64::consts::TAU;
 
 use ndarray::{Array1, ArrayView1};
 use rgmin::vecops::dot;
+use rgsaddle::flux_mass as saddle_flux_mass;
 
 use crate::engine::{DynamicsEngine, EngineSnapshot, HyperplaneConstraint};
 use crate::error::FluxError;
@@ -224,7 +225,7 @@ fn evaluate_harmonic_rate<E: DynamicsEngine + ?Sized>(
             "OH-TST requires a positive thermal energy k_B * T",
         ));
     }
-    let mu = flux_mass(seed_plane.normal.view(), engine.masses())?;
+    let mu = saddle_flux_mass(seed_plane.normal.view(), engine.masses())?;
     engine.set_constraint(None)?;
 
     let minimum = reactant_minimum(engine, seed_plane, config)?;
@@ -244,7 +245,7 @@ fn evaluate_harmonic_rate<E: DynamicsEngine + ?Sized>(
     let s_min = dot(seed_plane.normal.view(), minimum.view());
     let signed_separation = dividing.offset - s_min;
     let separation = signed_separation.abs();
-    let probe = config.max_translation.min(0.5 * separation);
+    let probe = curvature_probe_step(separation, config);
     if !(probe.is_finite() && probe > 0.0) {
         return Err(FluxError::InvalidConfig(
             "OH-TST curvature probe length vanished",
@@ -474,24 +475,8 @@ fn slope_vanishes(slope: f64) -> bool {
     slope.abs() <= SERIES_FLAT_TOL
 }
 
-fn flux_mass(normal: ArrayView1<'_, f64>, masses: ArrayView1<'_, f64>) -> Result<f64, FluxError> {
-    if normal.len() != masses.len() {
-        return Err(FluxError::Shape {
-            expected: masses.len(),
-            got: normal.len(),
-            context: "OH-TST flux mass",
-        });
-    }
-    let mut metric = 0.0_f64;
-    for (component, mass) in normal.iter().zip(masses.iter()) {
-        metric += component * component / mass;
-    }
-    if !(metric.is_finite() && metric > 0.0) {
-        return Err(FluxError::InvalidConfig(
-            "OH-TST flux mass metric must be finite and positive",
-        ));
-    }
-    Ok(1.0 / metric)
+fn curvature_probe_step(separation: f64, config: &OhtstConfig) -> f64 {
+    f64::min(config.max_translation, 0.5 * separation)
 }
 
 fn curvature_sample_steps(config: &OhtstConfig) -> usize {

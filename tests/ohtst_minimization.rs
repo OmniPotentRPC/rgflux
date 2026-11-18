@@ -9,6 +9,10 @@ mod ohtst_support;
 
 use ohtst_support::*;
 
+fn expected_probe_step(config: &rgflux::ohtst::OhtstConfig) -> f64 {
+    f64::min(config.max_translation, 1.0)
+}
+
 fn plateau(top: f64) -> Potential {
     Box::new(move |x| {
         let reached = x[0].min(top);
@@ -75,13 +79,18 @@ fn minimization_backtracks_past_an_overshooting_step() {
         "rate",
     );
     let first = engine.log.step_offsets[0];
-    assert_close(first, -HALF_WIDTH + 0.25, RELATIVE, "probe offset");
+    assert_close(
+        first,
+        -HALF_WIDTH + expected_probe_step(&quiet()),
+        RELATIVE,
+        "probe offset",
+    );
 }
 
 #[test]
 fn minimization_leaves_a_maximum_toward_smaller_coordinates() {
     // Started on the barrier top the search steps back along the normal and
-    // settles in the well at -2, so the probe sits at -2 + 0.25.
+    // settles in the well at -2.
     let mut engine = Scripted::new(
         vec![0.0],
         vec![1.0],
@@ -97,7 +106,7 @@ fn minimization_leaves_a_maximum_toward_smaller_coordinates() {
     );
     assert_close(
         engine.log.step_offsets[0],
-        -HALF_WIDTH + 0.25,
+        -HALF_WIDTH + expected_probe_step(&quiet()),
         RELATIVE,
         "probe offset",
     );
@@ -165,7 +174,10 @@ fn force_at_the_flatness_tolerance_counts_as_stationary() {
         harmonic_force(CURVATURE, -HALF_WIDTH),
     );
     let found = estimate(&mut engine, &plane(&[1.0], 0.0), &quiet());
-    assert_eq!(engine.log.first_step_positions[0][0], -HALF_WIDTH + 0.25);
+    assert_eq!(
+        engine.log.first_step_positions[0][0],
+        -HALF_WIDTH + expected_probe_step(&quiet())
+    );
     assert!(found.rate > 0.0);
 }
 
