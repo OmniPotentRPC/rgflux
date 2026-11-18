@@ -64,3 +64,10 @@ python3 bench/pafi/analyze.py \
   --output-json bench/pafi/results.json \
   --output-markdown bench/pafi/results.md
 ```
+
+The retained campaign exposed a direct-exponential overflow in rgflux reactant-partition integration. Reproduce the exact rejected seed without changing any method setting:
+
+```sh
+python3 bench/pafi/repro_partition_overflow.py \
+  --native-bin <native-build-dir>/target/release/rgflux-pafi-bench
+```
