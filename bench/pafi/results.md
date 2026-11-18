@@ -2,7 +2,7 @@
 
 ## Exact-quadrature straight-path verdict
 
-There is no common global equilibrium to declare one engine right. The native cutoff dimer is transversely unconfined, so its constrained partition diverges and its exact global free energy is undefined. The rgflux columns below are errors against the explicitly imposed r<4 interacting-basin regularization, not errors against its actual equilibrium. LAMMPS has a finite 20-by-20 transverse periodic domain and is wrong by median maximum per-plane errors of 0.183-0.195 at T=0.05, 0.506-0.514 at T=0.1, and 0.760-0.776 at T=0.2. At 9 planes rgflux rejects every run; at 17 planes its basin-regularized diagnostic errors are 0.099-0.102, 0.269-0.292, and 0.512-0.526.
+There is no common global equilibrium to declare one engine right. The native cutoff dimer is transversely unconfined, so its constrained partition diverges and its exact global free energy is undefined. The rgflux columns below are errors against the explicitly imposed r<4 interacting-basin regularization, not errors against its actual equilibrium. LAMMPS finite-box median maximum per-plane errors are T=0.05: 0.183-0.195, T=0.1: 0.506-0.514, T=0.2: 0.76-0.776. Native basin-regularized diagnostic errors are T=0.05: 0.0987-0.102, T=0.1: 0.269-0.292, T=0.2: 0.512-0.526. The 9-plane native cells reject 216/216 runs.
 
 Each vector is the median signed sampled-minus-exact error at every path plane, from reactant to product. Positive entries put the sampled free energy above the applicable exact quadrature.
 
@@ -26,12 +26,11 @@ Each vector is the median signed sampled-minus-exact error at every path plane, 
 All 1728 planned dimer executions completed with 0 process failures. rgflux retained 361 numerical or quadrature rejections; the reference accepted every execution.
 The vacancy campaign adds 288 executions with 0 process failures and 0 retained rgflux rejections.
 
-- Curved-path agreement improves strongly from 17 to 33 planes. At 33 planes and 256 samples, median maximum profile differences are below 3.7e-6 in every temperature and thread cell.
-- The accepted 17-plane straight profiles differ by 0.029 to 0.062 at 256 samples, exceeding the combined profile standard errors. This cell does not establish profile equivalence.
-- Exact quadrature does not identify a globally correct native result: its unconfined transverse equilibrium is undefined. Against its actual finite periodic equilibrium, LAMMPS has 0.18 to 0.78 maximum profile error. The common interacting-basin comparison is a regularized diagnostic only. The discrepancy is not a units, Boltzmann-constant, Jacobian, plane-spacing, or tangent convention difference.
-- The 191-atom vacancy profiles do not agree: median maximum differences are 0.54 to 0.58 eV, far above combined standard errors and A/A noise. rgflux barriers are about 0.10 to 0.12 eV lower even though independent static minimum and saddle energies agree within 1.0e-11 eV. Increasing from 17 to 33 planes does not remove the discrepancy.
-- Every 9-plane straight run is rejected by the unchanged zero-temperature quadrature tolerance. Curved runs additionally expose a direct-exponential overflow in reactant-partition evaluation.
-- The scalar native surface has no four-thread speedup. Four OpenMP threads slow the two-atom reference case, as expected when scheduling dominates potential work.
+- Curved-path median maximum profile differences change from 3.06e-06-1.54e-05 at 17 planes to 2.68e-07-2.1e-06 at 33 planes.
+- Accepted 17-plane straight profiles have median maximum pairwise differences of 0.0293-0.0622.
+- The native global straight-path equilibrium is undefined. LAMMPS finite-periodic median maximum errors are 0.183-0.776; the common interacting-basin comparison remains a regularized diagnostic.
+- Vacancy median maximum profile differences are 0.554-0.581 eV and barrier differences are 0.095-0.12 eV. Static minimum and saddle differences are 9.32e-12 and 1.02e-12 eV.
+- Rejections split into 216 zero-temperature-tolerance cases, 145 zero-width reactant partitions, 0 genuine exponential overflows, and 0 other cases.
 
 The table reports the largest sample count. Values are medians with interquartile ranges; profile and barrier differences are paired by seed.
 
@@ -124,7 +123,7 @@ This r<4 table is a deliberately imposed common diagnostic, not either engine's 
 
 ### Cost and force calls at the largest sample count
 
-| case | planes | T | threads | rgflux calls/plane | reference calls/plane | rgflux overhead/plane (s) |
+| case | planes | T | threads | measured rgflux calls/plane | derived reference steps/plane | rgflux overhead/plane (s) |
 |---|---:|---:|---:|---:|---:|---:|
 | curved | 17 | 0.05 | 1 | 386 [386, 386] | 384 [384, 384] | 0.0002988 [0.0002981, 0.0003] |
 | curved | 17 | 0.05 | 4 | 386 [386, 386] | 384 [384, 384] | 0.0003054 [0.0002999, 0.0003062] |
@@ -232,88 +231,89 @@ This r<4 table is a deliberately imposed common diagnostic, not either engine's 
 
 | bucket | count | exact error string |
 |---|---:|---|
-| partition overflow | 145 | `invalid configuration: PAFI reactant partition must be finite and positive` |
+| zero_reactant_partition | 145 | `invalid configuration: PAFI reactant partition must be finite and positive` |
 | zero_temperature_tol | 216 | `invalid configuration: PAFI zero-temperature path-force quadrature exceeds tolerance` |
+| genuine_exp_overflow | 0 | none |
 | other | 0 | none |
 
 There are no `other` rejects.
 
 ## Per-cell acceptance
 
-| case | planes | T | threads | samples | rgflux hits | reference hits | zero_temperature_tol | partition overflow | other | Fisher p |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| curved | 17 | 0.05 | 1 | 64 | 8/12 | 12/12 | 0 | 4 | 0 | 0.0932 |
-| curved | 17 | 0.05 | 4 | 64 | 7/12 | 12/12 | 0 | 5 | 0 | 0.0373 |
-| curved | 17 | 0.05 | 1 | 128 | 9/12 | 12/12 | 0 | 3 | 0 | 0.217 |
-| curved | 17 | 0.05 | 4 | 128 | 5/12 | 12/12 | 0 | 7 | 0 | 0.00458 |
-| curved | 17 | 0.05 | 1 | 256 | 7/12 | 12/12 | 0 | 5 | 0 | 0.0373 |
-| curved | 17 | 0.05 | 4 | 256 | 6/12 | 12/12 | 0 | 6 | 0 | 0.0137 |
-| curved | 17 | 0.1 | 1 | 64 | 11/12 | 12/12 | 0 | 1 | 0 | 1 |
-| curved | 17 | 0.1 | 4 | 64 | 7/12 | 12/12 | 0 | 5 | 0 | 0.0373 |
-| curved | 17 | 0.1 | 1 | 128 | 8/12 | 12/12 | 0 | 4 | 0 | 0.0932 |
-| curved | 17 | 0.1 | 4 | 128 | 6/12 | 12/12 | 0 | 6 | 0 | 0.0137 |
-| curved | 17 | 0.1 | 1 | 256 | 9/12 | 12/12 | 0 | 3 | 0 | 0.217 |
-| curved | 17 | 0.1 | 4 | 256 | 9/12 | 12/12 | 0 | 3 | 0 | 0.217 |
-| curved | 17 | 0.2 | 1 | 64 | 10/12 | 12/12 | 0 | 2 | 0 | 0.478 |
-| curved | 17 | 0.2 | 4 | 64 | 10/12 | 12/12 | 0 | 2 | 0 | 0.478 |
-| curved | 17 | 0.2 | 1 | 128 | 9/12 | 12/12 | 0 | 3 | 0 | 0.217 |
-| curved | 17 | 0.2 | 4 | 128 | 7/12 | 12/12 | 0 | 5 | 0 | 0.0373 |
-| curved | 17 | 0.2 | 1 | 256 | 7/12 | 12/12 | 0 | 5 | 0 | 0.0373 |
-| curved | 17 | 0.2 | 4 | 256 | 10/12 | 12/12 | 0 | 2 | 0 | 0.478 |
-| curved | 33 | 0.05 | 1 | 64 | 10/12 | 12/12 | 0 | 2 | 0 | 0.478 |
-| curved | 33 | 0.05 | 4 | 64 | 3/12 | 12/12 | 0 | 9 | 0 | 0.000337 |
-| curved | 33 | 0.05 | 1 | 128 | 9/12 | 12/12 | 0 | 3 | 0 | 0.217 |
-| curved | 33 | 0.05 | 4 | 128 | 8/12 | 12/12 | 0 | 4 | 0 | 0.0932 |
-| curved | 33 | 0.05 | 1 | 256 | 10/12 | 12/12 | 0 | 2 | 0 | 0.478 |
-| curved | 33 | 0.05 | 4 | 256 | 9/12 | 12/12 | 0 | 3 | 0 | 0.217 |
-| curved | 33 | 0.1 | 1 | 64 | 8/12 | 12/12 | 0 | 4 | 0 | 0.0932 |
-| curved | 33 | 0.1 | 4 | 64 | 8/12 | 12/12 | 0 | 4 | 0 | 0.0932 |
-| curved | 33 | 0.1 | 1 | 128 | 6/12 | 12/12 | 0 | 6 | 0 | 0.0137 |
-| curved | 33 | 0.1 | 4 | 128 | 6/12 | 12/12 | 0 | 6 | 0 | 0.0137 |
-| curved | 33 | 0.1 | 1 | 256 | 8/12 | 12/12 | 0 | 4 | 0 | 0.0932 |
-| curved | 33 | 0.1 | 4 | 256 | 7/12 | 12/12 | 0 | 5 | 0 | 0.0373 |
-| curved | 33 | 0.2 | 1 | 64 | 8/12 | 12/12 | 0 | 4 | 0 | 0.0932 |
-| curved | 33 | 0.2 | 4 | 64 | 10/12 | 12/12 | 0 | 2 | 0 | 0.478 |
-| curved | 33 | 0.2 | 1 | 128 | 9/12 | 12/12 | 0 | 3 | 0 | 0.217 |
-| curved | 33 | 0.2 | 4 | 128 | 6/12 | 12/12 | 0 | 6 | 0 | 0.0137 |
-| curved | 33 | 0.2 | 1 | 256 | 8/12 | 12/12 | 0 | 4 | 0 | 0.0932 |
-| curved | 33 | 0.2 | 4 | 256 | 9/12 | 12/12 | 0 | 3 | 0 | 0.217 |
-| straight | 9 | 0.05 | 1 | 64 | 0/12 | 12/12 | 12 | 0 | 0 | 7.4e-07 |
-| straight | 9 | 0.05 | 4 | 64 | 0/12 | 12/12 | 12 | 0 | 0 | 7.4e-07 |
-| straight | 9 | 0.05 | 1 | 128 | 0/12 | 12/12 | 12 | 0 | 0 | 7.4e-07 |
-| straight | 9 | 0.05 | 4 | 128 | 0/12 | 12/12 | 12 | 0 | 0 | 7.4e-07 |
-| straight | 9 | 0.05 | 1 | 256 | 0/12 | 12/12 | 12 | 0 | 0 | 7.4e-07 |
-| straight | 9 | 0.05 | 4 | 256 | 0/12 | 12/12 | 12 | 0 | 0 | 7.4e-07 |
-| straight | 9 | 0.1 | 1 | 64 | 0/12 | 12/12 | 12 | 0 | 0 | 7.4e-07 |
-| straight | 9 | 0.1 | 4 | 64 | 0/12 | 12/12 | 12 | 0 | 0 | 7.4e-07 |
-| straight | 9 | 0.1 | 1 | 128 | 0/12 | 12/12 | 12 | 0 | 0 | 7.4e-07 |
-| straight | 9 | 0.1 | 4 | 128 | 0/12 | 12/12 | 12 | 0 | 0 | 7.4e-07 |
-| straight | 9 | 0.1 | 1 | 256 | 0/12 | 12/12 | 12 | 0 | 0 | 7.4e-07 |
-| straight | 9 | 0.1 | 4 | 256 | 0/12 | 12/12 | 12 | 0 | 0 | 7.4e-07 |
-| straight | 9 | 0.2 | 1 | 64 | 0/12 | 12/12 | 12 | 0 | 0 | 7.4e-07 |
-| straight | 9 | 0.2 | 4 | 64 | 0/12 | 12/12 | 12 | 0 | 0 | 7.4e-07 |
-| straight | 9 | 0.2 | 1 | 128 | 0/12 | 12/12 | 12 | 0 | 0 | 7.4e-07 |
-| straight | 9 | 0.2 | 4 | 128 | 0/12 | 12/12 | 12 | 0 | 0 | 7.4e-07 |
-| straight | 9 | 0.2 | 1 | 256 | 0/12 | 12/12 | 12 | 0 | 0 | 7.4e-07 |
-| straight | 9 | 0.2 | 4 | 256 | 0/12 | 12/12 | 12 | 0 | 0 | 7.4e-07 |
-| straight | 17 | 0.05 | 1 | 64 | 12/12 | 12/12 | 0 | 0 | 0 | 1 |
-| straight | 17 | 0.05 | 4 | 64 | 12/12 | 12/12 | 0 | 0 | 0 | 1 |
-| straight | 17 | 0.05 | 1 | 128 | 12/12 | 12/12 | 0 | 0 | 0 | 1 |
-| straight | 17 | 0.05 | 4 | 128 | 12/12 | 12/12 | 0 | 0 | 0 | 1 |
-| straight | 17 | 0.05 | 1 | 256 | 12/12 | 12/12 | 0 | 0 | 0 | 1 |
-| straight | 17 | 0.05 | 4 | 256 | 12/12 | 12/12 | 0 | 0 | 0 | 1 |
-| straight | 17 | 0.1 | 1 | 64 | 12/12 | 12/12 | 0 | 0 | 0 | 1 |
-| straight | 17 | 0.1 | 4 | 64 | 12/12 | 12/12 | 0 | 0 | 0 | 1 |
-| straight | 17 | 0.1 | 1 | 128 | 12/12 | 12/12 | 0 | 0 | 0 | 1 |
-| straight | 17 | 0.1 | 4 | 128 | 12/12 | 12/12 | 0 | 0 | 0 | 1 |
-| straight | 17 | 0.1 | 1 | 256 | 12/12 | 12/12 | 0 | 0 | 0 | 1 |
-| straight | 17 | 0.1 | 4 | 256 | 12/12 | 12/12 | 0 | 0 | 0 | 1 |
-| straight | 17 | 0.2 | 1 | 64 | 12/12 | 12/12 | 0 | 0 | 0 | 1 |
-| straight | 17 | 0.2 | 4 | 64 | 12/12 | 12/12 | 0 | 0 | 0 | 1 |
-| straight | 17 | 0.2 | 1 | 128 | 12/12 | 12/12 | 0 | 0 | 0 | 1 |
-| straight | 17 | 0.2 | 4 | 128 | 12/12 | 12/12 | 0 | 0 | 0 | 1 |
-| straight | 17 | 0.2 | 1 | 256 | 12/12 | 12/12 | 0 | 0 | 0 | 1 |
-| straight | 17 | 0.2 | 4 | 256 | 12/12 | 12/12 | 0 | 0 | 0 | 1 |
+| case | planes | T | threads | samples | rgflux hits | reference hits | zero_temperature_tol | zero_reactant_partition | genuine_exp_overflow | other | Fisher p |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| curved | 17 | 0.05 | 1 | 64 | 8/12 | 12/12 | 0 | 4 | 0 | 0 | 0.0932 |
+| curved | 17 | 0.05 | 4 | 64 | 7/12 | 12/12 | 0 | 5 | 0 | 0 | 0.0373 |
+| curved | 17 | 0.05 | 1 | 128 | 9/12 | 12/12 | 0 | 3 | 0 | 0 | 0.217 |
+| curved | 17 | 0.05 | 4 | 128 | 5/12 | 12/12 | 0 | 7 | 0 | 0 | 0.00458 |
+| curved | 17 | 0.05 | 1 | 256 | 7/12 | 12/12 | 0 | 5 | 0 | 0 | 0.0373 |
+| curved | 17 | 0.05 | 4 | 256 | 6/12 | 12/12 | 0 | 6 | 0 | 0 | 0.0137 |
+| curved | 17 | 0.1 | 1 | 64 | 11/12 | 12/12 | 0 | 1 | 0 | 0 | 1 |
+| curved | 17 | 0.1 | 4 | 64 | 7/12 | 12/12 | 0 | 5 | 0 | 0 | 0.0373 |
+| curved | 17 | 0.1 | 1 | 128 | 8/12 | 12/12 | 0 | 4 | 0 | 0 | 0.0932 |
+| curved | 17 | 0.1 | 4 | 128 | 6/12 | 12/12 | 0 | 6 | 0 | 0 | 0.0137 |
+| curved | 17 | 0.1 | 1 | 256 | 9/12 | 12/12 | 0 | 3 | 0 | 0 | 0.217 |
+| curved | 17 | 0.1 | 4 | 256 | 9/12 | 12/12 | 0 | 3 | 0 | 0 | 0.217 |
+| curved | 17 | 0.2 | 1 | 64 | 10/12 | 12/12 | 0 | 2 | 0 | 0 | 0.478 |
+| curved | 17 | 0.2 | 4 | 64 | 10/12 | 12/12 | 0 | 2 | 0 | 0 | 0.478 |
+| curved | 17 | 0.2 | 1 | 128 | 9/12 | 12/12 | 0 | 3 | 0 | 0 | 0.217 |
+| curved | 17 | 0.2 | 4 | 128 | 7/12 | 12/12 | 0 | 5 | 0 | 0 | 0.0373 |
+| curved | 17 | 0.2 | 1 | 256 | 7/12 | 12/12 | 0 | 5 | 0 | 0 | 0.0373 |
+| curved | 17 | 0.2 | 4 | 256 | 10/12 | 12/12 | 0 | 2 | 0 | 0 | 0.478 |
+| curved | 33 | 0.05 | 1 | 64 | 10/12 | 12/12 | 0 | 2 | 0 | 0 | 0.478 |
+| curved | 33 | 0.05 | 4 | 64 | 3/12 | 12/12 | 0 | 9 | 0 | 0 | 0.000337 |
+| curved | 33 | 0.05 | 1 | 128 | 9/12 | 12/12 | 0 | 3 | 0 | 0 | 0.217 |
+| curved | 33 | 0.05 | 4 | 128 | 8/12 | 12/12 | 0 | 4 | 0 | 0 | 0.0932 |
+| curved | 33 | 0.05 | 1 | 256 | 10/12 | 12/12 | 0 | 2 | 0 | 0 | 0.478 |
+| curved | 33 | 0.05 | 4 | 256 | 9/12 | 12/12 | 0 | 3 | 0 | 0 | 0.217 |
+| curved | 33 | 0.1 | 1 | 64 | 8/12 | 12/12 | 0 | 4 | 0 | 0 | 0.0932 |
+| curved | 33 | 0.1 | 4 | 64 | 8/12 | 12/12 | 0 | 4 | 0 | 0 | 0.0932 |
+| curved | 33 | 0.1 | 1 | 128 | 6/12 | 12/12 | 0 | 6 | 0 | 0 | 0.0137 |
+| curved | 33 | 0.1 | 4 | 128 | 6/12 | 12/12 | 0 | 6 | 0 | 0 | 0.0137 |
+| curved | 33 | 0.1 | 1 | 256 | 8/12 | 12/12 | 0 | 4 | 0 | 0 | 0.0932 |
+| curved | 33 | 0.1 | 4 | 256 | 7/12 | 12/12 | 0 | 5 | 0 | 0 | 0.0373 |
+| curved | 33 | 0.2 | 1 | 64 | 8/12 | 12/12 | 0 | 4 | 0 | 0 | 0.0932 |
+| curved | 33 | 0.2 | 4 | 64 | 10/12 | 12/12 | 0 | 2 | 0 | 0 | 0.478 |
+| curved | 33 | 0.2 | 1 | 128 | 9/12 | 12/12 | 0 | 3 | 0 | 0 | 0.217 |
+| curved | 33 | 0.2 | 4 | 128 | 6/12 | 12/12 | 0 | 6 | 0 | 0 | 0.0137 |
+| curved | 33 | 0.2 | 1 | 256 | 8/12 | 12/12 | 0 | 4 | 0 | 0 | 0.0932 |
+| curved | 33 | 0.2 | 4 | 256 | 9/12 | 12/12 | 0 | 3 | 0 | 0 | 0.217 |
+| straight | 9 | 0.05 | 1 | 64 | 0/12 | 12/12 | 12 | 0 | 0 | 0 | 7.4e-07 |
+| straight | 9 | 0.05 | 4 | 64 | 0/12 | 12/12 | 12 | 0 | 0 | 0 | 7.4e-07 |
+| straight | 9 | 0.05 | 1 | 128 | 0/12 | 12/12 | 12 | 0 | 0 | 0 | 7.4e-07 |
+| straight | 9 | 0.05 | 4 | 128 | 0/12 | 12/12 | 12 | 0 | 0 | 0 | 7.4e-07 |
+| straight | 9 | 0.05 | 1 | 256 | 0/12 | 12/12 | 12 | 0 | 0 | 0 | 7.4e-07 |
+| straight | 9 | 0.05 | 4 | 256 | 0/12 | 12/12 | 12 | 0 | 0 | 0 | 7.4e-07 |
+| straight | 9 | 0.1 | 1 | 64 | 0/12 | 12/12 | 12 | 0 | 0 | 0 | 7.4e-07 |
+| straight | 9 | 0.1 | 4 | 64 | 0/12 | 12/12 | 12 | 0 | 0 | 0 | 7.4e-07 |
+| straight | 9 | 0.1 | 1 | 128 | 0/12 | 12/12 | 12 | 0 | 0 | 0 | 7.4e-07 |
+| straight | 9 | 0.1 | 4 | 128 | 0/12 | 12/12 | 12 | 0 | 0 | 0 | 7.4e-07 |
+| straight | 9 | 0.1 | 1 | 256 | 0/12 | 12/12 | 12 | 0 | 0 | 0 | 7.4e-07 |
+| straight | 9 | 0.1 | 4 | 256 | 0/12 | 12/12 | 12 | 0 | 0 | 0 | 7.4e-07 |
+| straight | 9 | 0.2 | 1 | 64 | 0/12 | 12/12 | 12 | 0 | 0 | 0 | 7.4e-07 |
+| straight | 9 | 0.2 | 4 | 64 | 0/12 | 12/12 | 12 | 0 | 0 | 0 | 7.4e-07 |
+| straight | 9 | 0.2 | 1 | 128 | 0/12 | 12/12 | 12 | 0 | 0 | 0 | 7.4e-07 |
+| straight | 9 | 0.2 | 4 | 128 | 0/12 | 12/12 | 12 | 0 | 0 | 0 | 7.4e-07 |
+| straight | 9 | 0.2 | 1 | 256 | 0/12 | 12/12 | 12 | 0 | 0 | 0 | 7.4e-07 |
+| straight | 9 | 0.2 | 4 | 256 | 0/12 | 12/12 | 12 | 0 | 0 | 0 | 7.4e-07 |
+| straight | 17 | 0.05 | 1 | 64 | 12/12 | 12/12 | 0 | 0 | 0 | 0 | 1 |
+| straight | 17 | 0.05 | 4 | 64 | 12/12 | 12/12 | 0 | 0 | 0 | 0 | 1 |
+| straight | 17 | 0.05 | 1 | 128 | 12/12 | 12/12 | 0 | 0 | 0 | 0 | 1 |
+| straight | 17 | 0.05 | 4 | 128 | 12/12 | 12/12 | 0 | 0 | 0 | 0 | 1 |
+| straight | 17 | 0.05 | 1 | 256 | 12/12 | 12/12 | 0 | 0 | 0 | 0 | 1 |
+| straight | 17 | 0.05 | 4 | 256 | 12/12 | 12/12 | 0 | 0 | 0 | 0 | 1 |
+| straight | 17 | 0.1 | 1 | 64 | 12/12 | 12/12 | 0 | 0 | 0 | 0 | 1 |
+| straight | 17 | 0.1 | 4 | 64 | 12/12 | 12/12 | 0 | 0 | 0 | 0 | 1 |
+| straight | 17 | 0.1 | 1 | 128 | 12/12 | 12/12 | 0 | 0 | 0 | 0 | 1 |
+| straight | 17 | 0.1 | 4 | 128 | 12/12 | 12/12 | 0 | 0 | 0 | 0 | 1 |
+| straight | 17 | 0.1 | 1 | 256 | 12/12 | 12/12 | 0 | 0 | 0 | 0 | 1 |
+| straight | 17 | 0.1 | 4 | 256 | 12/12 | 12/12 | 0 | 0 | 0 | 0 | 1 |
+| straight | 17 | 0.2 | 1 | 64 | 12/12 | 12/12 | 0 | 0 | 0 | 0 | 1 |
+| straight | 17 | 0.2 | 4 | 64 | 12/12 | 12/12 | 0 | 0 | 0 | 0 | 1 |
+| straight | 17 | 0.2 | 1 | 128 | 12/12 | 12/12 | 0 | 0 | 0 | 0 | 1 |
+| straight | 17 | 0.2 | 4 | 128 | 12/12 | 12/12 | 0 | 0 | 0 | 0 | 1 |
+| straight | 17 | 0.2 | 1 | 256 | 12/12 | 12/12 | 0 | 0 | 0 | 0 | 1 |
+| straight | 17 | 0.2 | 4 | 256 | 12/12 | 12/12 | 0 | 0 | 0 | 0 | 1 |
 
 ## Periodic FCC vacancy hop
 
@@ -321,7 +321,7 @@ The pathway contains 191 atoms and 9 NEB images. The pinned rgsaddle run converg
 
 This is a periodic 3 by 4 by 4 FCC vacancy hop using the same shifted platinum-parameter Morse potential on both sides. rgpot supplies the native link-cell/minimum-image neighbour stack; LAMMPS uses `morse/omp`. The explicit grid is 17 and 33 planes at kBT=0.025, 0.05, and 0.075 eV, with 12 seeds at one and four threads. The native potential time covers the complete rgpot surface call; overhead is the remaining rgflux wall time.
 
-| planes | T (eV) | threads | hits rgflux/reference | max |dF| | combined profile SE | A/A rgflux/reference | barrier rgflux (eV) | barrier reference (eV) | barrier SE rgflux/reference | wall rgflux/reference (s) | calls/plane rgflux/reference | potential/overhead per plane (s) | Fisher p |
+| planes | T (eV) | threads | hits rgflux/reference | max |dF| | combined profile SE | A/A rgflux/reference | barrier rgflux (eV) | barrier reference (eV) | barrier SE rgflux/reference | wall rgflux/reference (s) | measured calls/derived steps per plane | potential/overhead per plane (s) | Fisher p |
 |---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
 | 17 | 0.025 | 1 | 12/12 | 0.5713 [0.5605, 0.5781] | 0.007976 | 0.01108 [0.01097, 0.01243]/0.03014 [0.01925, 0.06003] | 2.103 [2.102, 2.109] | 2.226 [2.219, 2.231] | 0.002259/0.002688 | 1.569 [1.556, 1.59]/1.335 [1.325, 1.344] | 386 [386, 386]/384 [384, 384] | 0.07297 [0.07235, 0.07394]/0.01929 [0.01919, 0.01958] | 1 |
 | 17 | 0.025 | 4 | 12/12 | 0.5658 [0.5598, 0.5697] | 0.005459 | 0.01534 [0.008511, 0.01652]/0.0202 [0.01659, 0.02233] | 2.102 [2.099, 2.107] | 2.218 [2.214, 2.224] | 0.002564/0.002321 | 1.548 [1.545, 1.56]/0.7485 [0.7406, 0.7742] | 386 [386, 386]/384 [384, 384] | 0.07186 [0.0717, 0.07241]/0.01925 [0.0192, 0.01933] | 1 |
@@ -353,15 +353,15 @@ The straight case stretches a symmetric Morse dimer from r=1.0 to r=1.4. The cur
 
 Plane counts are explicit in every cell: 9 and 17 for the straight path, 17 and 33 for the curved path. The zero-temperature tolerance remains 0.01. Rejections are retained in the hit-rate table and are never rerun.
 
-The matched setting was declared before collection: dt=0.002, friction=1.0, identical burn-in and production counts, and the same seeds, path nodes, masses, potential constants, and plane counts. Other settings use each implementation's documented defaults. Runs are release builds, fixed to the declared CPU sets, with one and four requested threads. rgflux currently evaluates this scalar pair surface on one effective thread; that limitation is recorded rather than hidden.
+The matched setting was declared before collection: dt=0.002, friction=1.0, identical burn-in and production counts, and the same seeds, path nodes, masses, potential constants, and plane counts. Other settings use each implementation's documented defaults. Runs are release builds, fixed to the declared CPU sets, with one and four requested threads. Both native benchmark surfaces used one effective evaluation thread; the harness requires that value explicitly.
 
-The reported LAMMPS force-call count covers thermalization and production integration steps. Setup `run 0` evaluations are not exposed by the reference driver. rgflux reports measured potential calls and separates wall time accumulated inside the potential from integrator overhead.
+LAMMPS values are derived integration-step counts: planes times configured thermalization plus production steps. They are not measured force-call counters, and setup evaluations are excluded. rgflux reports measured potential invocations and separates wall time accumulated inside the potential from integrator overhead.
 
-Static minimum energies agree exactly in accepted paired runs. The largest median saddle-energy discrepancy is below 3e-11. At 256 samples, rgflux reports 386 force calls per accepted plane and the reference reports 384 integration-step calls per plane; the two extra native calls cover path/setup evaluation.
+Across accepted headline cells, the largest median static minimum and saddle differences are 0 and 2.76e-11. Measured rgflux calls per plane are [386.0]; derived reference integration steps per plane are [384.0].
 
 ## Reproduction of the rgflux numerical rejection
 
-A fixed curved-path seed can make direct evaluation of `exp(-F/kBT)` overflow while integrating the reactant partition. `repro_partition_overflow.py` checks the retained `PAFI reactant partition must be finite and positive` rejection. It requires the release native executable through `--native-bin`. The benchmark does not alter rgflux or retry the rejected run.
+Seed 1036330 selects dividing plane index zero. The reactant integration loop therefore has no interval, leaving a finite partition of zero; no exponential is evaluated. The cargo test `reproduces_zero_width_reactant_partition` and `repro_zero_width_reactant_partition.py` check the retained `PAFI reactant partition must be finite and positive` rejection. No retained cell is classified as a genuine exponential overflow.
 
 ## Reproduction
 
