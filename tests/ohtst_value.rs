@@ -93,7 +93,10 @@ fn inferred_curvature(rate: f64, barrier: f64, thermal: f64, mu: f64) -> f64 {
 }
 
 fn within_reported_error(actual: f64, reference: f64, standard_error: f64, coverage: f64) -> bool {
-    (actual - reference).abs() <= coverage * standard_error
+    // The analytic reference path evaluates one multiply and one add on this
+    // value scale; four ulps cover that binary64 roundoff envelope.
+    let arithmetic_roundoff = 4.0 * f64::EPSILON * reference.abs().max(1.0);
+    (actual - reference).abs() <= coverage * standard_error + arithmetic_roundoff
 }
 
 fn within_harmonic_rate_error(

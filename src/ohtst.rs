@@ -495,3 +495,165 @@ fn probe_sampling(config: &OhtstConfig) -> HyperplaneConfig {
         .with_seed(config.seed)
         .with_stats(config.stats.clone())
 }
+
+#[cfg(test)]
+mod tests {
+    use std::f64::consts::TAU;
+
+    use ndarray::{Array1, ArrayView1};
+
+    use super::{OhtstConfig, optimize_hyperplane};
+    use crate::engine::native::{NativeConfig, NativeEngine};
+    use crate::engine::{DynamicsEngine, ForceSurface, HyperplaneConstraint, ThermostatConfig};
+    use crate::error::FluxError;
+
+    struct SymmetricDoubleWell;
+
+    impl ForceSurface for SymmetricDoubleWell {
+        fn energy_and_forces(
+            &self,
+            positions: ArrayView1<'_, f64>,
+            _cell: Option<&[f64; 9]>,
+        ) -> Result<(f64, Array1<f64>), FluxError> {
+            if positions.len() != 1 {
+                return Err(FluxError::Shape {
+                    expected: 1,
+                    got: positions.len(),
+                    context: "SymmetricDoubleWell positions",
+                });
+            }
+            let x = positions[0];
+            let well = x * x - 1.0;
+            Ok((0.25 * well * well, Array1::from_vec(vec![-x * well])))
+        }
+    }
+
+    fn symmetric_engine(
+        position: f64,
+        mass: f64,
+    ) -> Result<NativeEngine<SymmetricDoubleWell>, FluxError> {
+        let mut engine = NativeEngine::new(
+            SymmetricDoubleWell,
+            NativeConfig::default()
+                .with_masses(Array1::from_vec(vec![mass]))
+                .with_thermostat(
+                    ThermostatConfig::default()
+                        .with_gamma(1.0)
+                        .with_temperature(0.1),
+                )
+                .with_seed(41),
+        )?;
+        engine.set_positions(Array1::from_vec(vec![position]).view())?;
+        Ok(engine)
+    }
+
+    #[test]
+    fn curvature_is_positive_from_both_sides_of_the_reactant_minimum() -> Result<(), FluxError> {
+        let seed = HyperplaneConstraint::from_direction(Array1::from_vec(vec![1.0]).view(), 0.0)?;
+        let config = OhtstConfig::default()
+            .with_max_outer_steps(32)
+            .with_max_translation(0.1)
+            .with_burn_in_steps(0)
+            .with_min_sample_steps(2)
+            .with_sample_step_factor(0)
+            .with_retention_stride(1)
+            .with_time_step(0.01)
+            .with_seed(41);
+        let mut rates = Vec::new();
+        for start in [-1.0, 1.0] {
+            let mut engine = symmetric_engine(start, 1.0)?;
+            let estimate = optimize_hyperplane(&mut engine, &seed, &config)?;
+            rates.push(estimate.rate);
+        }
+        let probe = f64::min(config.max_translation, 0.5);
+        let probe_position = 1.0 - probe;
+        let probe_slope = probe_position * (1.0 - probe_position * probe_position);
+        let expected_kappa = probe_slope / probe;
+        let expected_rate = expected_kappa.sqrt() / TAU * (-0.25_f64 / 0.1).exp();
+        for rate in rates {
+            assert!((rate - expected_rate).abs() <= 128.0 * f64::EPSILON * expected_rate);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn unequal_mass_2d_normal_uses_inverse_mass_metric() -> Result<(), FluxError> {
+        struct ObliqueWell;
+        impl ForceSurface for ObliqueWell {
+            fn energy_and_forces(
+                &self,
+                positions: ArrayView1<'_, f64>,
+                _cell: Option<&[f64; 9]>,
+            ) -> Result<(f64, Array1<f64>), FluxError> {
+                if positions.len() != 2 {
+                    return Err(FluxError::Shape {
+                        expected: 2,
+                        got: positions.len(),
+                        context: "ObliqueWell positions",
+                    });
+                }
+                let u = 0.6 * positions[0] + 0.8 * positions[1];
+                let gap = u * u - 4.0;
+                let slope = -0.5 * u * gap;
+                Ok((
+                    gap * gap / 16.0,
+                    Array1::from_vec(vec![0.6 * slope, 0.8 * slope]),
+                ))
+            }
+        }
+        let mut engine = NativeEngine::new(
+            ObliqueWell,
+            NativeConfig::default()
+                .with_masses(Array1::from_vec(vec![2.0, 8.0]))
+                .with_thermostat(
+                    ThermostatConfig::default()
+                        .with_gamma(1.0)
+                        .with_temperature(0.25),
+                )
+                .with_seed(17),
+        )?;
+        engine.set_positions(Array1::from_vec(vec![-1.2, -1.6]).view())?;
+        let seed =
+            HyperplaneConstraint::from_direction(Array1::from_vec(vec![3.0, 4.0]).view(), 0.0)?;
+        let estimate =
+            optimize_hyperplane(&mut engine, &seed, &OhtstConfig::default().with_seed(17))?;
+        let mu = rgsaddle::flux_mass(
+            Array1::from_vec(vec![3.0, 4.0]).view(),
+            Array1::from_vec(vec![2.0, 8.0]).view(),
+        )?;
+        assert!((mu - (1.0 / 0.26)).abs() <= 64.0 * f64::EPSILON * mu);
+        let probe = f64::min(0.25, 1.0);
+        let u_probe = -2.0 + probe;
+        let slope = -0.5 * u_probe * (u_probe * u_probe - 4.0);
+        let kappa = -slope / probe;
+        let barrier: f64 = 1.0;
+        let thermal: f64 = 0.25;
+        let expected_rate = (kappa / mu).sqrt() / TAU * (-barrier / thermal).exp();
+        let swapped_mu = rgsaddle::flux_mass(
+            Array1::from_vec(vec![3.0, 4.0]).view(),
+            Array1::from_vec(vec![8.0, 2.0]).view(),
+        )?;
+        let plain_metric_mu = 1.0;
+        let swapped_rate = (kappa / swapped_mu).sqrt() / TAU * (-barrier / thermal).exp();
+        let plain_metric_rate = (kappa / plain_metric_mu).sqrt() / TAU * (-barrier / thermal).exp();
+        let roundoff = 64.0 * f64::EPSILON * expected_rate.abs().max(1.0);
+        let coverage = 6.0;
+        assert!(
+            (estimate.rate - expected_rate).abs() <= coverage * estimate.standard_error + roundoff,
+            "rate {} ± {} against closed form {} (roundoff {})",
+            estimate.rate,
+            estimate.standard_error,
+            expected_rate,
+            roundoff
+        );
+        assert!(
+            (estimate.rate - swapped_rate).abs() > coverage * estimate.standard_error,
+            "swapped-mass metric should not match"
+        );
+        assert!(
+            (estimate.rate - plain_metric_rate).abs() > coverage * estimate.standard_error,
+            "plain metric should not match"
+        );
+        Ok(())
+    }
+}
