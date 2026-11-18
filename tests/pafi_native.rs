@@ -321,12 +321,17 @@ fn sampling_refinement_restores_analytic_coverage() {
 fn arc_lengths_reflect_mass_weighting() {
     let thermal = 0.03_f64;
     let planes = 9usize;
-    let path = tilted_path(-1.0, 0.0, planes, 0.3);
+    let slope = 0.3_f64;
+    let path = tilted_path(-1.0, 0.0, planes, slope);
+    let spacing = 1.0 / ((planes - 1) as f64);
+    let maximum_gradient_curvature = 24.0_f64;
+    let trapezoid_error_bound = spacing * spacing * maximum_gradient_curvature / 12.0;
     let config = PafiConfig::default()
         .with_planes(planes)
         .with_burn_in_steps(200)
         .with_sample_steps(64)
         .with_time_step(0.001)
+        .with_zero_temperature_tol(trapezoid_error_bound)
         .with_stats(StatsConfig::default().with_min_batches(2))
         .with_seed(99);
 
