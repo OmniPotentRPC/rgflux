@@ -62,12 +62,16 @@ jobs:
       # tests every feature, including lammpc.
       - name: Test (library features)
         run: cargo test --locked --features rgpot,rgpot-session --verbose
+      - name: Doc tests (library features)
+        run: cargo test --locked --doc --features rgpot,rgpot-session --verbose
       - name: Public items are documented
         run: cargo rustdoc --locked --features rgpot,rgpot-session -- -D missing_docs
       - name: Rustdoc builds without warnings
         run: ci/check_rustdoc.sh
       - name: Reject machine-local paths
         run: python3 docs/check_paths.py
+      - name: Verify documentation structure, stubs, and DOIs
+        run: python3 ci/check_links.py
       - name: Git dependencies pin a full rev and resolve once
         run: python3 ci/check_dependency_pins.py
 
@@ -150,6 +154,11 @@ jobs:
           LAMMPC_LIB_DIR: ${{ runner.temp }}/lammpc-install/lib/x86_64-linux-gnu
           LD_LIBRARY_PATH: ${{ runner.temp }}/lammpc-install/lib/x86_64-linux-gnu:${{ runner.temp }}/lammpc/.lammps-install/lib:${{ env.LD_LIBRARY_PATH }}
         run: cargo test --locked --all-features --verbose
+      - name: Doc tests (all features)
+        env:
+          LAMMPC_LIB_DIR: ${{ runner.temp }}/lammpc-install/lib/x86_64-linux-gnu
+          LD_LIBRARY_PATH: ${{ runner.temp }}/lammpc-install/lib/x86_64-linux-gnu:${{ runner.temp }}/lammpc/.lammps-install/lib:${{ env.LD_LIBRARY_PATH }}
+        run: cargo test --locked --doc --all-features --verbose
       - name: Rustdoc (all features)
         env:
           LAMMPC_LIB_DIR: ${{ runner.temp }}/lammpc-install/lib/x86_64-linux-gnu
