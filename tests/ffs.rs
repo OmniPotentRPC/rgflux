@@ -6,6 +6,8 @@ use ndarray::{Array1, ArrayView1};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use rgflux::FluxError;
+#[cfg(feature = "lammpc")]
+use rgflux::engine::lammpc::{LammpcConfig, LammpcEngine};
 use rgflux::engine::native::{NativeConfig, NativeEngine};
 use rgflux::engine::{DynamicsEngine, HyperplaneConstraint, StepReport, ThermostatConfig};
 use rgflux::ffs::{FfsConfig, forward_flux_rate};
@@ -976,4 +978,58 @@ fn last_stage_does_not_capture_reached_configurations() {
     // One initial capture, four flux crossings, and eight stage-0 successes;
     // the final stage only counts successes.
     assert_eq!(engine.velocity_reads.get(), 1 + 4 + 8);
+}
+
+#[cfg(feature = "lammpc")]
+#[test]
+fn lammpc_engine_supports_ffs_smoke_run_on_lj_dimer() {
+    let mut engine = LammpcEngine::new(
+        LammpcConfig::default()
+            .with_atomic_numbers(vec![18, 18])
+            .with_type_to_atomic_number(vec![18])
+            .with_masses_by_type(vec![39.948])
+            .with_pair_style("lj/cut 8.5".to_string())
+            .with_pair_coeffs(vec!["1 1 0.010323 3.405".to_string()])
+            .with_seed(20261118)
+            .with_thermostat(
+                ThermostatConfig::default()
+                    .with_gamma(0.0)
+                    .with_temperature(0.25)
+                    .with_boltzmann(1.0),
+            ),
+    )
+    .expect("lammpc engine");
+
+    let start = Array1::from_vec(vec![0.0, 0.0, 0.0, 3.2, 0.0, 0.0]);
+    engine.set_positions(start.view()).expect("set positions");
+    engine.shoot_velocities(20261118).expect("shoot");
+
+    let cfg = FfsConfig::default()
+        .with_interfaces(vec![3.4, 3.8, 4.2])
+        .with_points_per_interface(8)
+        .with_trials_per_interface(16)
+        .with_max_trial_steps(1_000)
+        .with_max_flux_steps(50_000)
+        .with_time_step(0.001)
+        .with_seed(20261118);
+    let estimate = forward_flux_rate(
+        &mut engine,
+        |x| {
+            let dx = x[3] - x[0];
+            let dy = x[4] - x[1];
+            let dz = x[5] - x[2];
+            (dx * dx + dy * dy + dz * dz).sqrt()
+        },
+        &cfg,
+    )
+    .expect("ffs");
+
+    assert!(estimate.initial_flux.is_finite() && estimate.initial_flux > 0.0);
+    assert!(estimate.rate.is_finite() && estimate.rate > 0.0);
+    assert!(
+        estimate
+            .interface_probabilities
+            .iter()
+            .all(|p| p.is_finite() && *p > 0.0)
+    );
 }

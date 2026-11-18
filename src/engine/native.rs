@@ -59,13 +59,13 @@
 use ndarray::{Array1, ArrayView1};
 use rand::SeedableRng;
 use rand::rngs::StdRng;
-use rgmin::vecops::{dot, nrm2};
+use rgmin::vecops::dot;
 
 use crate::engine::{
-    DynamicsEngine, ForceSurface, HYPERPLANE_PROJECTION_TOL, HyperplaneConstraint, StepReport,
-    SurfaceVelocityPolicy, ThermostatConfig, inv_mass_metric_norm, reflect_velocity_in_place,
-    sample_maxwell_boltzmann_with_rng, validate_finite_slice, validate_masses,
-    validate_unit_normal,
+    DynamicsEngine, ForceSurface, HyperplaneConstraint, StepReport, SurfaceVelocityPolicy,
+    ThermostatConfig, inv_mass_metric_norm, rattle_velocities_in_place, reflect_velocity_in_place,
+    sample_maxwell_boltzmann_with_rng, shake_positions_in_place, validate_finite_slice,
+    validate_masses, validate_unit_normal,
 };
 use crate::error::FluxError;
 
@@ -202,47 +202,6 @@ impl<S: ForceSurface> NativeEngine<S> {
         Ok(())
     }
 
-    fn shake_positions_in_place(
-        positions: &mut Array1<f64>,
-        masses: ArrayView1<'_, f64>,
-        plane: &HyperplaneConstraint,
-    ) -> Result<(), FluxError> {
-        let z = inv_mass_metric_norm(plane.normal.view(), masses);
-        // Two-pass linear SHAKE refinement eliminates residual inner-product rounding.
-        for _ in 0..2 {
-            let sigma = dot(plane.normal.view(), positions.view()) - plane.offset;
-            let alpha = sigma / z;
-            for i in 0..positions.len() {
-                positions[i] -= alpha * plane.normal[i] / masses[i];
-            }
-        }
-        let scale = 1.0 + plane.offset.abs() + nrm2(positions.view());
-        let rel_residual =
-            (dot(plane.normal.view(), positions.view()) - plane.offset).abs() / scale;
-        if rel_residual > HYPERPLANE_PROJECTION_TOL {
-            return Err(FluxError::ConstraintViolation {
-                residual: rel_residual,
-                tolerance: HYPERPLANE_PROJECTION_TOL,
-            });
-        }
-        Ok(())
-    }
-
-    fn rattle_velocities_in_place(
-        velocities: &mut Array1<f64>,
-        masses: ArrayView1<'_, f64>,
-        plane: &HyperplaneConstraint,
-    ) {
-        let z = inv_mass_metric_norm(plane.normal.view(), masses);
-        for _ in 0..2 {
-            let nv = dot(plane.normal.view(), velocities.view());
-            let beta = nv / z;
-            for i in 0..velocities.len() {
-                velocities[i] -= beta * plane.normal[i] / masses[i];
-            }
-        }
-    }
-
     fn constraint_lagrange_multiplier(
         forces: ArrayView1<'_, f64>,
         masses: ArrayView1<'_, f64>,
@@ -258,8 +217,8 @@ impl<S: ForceSurface> NativeEngine<S> {
 
     fn project_state_onto_constraint(&mut self) -> Result<(), FluxError> {
         if let Some(plane) = &self.constraint {
-            Self::shake_positions_in_place(&mut self.positions, self.masses.view(), plane)?;
-            Self::rattle_velocities_in_place(&mut self.velocities, self.masses.view(), plane);
+            shake_positions_in_place(&mut self.positions, self.masses.view(), plane)?;
+            rattle_velocities_in_place(&mut self.velocities, self.masses.view(), plane);
             self.cached_eval = None;
         }
         Ok(())
@@ -288,7 +247,7 @@ impl<S: ForceSurface> NativeEngine<S> {
                     for i in 0..self.positions.len() {
                         self.positions[i] += half_dt * self.velocities[i];
                     }
-                    Self::shake_positions_in_place(&mut self.positions, self.masses.view(), plane)?;
+                    shake_positions_in_place(&mut self.positions, self.masses.view(), plane)?;
                 }
                 ConstraintProjection::Shake => {
                     let mut trial = Array1::zeros(self.positions.len());
@@ -296,7 +255,7 @@ impl<S: ForceSurface> NativeEngine<S> {
                         trial[i] = self.positions[i] + half_dt * self.velocities[i];
                     }
                     let mut projected = trial.clone();
-                    Self::shake_positions_in_place(&mut projected, self.masses.view(), plane)?;
+                    shake_positions_in_place(&mut projected, self.masses.view(), plane)?;
                     for i in 0..self.positions.len() {
                         self.velocities[i] += (projected[i] - trial[i]) / half_dt;
                     }
@@ -334,7 +293,7 @@ impl<S: ForceSurface> DynamicsEngine for NativeEngine<S> {
         self.positions.assign(&positions);
         self.cached_eval = None;
         if let Some(plane) = &self.constraint {
-            Self::shake_positions_in_place(&mut self.positions, self.masses.view(), plane)?;
+            shake_positions_in_place(&mut self.positions, self.masses.view(), plane)?;
         }
         Ok(())
     }
@@ -354,7 +313,7 @@ impl<S: ForceSurface> DynamicsEngine for NativeEngine<S> {
         validate_finite_slice(velocities, "NativeEngine velocities")?;
         self.velocities.assign(&velocities);
         if let Some(plane) = &self.constraint {
-            Self::rattle_velocities_in_place(&mut self.velocities, self.masses.view(), plane);
+            rattle_velocities_in_place(&mut self.velocities, self.masses.view(), plane);
         }
         Ok(())
     }
@@ -423,9 +382,9 @@ impl<S: ForceSurface> DynamicsEngine for NativeEngine<S> {
         let half_dt = 0.5 * dt;
 
         if let Some(plane) = &self.constraint {
-            Self::shake_positions_in_place(&mut self.positions, self.masses.view(), plane)?;
+            shake_positions_in_place(&mut self.positions, self.masses.view(), plane)?;
             if self.projection == ConstraintProjection::Rattle {
-                Self::rattle_velocities_in_place(&mut self.velocities, self.masses.view(), plane);
+                rattle_velocities_in_place(&mut self.velocities, self.masses.view(), plane);
             }
         }
 
@@ -437,7 +396,7 @@ impl<S: ForceSurface> DynamicsEngine for NativeEngine<S> {
         if let Some(plane) = &self.constraint
             && self.projection == ConstraintProjection::Rattle
         {
-            Self::rattle_velocities_in_place(&mut self.velocities, self.masses.view(), plane);
+            rattle_velocities_in_place(&mut self.velocities, self.masses.view(), plane);
         }
 
         // A: first half drift (+ SHAKE on hyperplane if active).
@@ -461,7 +420,7 @@ impl<S: ForceSurface> DynamicsEngine for NativeEngine<S> {
             if let Some(plane) = &self.constraint
                 && self.projection == ConstraintProjection::Rattle
             {
-                Self::rattle_velocities_in_place(&mut self.velocities, self.masses.view(), plane);
+                rattle_velocities_in_place(&mut self.velocities, self.masses.view(), plane);
             }
         }
 
@@ -476,7 +435,7 @@ impl<S: ForceSurface> DynamicsEngine for NativeEngine<S> {
 
         let constraint_force = if let Some(plane) = &self.constraint {
             let lambda = Self::constraint_lagrange_multiplier(f1.view(), self.masses.view(), plane);
-            Self::rattle_velocities_in_place(&mut self.velocities, self.masses.view(), plane);
+            rattle_velocities_in_place(&mut self.velocities, self.masses.view(), plane);
             Some(lambda)
         } else {
             None
@@ -502,7 +461,7 @@ impl<S: ForceSurface> DynamicsEngine for NativeEngine<S> {
         self.velocities =
             sample_maxwell_boltzmann_with_rng(self.masses.view(), kbt, &mut shoot_rng);
         if let Some(plane) = &self.constraint {
-            Self::rattle_velocities_in_place(&mut self.velocities, self.masses.view(), plane);
+            rattle_velocities_in_place(&mut self.velocities, self.masses.view(), plane);
         }
         self.rng = StdRng::seed_from_u64(seed ^ SHOOT_NOISE_STREAM_MIX);
         Ok(())

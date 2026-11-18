@@ -5,9 +5,13 @@ use rgflux::engine::native::{NativeConfig, NativeEngine};
 use rgflux::engine::{
     DynamicsEngine, HyperplaneConstraint, StepReport, SurfaceVelocityPolicy, ThermostatConfig,
 };
+#[cfg(feature = "lammpc")]
+use rgflux::stats::{StatsConfig, batch_means};
 
 #[cfg(feature = "rgpot-session")]
 use rgflux::FluxError;
+#[cfg(feature = "lammpc")]
+use rgflux::engine::lammpc::{LammpcConfig, LammpcEngine};
 
 struct QuarticDoubleWell1D;
 
@@ -198,4 +202,154 @@ fn session_engine_contract_is_compatible_with_cross_harness_glue() {
         Err(FluxError::BackendUnavailable(_)) => {}
         Err(err) => panic!("unexpected session step error: {err:?}"),
     }
+}
+
+#[cfg(feature = "lammpc")]
+struct LjDimerSurface {
+    epsilon_ev: f64,
+    sigma_angstrom: f64,
+}
+
+#[cfg(feature = "lammpc")]
+impl rgsaddle::PointSurface for LjDimerSurface {
+    fn eval(&self, x: ArrayView1<f64>) -> Result<(f64, Array1<f64>), rgsaddle::SaddleError> {
+        let dx = x[3] - x[0];
+        let dy = x[4] - x[1];
+        let dz = x[5] - x[2];
+        let r2 = dx * dx + dy * dy + dz * dz;
+        let r = r2.sqrt();
+        let sr = self.sigma_angstrom / r;
+        let sr2 = sr * sr;
+        let sr6 = sr2 * sr2 * sr2;
+        let sr12 = sr6 * sr6;
+        let energy = 4.0 * self.epsilon_ev * (sr12 - sr6);
+        let prefactor = 24.0 * self.epsilon_ev * (2.0 * sr12 - sr6) / (r * r);
+        let mut gradient = Array1::zeros(6);
+        gradient[0] = prefactor * dx;
+        gradient[1] = prefactor * dy;
+        gradient[2] = prefactor * dz;
+        gradient[3] = -gradient[0];
+        gradient[4] = -gradient[1];
+        gradient[5] = -gradient[2];
+        Ok((energy, gradient))
+    }
+}
+
+#[cfg(feature = "lammpc")]
+#[test]
+fn lammpc_langevin_temperature_agrees_with_target_and_native() {
+    const TARGET_TEMPERATURE: f64 = 0.25;
+    const BOLTZMANN: f64 = 1.0;
+    const DT: f64 = 0.001;
+    const BURN_IN: usize = 1_000;
+    const SAMPLES: usize = 1_200;
+    const ARGON_MASS_AMU: f64 = 39.948;
+    const ARGON_Z: i32 = 18;
+    const EPSILON_EV: f64 = 0.010_323;
+    const SIGMA_ANGSTROM: f64 = 3.405;
+    const SIGMA_BAND: f64 = 3.0;
+
+    let plane = HyperplaneConstraint::from_direction(
+        Array1::from_vec(vec![-1.0, 0.0, 0.0, 1.0, 0.0, 0.0]).view(),
+        4.2,
+    )
+    .expect("plane");
+
+    let mk_native = || {
+        NativeEngine::new(
+            LjDimerSurface {
+                epsilon_ev: EPSILON_EV,
+                sigma_angstrom: SIGMA_ANGSTROM,
+            },
+            NativeConfig::default()
+                .with_masses(Array1::from_vec(vec![
+                    ARGON_MASS_AMU,
+                    ARGON_MASS_AMU,
+                    ARGON_MASS_AMU,
+                    ARGON_MASS_AMU,
+                    ARGON_MASS_AMU,
+                    ARGON_MASS_AMU,
+                ]))
+                .with_constraint(plane.clone())
+                .with_seed(100)
+                .with_thermostat(
+                    ThermostatConfig::default()
+                        .with_gamma(1.0)
+                        .with_temperature(TARGET_TEMPERATURE)
+                        .with_boltzmann(BOLTZMANN),
+                ),
+        )
+        .expect("native")
+    };
+
+    let mk_lammpc = || {
+        LammpcEngine::new(
+            LammpcConfig::default()
+                .with_atomic_numbers(vec![ARGON_Z, ARGON_Z])
+                .with_type_to_atomic_number(vec![ARGON_Z])
+                .with_masses_by_type(vec![ARGON_MASS_AMU])
+                .with_pair_style("lj/cut 8.5".to_string())
+                .with_pair_coeffs(vec![format!("1 1 {} {}", EPSILON_EV, SIGMA_ANGSTROM)])
+                .with_constraint(plane.clone())
+                .with_seed(100)
+                .with_thermostat(
+                    ThermostatConfig::default()
+                        .with_gamma(1.0)
+                        .with_temperature(TARGET_TEMPERATURE)
+                        .with_boltzmann(BOLTZMANN),
+                ),
+        )
+        .expect("lammpc")
+    };
+
+    let mut native = mk_native();
+    let mut lammpc = mk_lammpc();
+    let start = Array1::from_vec(vec![0.0, 0.0, 0.0, 4.2, 0.0, 0.0]);
+    native.set_positions(start.view()).expect("native pos");
+    lammpc.set_positions(start.view()).expect("lammpc pos");
+    native.shoot_velocities(100).expect("native shoot");
+    lammpc.shoot_velocities(100).expect("lammpc shoot");
+
+    for _ in 0..BURN_IN {
+        native.step(DT).expect("native burn");
+        lammpc.step(DT).expect("lammpc burn");
+    }
+
+    // lammpc's constrained thermostat path removes rigid translation plus one
+    // plane mode for a two-atom system, leaving an effective thermal count of 3.
+    let dof = 3.0;
+    let mut native_t = Vec::with_capacity(SAMPLES);
+    let mut lammpc_t = Vec::with_capacity(SAMPLES);
+    for _ in 0..SAMPLES {
+        let nr = native.step(DT).expect("native sample");
+        let lr = lammpc.step(DT).expect("lammpc sample");
+        native_t.push((2.0 * nr.kinetic_energy) / (dof * BOLTZMANN));
+        lammpc_t.push((2.0 * lr.kinetic_energy) / (dof * BOLTZMANN));
+    }
+
+    let stats_cfg = StatsConfig::default().with_batch_size(200);
+    let native_est = batch_means(&native_t, &stats_cfg).expect("native stats");
+    let lammpc_est = batch_means(&lammpc_t, &stats_cfg).expect("lammpc stats");
+    println!(
+        "lammpc_mean_temperature={} lammpc_standard_error={} native_mean_temperature={} native_standard_error={}",
+        lammpc_est.mean, lammpc_est.standard_error, native_est.mean, native_est.standard_error
+    );
+
+    assert!(
+        (lammpc_est.mean - TARGET_TEMPERATURE).abs() <= SIGMA_BAND * lammpc_est.standard_error,
+        "lammpc mean={} se={} target={}",
+        lammpc_est.mean,
+        lammpc_est.standard_error,
+        TARGET_TEMPERATURE
+    );
+    let combined = (native_est.standard_error.powi(2) + lammpc_est.standard_error.powi(2)).sqrt();
+    assert!(
+        (lammpc_est.mean - native_est.mean).abs() <= SIGMA_BAND * combined,
+        "lammpc mean={} se={} native mean={} se={} combined={}",
+        lammpc_est.mean,
+        lammpc_est.standard_error,
+        native_est.mean,
+        native_est.standard_error,
+        combined
+    );
 }
