@@ -4,5 +4,17 @@ recreated only when the step error is a lammpc backend error. Another
 step error, including an unavailable backend, does not recreate the
 session. Timesteps are compared relatively. =pair_style=, =pair_coeffs=,
 =boundary= and =suffix= reject non-ASCII text, NULs, newlines, carriage
-returns, and semicolons. =extra_setup= rejects a first token of =shell=,
-=include=, =jump= or =python=.
+returns, and semicolons. =extra_setup= omits empty lines and lines made
+only of spaces and tabs. A line of only a newline, carriage return,
+vertical tab, or form feed is rejected. Every other line must be ASCII.
+Leading spaces and tabs are kept, and the first word must be =neighbor=,
+=neigh_modify=, =comm_modify= or =pair_modify=. Non-ASCII text, a NUL,
+a newline, a carriage return, and a semicolon are rejected before the
+forbidden-word scan. The words =if=, =partition=, =shell=, =jump=,
+=python=, =label= and =next= are rejected when the command-text
+check has passed, as is =include= except as the =neigh_modify=
+keyword followed by a group id. When the scan finds no forbidden
+word, quotes, =$=, =&=, =#=, and ASCII controls other than tab are
+rejected. An engine whose session cannot be recreated after a lammpc
+error is poisoned. Later fallible methods and force evaluation return
+an error. Infallible getters return the last accepted state.
