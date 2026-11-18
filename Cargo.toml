@@ -1,0 +1,46 @@
+[package]
+name = "rgflux"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+license = "MIT"
+description = "Rare-event kinetics over rgsaddle and rgmin: PAFI, OH-TST, hyperplane sampling, Bennett-Chandler recrossing, FFS and rate networks."
+repository = "https://github.com/OmniPotentRPC/rgflux"
+readme = "README.md"
+authors = ["Rohit Goswami <rgoswami@ieee.org>"]
+keywords = ["kinetics", "transition-state", "rare-events", "molecular-dynamics"]
+categories = ["science"]
+
+[lib]
+crate-type = ["lib"]
+
+[features]
+default = []
+# Static PES adapter over rgpot-core's DLPack potential callback ABI,
+# consumed by the native BAOAB integrator.
+rgpot = ["dep:rgpot-core"]
+# Engine-agnostic MD session adapter wrapping rgpot's MdSession / CAbiMdSession
+# contract ("openmm", "nblib", "lammps").
+rgpot-session = ["dep:rgpot-core"]
+
+[dependencies]
+# Git dependencies pin a full 40-hex commit on develop with the exact
+# crate version at that revision, so downstream consumers unify one copy.
+rgsaddle = { version = "=0.5.0", git = "https://github.com/OmniPotentRPC/rgsaddle", rev = "92a74493d16364a1ba8542a63598ce8bcee5387c", default-features = false }
+rgmin = { version = "=0.6.0", git = "https://github.com/OmniPotentRPC/rgmin", rev = "eb8d3e4123183bd3f5ca82852332eeddb5d17f54", default-features = false }
+rgpot-core = { version = "=3.7.0", git = "https://github.com/OmniPotentRPC/rgpot", rev = "424629e5ba9c0948b8d6224f5b49c014ffb4ac7c", optional = true }
+eindir-core = "0.6.0"
+ndarray = "0.17"
+rand = "0.9"
+thiserror = "2"
+
+[dev-dependencies]
+approx = "0.5"
+proptest = "1.6"
+
+[patch.crates-io]
+# Unify rgsaddle's crates.io rgmin dependency onto the pinned develop revision.
+rgmin = { git = "https://github.com/OmniPotentRPC/rgmin", rev = "eb8d3e4123183bd3f5ca82852332eeddb5d17f54" }
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(kani)"] }
