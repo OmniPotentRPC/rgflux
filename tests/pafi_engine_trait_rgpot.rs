@@ -139,7 +139,9 @@ fn pafi_runs_unchanged_on_native_and_rgpot_backed_engines() {
             ),
     )
     .expect("native engine");
-    native.shoot_velocities(9).expect("native initial velocities");
+    native
+        .shoot_velocities(9)
+        .expect("native initial velocities");
     let native_profile = pafi_profile_dyn(&mut native, path.view(), &config).expect("native pafi");
 
     let state = Box::new(CallbackState {
@@ -174,8 +176,8 @@ fn pafi_runs_unchanged_on_native_and_rgpot_backed_engines() {
     let rgpot_profile =
         pafi_profile_dyn(&mut rgpot_engine, path.view(), &config).expect("rgpot pafi");
 
-    let barrier_sigma = (native_profile.barrier_error.powi(2) + rgpot_profile.barrier_error.powi(2))
-        .sqrt();
+    let barrier_sigma =
+        (native_profile.barrier_error.powi(2) + rgpot_profile.barrier_error.powi(2)).sqrt();
     let z_barrier = (native_profile.barrier - rgpot_profile.barrier).abs() / barrier_sigma;
     assert!(
         z_barrier <= 2.0,
@@ -190,7 +192,8 @@ fn pafi_runs_unchanged_on_native_and_rgpot_backed_engines() {
     let rate_sigma = (native_profile.normalized_rate_error.powi(2)
         + rgpot_profile.normalized_rate_error.powi(2))
     .sqrt();
-    let z_rate = (native_profile.normalized_rate - rgpot_profile.normalized_rate).abs() / rate_sigma;
+    let z_rate =
+        (native_profile.normalized_rate - rgpot_profile.normalized_rate).abs() / rate_sigma;
     assert!(
         z_rate <= 2.0,
         "rate native {:.8e} ± {:.8e}, rgpot {:.8e} ± {:.8e}, z={:.4}",
