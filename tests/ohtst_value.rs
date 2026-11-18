@@ -87,6 +87,17 @@ fn harmonic_tst_rate(barrier: f64, thermal: f64) -> f64 {
     2.0_f64.sqrt() / TAU * (-barrier / thermal).exp()
 }
 
+fn inferred_curvature(rate: f64, barrier: f64, thermal: f64, mu: f64) -> f64 {
+    let prefactor = rate * TAU * (barrier / thermal).exp();
+    mu * prefactor * prefactor
+}
+
+/// Residual of sending the closed-form rate back through [`inferred_curvature`].
+fn closed_form_curvature_roundoff(barrier: f64, thermal: f64, mu: f64, curvature: f64) -> f64 {
+    let closed = (curvature / mu).sqrt() / TAU * (-barrier / thermal).exp();
+    (inferred_curvature(closed, barrier, thermal, mu) - curvature).abs()
+}
+
 fn within_reported_error(actual: f64, reference: f64, standard_error: f64, coverage: f64) -> bool {
     (actual - reference).abs() <= coverage * standard_error
 }
@@ -191,6 +202,41 @@ fn ohtst_rate_matches_harmonic_tst_and_rgsaddle() -> Result<(), Box<dyn std::err
         rg.0,
         rg.1
     );
+    Ok(())
+}
+
+#[test]
+fn anharmonic_well_curvature_matches_from_both_basins() -> Result<(), FluxError> {
+    let (barrier, _, _) = barrier_polynomial();
+    let config = OhtstConfig::default()
+        .with_max_translation(0.05)
+        .with_seed(SEED);
+    let coverage = config.stats.max_z_score;
+    let seed = HyperplaneConstraint::from_direction(Array1::from_vec(vec![1.0]).view(), 0.0)?;
+    let expected_curvature = 2.0;
+    let mu = 1.0;
+    // This sample is flat, so the reported standard error is zero. The
+    // allowance is the residual of sending the closed-form rate back through
+    // the same inversion. The delta-method factor 2 κ / rate carries a
+    // non-zero standard error when the sample is not flat.
+    let roundoff = closed_form_curvature_roundoff(barrier, THERMAL, mu, expected_curvature);
+
+    for start in [-1.0, 1.0] {
+        let mut sampler = engine(HarmonicBarrier, THERMAL)?;
+        sampler.set_positions(Array1::from_vec(vec![start]).view())?;
+        let estimate = optimize_hyperplane(&mut sampler, &seed, &config)?;
+        let inferred = inferred_curvature(estimate.rate, barrier, THERMAL, mu);
+        let inferred_error = 2.0 * inferred * estimate.standard_error / estimate.rate;
+        let gap = (inferred - expected_curvature).abs();
+        let allowance = coverage * inferred_error + roundoff;
+        assert!(
+            gap <= allowance,
+            "start {start}: inferred curvature {inferred} ± {inferred_error} \
+             against {expected_curvature} (roundoff {roundoff}, gap {gap}, \
+             allowance {allowance})"
+        );
+    }
+
     Ok(())
 }
 

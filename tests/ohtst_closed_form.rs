@@ -109,11 +109,21 @@ fn flux_mass_weights_the_normal_by_inverse_masses() {
     let found = estimate(&mut engine, &plane(&[3.0, 4.0], 0.0), &quiet());
     let metric = 0.36 / 2.0 + 0.64 / 8.0;
     assert_close(metric, 0.26, RELATIVE, "hand value");
-    assert_close(
-        found.rate,
-        harmonic_rate(CURVATURE, 1.0 / metric, BARRIER, THERMAL),
-        RELATIVE,
-        "rate",
+    let expected = harmonic_rate(CURVATURE, 1.0 / metric, BARRIER, THERMAL);
+    assert_close(found.rate, expected, RELATIVE, "rate");
+    let rate = found.rate;
+    // The inverse-mass rate stays away from swapped masses and from mu = 1.
+    let swapped = 0.64 / 2.0 + 0.36 / 8.0;
+    let swapped_rate = harmonic_rate(CURVATURE, 1.0 / swapped, BARRIER, THERMAL);
+    let euclidean_rate = harmonic_rate(CURVATURE, 1.0, BARRIER, THERMAL);
+    let separation = RELATIVE * expected.abs().max(1.0);
+    assert!(
+        (rate - swapped_rate).abs() > separation,
+        "swapped-mass rate {swapped_rate} is not separated from {rate}"
+    );
+    assert!(
+        (rate - euclidean_rate).abs() > separation,
+        "Euclidean rate {euclidean_rate} is not separated from {rate}"
     );
 }
 
