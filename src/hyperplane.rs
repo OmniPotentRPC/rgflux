@@ -31,7 +31,7 @@ use ndarray::Array2;
 
 use crate::engine::DynamicsEngine;
 use crate::error::FluxError;
-use crate::stats::StatsConfig;
+use crate::stats::{StatsConfig, batch_means};
 
 /// Configuration for sampling free-energy gradients and configurations on a hyperplane.
 #[derive(Clone, Debug, PartialEq)]
@@ -89,11 +89,80 @@ pub struct HyperplaneSample {
 
 /// Sample a hyperplane through `engine` (implementation moves from rgsaddle).
 pub fn sample_hyperplane<E: DynamicsEngine + ?Sized>(
-    _engine: &mut E,
-    _plane: &HyperplaneConstraint,
-    _config: &HyperplaneConfig,
+    engine: &mut E,
+    plane: &HyperplaneConstraint,
+    config: &HyperplaneConfig,
 ) -> Result<HyperplaneSample, FluxError> {
-    Err(FluxError::Unimplemented(
-        "hyperplane: implementation moves from rgsaddle",
-    ))
+    if config.retention_stride == 0 {
+        return Err(FluxError::InvalidConfig(
+            "HyperplaneConfig::retention_stride must be at least 1",
+        ));
+    }
+    if config.sample_steps < 2 {
+        return Err(FluxError::InvalidConfig(
+            "HyperplaneConfig::sample_steps must be at least 2",
+        ));
+    }
+    if !config.time_step.is_finite() || config.time_step <= 0.0 {
+        return Err(FluxError::InvalidConfig(
+            "HyperplaneConfig::time_step must be finite and positive",
+        ));
+    }
+    if plane.normal.len() != engine.dof() {
+        return Err(FluxError::Shape {
+            expected: engine.dof(),
+            got: plane.normal.len(),
+            context: "hyperplane dimension",
+        });
+    }
+
+    let previous_constraint = engine.constraint().cloned();
+    let previous_thermostat = *engine.thermostat();
+    let previous_positions = engine.positions().to_owned();
+    let previous_velocities = engine.velocities().to_owned();
+
+    let result = (|| -> Result<HyperplaneSample, FluxError> {
+        engine.set_constraint(Some(plane.clone()))?;
+        engine.shoot_velocities(config.seed)?;
+
+        for _ in 0..config.burn_in_steps {
+            let _ = engine.step(config.time_step)?;
+        }
+
+        let mut force_series = Vec::with_capacity(config.sample_steps);
+        let mut retained_flat = Vec::new();
+        let mut retained_count = 0_usize;
+        for step_idx in 0..config.sample_steps {
+            let report = engine.step(config.time_step)?;
+            let lambda = report.constraint_force.ok_or(FluxError::InvalidConfig(
+                "DynamicsEngine::step must report constraint_force when constrained",
+            ))?;
+            if !lambda.is_finite() {
+                return Err(FluxError::NonFinite("hyperplane constraint force"));
+            }
+            force_series.push(lambda);
+
+            if step_idx % config.retention_stride == 0 {
+                retained_flat.extend(engine.positions().iter().copied());
+                retained_count += 1;
+            }
+        }
+
+        let estimate = batch_means(&force_series, &config.stats)?;
+        let configurations = Array2::from_shape_vec((retained_count, engine.dof()), retained_flat)
+            .map_err(|_| FluxError::InvalidConfig("failed to reshape retained configurations"))?;
+        Ok(HyperplaneSample {
+            plane: plane.clone(),
+            mean_force: estimate.mean,
+            standard_error: estimate.standard_error,
+            configurations,
+        })
+    })();
+
+    let _ = engine.set_constraint(previous_constraint);
+    let _ = engine.set_thermostat(previous_thermostat);
+    let _ = engine.set_positions(previous_positions.view());
+    let _ = engine.set_velocities(previous_velocities.view());
+
+    result
 }
