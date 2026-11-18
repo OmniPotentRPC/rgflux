@@ -206,17 +206,19 @@ fn build_plane_geometries(
 
         let mut anchor = Array1::<f64>::zeros(path_images.ncols());
         let mut tangent = Array1::<f64>::zeros(path_images.ncols());
+        let mut normal_raw = Array1::<f64>::zeros(path_images.ncols());
         for j in 0..path_images.ncols() {
             let x0 = path_images[[seg, j]];
             let x1 = path_images[[seg + 1, j]];
             anchor[j] = x0 + t * (x1 - x0);
             tangent[j] = (x1 - x0) / ds;
+            normal_raw[j] = masses[j] * tangent[j];
         }
-        let tangent_norm = nrm2(tangent.view());
-        if !tangent_norm.is_finite() || tangent_norm <= f64::MIN_POSITIVE.sqrt() {
-            return Err(FluxError::InvalidConfig("PAFI tangent norm underflowed"));
+        let normal_norm = nrm2(normal_raw.view());
+        if !normal_norm.is_finite() || normal_norm <= f64::MIN_POSITIVE.sqrt() {
+            return Err(FluxError::InvalidConfig("PAFI normal norm underflowed"));
         }
-        let normal = tangent.mapv(|v| v / tangent_norm);
+        let normal = normal_raw.mapv(|v| v / normal_norm);
         anchors.push(anchor);
         normals.push(normal);
         arcs.push(target_arc);
