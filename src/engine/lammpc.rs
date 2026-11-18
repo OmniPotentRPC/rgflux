@@ -173,7 +173,10 @@ pub struct LammpcConfig {
     pub pair_coeffs: Vec<String>,
     /// Optional setup commands without embedded command separators.
     ///
-    /// `shell` and `include` directives are rejected.
+    /// Each line must be ASCII and start with `neighbor`, `neigh_modify`,
+    /// `comm_modify` or `pair_modify`. Lines that mention `if`, `partition`,
+    /// `shell`, `include`, `jump`, `python`, `label` or `next` as a word, or
+    /// contain quotes, `$`, `&` or `#`, are rejected.
     pub extra_setup: Vec<String>,
     /// LAMMPS boundary arguments without NULs, newlines, or command separators.
     pub boundary: String,
@@ -1022,25 +1025,75 @@ fn validate_lammps_command_text(value: &str, field: &'static str) -> Result<(), 
     Ok(())
 }
 
+const EXTRA_SETUP_FIELD: &str = "LammpcConfig::extra_setup";
+
+/// Setup directives `extra_setup` may start with. Each one tunes how LAMMPS
+/// evaluates the configured pair style on the live system and takes only
+/// numbers and keywords: none reads a file, spawns a process, or branches.
+///
+/// - `neighbor`: skin distance and list style, the usual tuning knob for
+///   the engine's short restart-free runs.
+/// - `neigh_modify`: rebuild frequency and delay, the companion of
+///   `neighbor` when forces are re-evaluated after every position update.
+/// - `comm_modify`: ghost cutoff, needed when a pair cutoff plus skin
+///   exceeds the default communication cutoff in small periodic cells.
+/// - `pair_modify`: `shift`, `mix` and tail correction for the configured
+///   `pair_style`, which `pair_style` and `pair_coeff` cannot express.
+const ALLOWED_EXTRA_SETUP_DIRECTIVES: [&str; 4] =
+    ["neighbor", "neigh_modify", "comm_modify", "pair_modify"];
+
+/// LAMMPS commands that run a process, read another script, branch, loop or
+/// run Python. A line mentioning any of them as a word is rejected even when
+/// the first token is allowed.
+const FORBIDDEN_EXTRA_SETUP_WORDS: [&str; 8] = [
+    "if",
+    "partition",
+    "shell",
+    "include",
+    "jump",
+    "python",
+    "label",
+    "next",
+];
+
 fn validate_extra_setup_directive(command: &str) -> Result<(), FluxError> {
-    let Some(first_token) = command.split_whitespace().next() else {
+    // LAMMPS `utf8_subst` turns U+200B, U+2060, U+2063 and U+FEFF into spaces,
+    // so a non-ASCII byte can split or hide a directive name.
+    if !command.is_ascii() {
+        return Err(FluxError::InvalidLammpcCommand {
+            field: EXTRA_SETUP_FIELD,
+        });
+    }
+    // Split on every non-word byte so `shell#touch`, `"shell` and `x,shell`
+    // all expose the `shell` word.
+    for word in command.split(|c: char| !c.is_ascii_alphanumeric() && c != '_') {
+        if let Some(directive) = FORBIDDEN_EXTRA_SETUP_WORDS
+            .iter()
+            .copied()
+            .find(|forbidden| word.eq_ignore_ascii_case(forbidden))
+        {
+            return Err(FluxError::ForbiddenLammpcDirective {
+                field: EXTRA_SETUP_FIELD,
+                directive,
+            });
+        }
+    }
+    // No allowed directive needs quoting, variable substitution, line
+    // continuation, comments or control bytes.
+    if command
+        .chars()
+        .any(|c| matches!(c, '"' | '\'' | '$' | '&' | '#') || (c.is_ascii_control() && c != '\t'))
+    {
+        return Err(FluxError::InvalidLammpcCommand {
+            field: EXTRA_SETUP_FIELD,
+        });
+    }
+    let Some(first_token) = command.split_ascii_whitespace().next() else {
         return Ok(());
     };
-    let directive = if first_token.eq_ignore_ascii_case("shell") {
-        Some("shell")
-    } else if first_token.eq_ignore_ascii_case("include") {
-        Some("include")
-    } else if first_token.eq_ignore_ascii_case("jump") {
-        Some("jump")
-    } else if first_token.eq_ignore_ascii_case("python") {
-        Some("python")
-    } else {
-        None
-    };
-    if let Some(directive) = directive {
-        return Err(FluxError::ForbiddenLammpcDirective {
-            field: "LammpcConfig::extra_setup",
-            directive,
+    if !ALLOWED_EXTRA_SETUP_DIRECTIVES.contains(&first_token) {
+        return Err(FluxError::InvalidLammpcCommand {
+            field: EXTRA_SETUP_FIELD,
         });
     }
     Ok(())
@@ -1156,6 +1209,105 @@ fn last_error_message() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn forbidden(directive: &'static str) -> FluxError {
+        FluxError::ForbiddenLammpcDirective {
+            field: EXTRA_SETUP_FIELD,
+            directive,
+        }
+    }
+
+    fn invalid() -> FluxError {
+        FluxError::InvalidLammpcCommand {
+            field: EXTRA_SETUP_FIELD,
+        }
+    }
+
+    #[test]
+    fn extra_setup_allows_only_listed_directives() {
+        for command in [
+            "neighbor 2.0 bin",
+            "neigh_modify every 1 delay 0 check yes",
+            "comm_modify cutoff 12.0",
+            "pair_modify shift yes",
+            "",
+            "   ",
+        ] {
+            assert_eq!(validate_extra_setup_directive(command), Ok(()), "{command}");
+        }
+        for command in ["units real", "clear", "NEIGHBOR 2.0 bin", "log out.txt"] {
+            assert_eq!(
+                validate_extra_setup_directive(command),
+                Err(invalid()),
+                "{command}"
+            );
+        }
+    }
+
+    #[test]
+    fn extra_setup_rejects_forbidden_words_anywhere_in_the_line() {
+        for (command, directive) in [
+            ("shell touch X", "shell"),
+            ("SHELL touch X", "shell"),
+            ("include setup.in", "include"),
+            ("if 1 then \"shell touch X\"", "if"),
+            ("partition yes 1 shell touch X", "partition"),
+            ("neighbor 2.0 bin shell touch X", "shell"),
+            ("neighbor 2.0 bin jump setup.in", "jump"),
+            ("python f input 1 x", "python"),
+            ("label a", "label"),
+            ("next i", "next"),
+            ("shell#touch X", "shell"),
+            ("neighbor 2.0 bin #shell", "shell"),
+            ("shell\u{c}touch X", "shell"),
+        ] {
+            assert_eq!(
+                validate_extra_setup_directive(command),
+                Err(forbidden(directive)),
+                "{command:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn extra_setup_rejects_non_ascii_text() {
+        for separator in [
+            '\u{200b}', '\u{2060}', '\u{2063}', '\u{feff}', '\u{a0}', '\u{e9}',
+        ] {
+            for command in [
+                format!("shell{separator}touch X"),
+                format!("{separator}shell touch X"),
+                format!("neighbor{separator}2.0 bin"),
+                format!("neighbor 2.0 bin{separator}"),
+            ] {
+                assert_eq!(
+                    validate_extra_setup_directive(&command),
+                    Err(invalid()),
+                    "{command:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn extra_setup_rejects_quotes_substitution_continuation_and_comments() {
+        for command in [
+            "neighbor 2.0 \"bin\"",
+            "neighbor 2.0 'bin'",
+            "neighbor ${skin} bin",
+            "neighbor $s bin",
+            "neighbor 2.0 bin &",
+            "neighbor 2.0 bin # trailing",
+            "neighbor 2.0\u{1}bin",
+            "neighbor 2.0\u{7f}bin",
+        ] {
+            assert_eq!(
+                validate_extra_setup_directive(command),
+                Err(invalid()),
+                "{command:?}"
+            );
+        }
+    }
 
     #[test]
     fn timestep_matching_scales_with_the_requested_magnitude() {
