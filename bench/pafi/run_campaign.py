@@ -26,6 +26,7 @@ def arguments():
     parser.add_argument("--friction", type=float, required=True)
     parser.add_argument("--zero-temperature-tolerance", type=float, required=True)
     parser.add_argument("--high-threads", type=int, required=True)
+    parser.add_argument("--native-effective-threads", type=int, required=True)
     parser.add_argument("--one-core-set", required=True)
     parser.add_argument("--high-core-set", required=True)
     args = parser.parse_args()
@@ -33,6 +34,8 @@ def arguments():
         parser.error("--replicates must be at least 12")
     if args.high_threads <= 1:
         parser.error("--high-threads must exceed one")
+    if args.native_effective_threads < 1:
+        parser.error("--native-effective-threads must be positive")
     return args
 
 
@@ -62,6 +65,8 @@ def native_run(args, cell, seed, threads, core_set, output, log):
         str(seed),
         "--threads",
         str(threads),
+        "--effective-threads",
+        str(args.native_effective_threads),
         "--time-step",
         str(args.time_step),
         "--friction",

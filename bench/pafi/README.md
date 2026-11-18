@@ -88,7 +88,7 @@ The native surface is `rgpot.MorsePot`; its canonical neighbour machinery suppli
 
 The endpoints move one nearest-neighbour atom into the vacancy. A pinned rgsaddle NEB calculation generates the shared nine-image pathway from those endpoints using `BandConfig::default()`, a periodic `Cell`, and the documented default convergence criterion. The rgsaddle revision, iteration count, and terminal maximum force are stored with the path and copied into the result data.
 
-The vacancy grid was declared before collection: 17 and 33 PAFI planes; `k_B T=0.025`, `0.05`, and `0.075 eV`; 256 production samples after 128 burn-in steps; 12 seeds per engine and cell; one and four threads on fixed core sets. The matched setting remains time step 0.002, friction 1.0, and zero-temperature tolerance 0.01. Engine order is reversed on alternating rounds. Rejections are results and are not rerun.
+The vacancy grid was declared before collection: 17 and 33 PAFI planes; `k_B T=0.025`, `0.05`, and `0.075 eV`; 256 production samples after 128 burn-in steps; 12 seeds per engine and cell; one and four requested threads on fixed core sets. The 191-atom rgpot surface uses one effective evaluation thread in both requested-thread cells; the harness now requires that effective count explicitly. The matched setting remains time step 0.002, friction 1.0, and zero-temperature tolerance 0.01. Engine order is reversed on alternating rounds. Rejections are results and are not rerun.
 
 ## Build
 
@@ -128,6 +128,7 @@ python3 bench/pafi/run_campaign.py \
   --friction 1.0 \
   --zero-temperature-tolerance 0.01 \
   --high-threads 4 \
+  --native-effective-threads 1 \
   --one-core-set <one-core> \
   --high-core-set <four-cores>
 ```
@@ -145,10 +146,18 @@ python3 bench/pafi/analyze.py \
   --output-markdown bench/pafi/results.md
 ```
 
-The retained campaign exposed a direct-exponential overflow in rgflux reactant-partition integration. Reproduce the exact rejected seed without changing any method setting:
+The retained campaign exposed a zero-width reactant region: seed 1036330 selects dividing plane index zero, so no reactant integration interval exists and the finite partition is zero. The release harness includes this regression as a cargo test:
 
 ```sh
-python3 bench/pafi/repro_partition_overflow.py \
+cargo test --release --locked \
+  --manifest-path <native-build-dir>/Cargo.toml \
+  reproduces_zero_width_reactant_partition
+```
+
+The command-line wrapper checks the same retained seed:
+
+```sh
+python3 bench/pafi/repro_zero_width_reactant_partition.py \
   --native-bin <native-build-dir>/target/release/rgflux-pafi-bench
 ```
 
@@ -180,6 +189,7 @@ python3 bench/pafi/run_vacancy_campaign.py \
   --friction 1.0 \
   --zero-temperature-tolerance 0.01 \
   --high-threads 4 \
+  --native-effective-threads 1 \
   --one-core-set <one-core> \
   --high-core-set <four-cores>
 ```
