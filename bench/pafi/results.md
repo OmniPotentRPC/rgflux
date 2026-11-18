@@ -26,6 +26,7 @@ Each vector is the median signed sampled-minus-exact error at every path plane, 
 All 1728 planned dimer executions completed with 0 process failures. rgflux retained 361 numerical or quadrature rejections; the reference accepted every execution.
 The vacancy campaign adds 288 executions with 0 process failures and 0 retained rgflux rejections.
 
+- Coverage gates passed (272 checks); non-finite samples: 0.
 - Curved-path median maximum profile differences change from 3.06e-06-1.54e-05 at 17 planes to 2.68e-07-2.1e-06 at 33 planes.
 - Accepted 17-plane straight profiles have median maximum pairwise differences of 0.0293-0.0622.
 - The native global straight-path equilibrium is undefined. LAMMPS finite-periodic median maximum errors are 0.183-0.776; the common interacting-basin comparison remains a regularized diagnostic.
