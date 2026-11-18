@@ -21679,6 +21679,25 @@
       "dimer": 0,
       "fcc_vacancy": 0
     },
+    "rejection_buckets": {
+      "other": {
+        "count": 0,
+        "error_strings": [],
+        "rejects": []
+      },
+      "partition_overflow": {
+        "count": 145,
+        "error_strings": [
+          "invalid configuration: PAFI reactant partition must be finite and positive"
+        ]
+      },
+      "zero_temperature_tol": {
+        "count": 216,
+        "error_strings": [
+          "invalid configuration: PAFI zero-temperature path-force quadrature exceeds tolerance"
+        ]
+      }
+    },
     "rejections": {
       "dimer": {
         "invalid configuration: PAFI reactant partition must be finite and positive": 145,
