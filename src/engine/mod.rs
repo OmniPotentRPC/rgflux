@@ -27,6 +27,8 @@
 //!   molecular dynamics*. The Journal of Chemical Physics, 109, 7737–7744.
 //!   <https://doi.org/10.1063/1.477419>
 
+#[cfg(feature = "lammpc")]
+pub mod lammpc;
 pub mod native;
 #[cfg(feature = "rgpot")]
 pub mod rgpot;

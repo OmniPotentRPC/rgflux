@@ -72,6 +72,10 @@ pub enum FluxError {
     #[error("dynamics backend unavailable: {0}")]
     BackendUnavailable(&'static str),
 
+    /// Error returned by the optional lammpc C ABI backend.
+    #[error("lammpc backend error: {0}")]
+    Lammpc(String),
+
     /// An estimator whose implementation moves from `rgsaddle` or awaits wiring was called.
     #[error("not yet wired in rgflux: {0}")]
     Unimplemented(&'static str),

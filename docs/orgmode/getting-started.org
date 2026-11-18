@@ -14,7 +14,12 @@ Enable optional =rgpot= features as needed:
 #+begin_src console
 $ cargo check --features rgpot
 $ cargo check --features rgpot-session
+$ cargo check --features lammpc
 #+end_src
+
+The =lammpc= feature links =liblammpc= from pkg-config when available, or from
+=LAMMPC_DIR= (install prefix with =lib/= or =lib64/= and =include/=) when pkg-config
+is not configured.
 
 * Reactive-flux recrossing
 

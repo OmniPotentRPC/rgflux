@@ -6,7 +6,7 @@ Kinetics code is engine-agnostic: trajectory samplers drive the `engine::Dynamic
 
 ## Modules
 
-- `engine` — object-safe `DynamicsEngine` trait, `ForceSurface`, the in-process `engine::native` BAOAB Langevin + RATTLE/SHAKE reference backend, the optional `rgpot` static PES wrapper, and the optional `rgpot-session` adapter wrapping `rgpot`'s engine-agnostic MD session ABI (`openmm`, `nblib`, `lammps`).
+- `engine` — object-safe `DynamicsEngine` trait, `ForceSurface`, the in-process `engine::native` BAOAB Langevin + RATTLE/SHAKE reference backend, the optional `rgpot` static PES wrapper, the optional direct `engine::lammpc` backend over `lammpc_session_*`, and the optional `rgpot-session` adapter wrapping `rgpot`'s engine-agnostic MD session ABI (`openmm`, `nblib`, `lammps`).
 - `stats` — batch means, Geyer effective sample size (`n_eff`), and Geweke two-window stationarity diagnostics.
 - `kappa` and `kappa::bennett_chandler` — Bennett-Chandler reactive-flux transmission coefficient estimator over recorded dividing-surface velocity and side histories, plus generic trajectory shooting over any `DynamicsEngine`.
 - `hyperplane` — holonomic hyperplane free-energy gradient and torque sampling (*implementation moves from rgsaddle*).
