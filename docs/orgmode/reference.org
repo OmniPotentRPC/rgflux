@@ -10,7 +10,7 @@
 | =kappa::bennett_chandler= | Engine-free reactive-flux estimator and =DynamicsEngine= trajectory shooter | Implemented |
 | =kappa= | Surface-shooting quench classifiers and first-crossing estimators | Implementation moves from =rgsaddle= |
 | =hyperplane= | Constrained hyperplane sampling and zero-variance control variates | Mean constraint force implemented; torque and control variates move from =rgsaddle= |
-| =pafi= | Projected Average Force Integration along reaction paths | Implementation moves from =rgsaddle= |
+| =pafi= | Projected Average Force Integration along reaction paths | Implemented with mass-metric spline planes, adaptive sampling, profile quadrature, and normalized rates |
 | =ohtst= | OH-TST with a fixed hyperplane normal | Implemented for a fixed normal; normal optimization moves from =rgsaddle= |
 | =ffs= | Forward Flux Sampling across ordered interfaces | Implemented: flux collection, staged trials, and uncertainty propagation. Exit restores positions, velocities, the periodic cell, the thermostat, and the constraint; the stochastic stream is left where the run put it |
 | =network= | Symmetry-resolved rate networks and kinetic Monte Carlo rate tables | Implementation moves from =rgsaddle= |
