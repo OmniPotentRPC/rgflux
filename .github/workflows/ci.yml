@@ -43,8 +43,10 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop' }}
       - name: Clippy (default)
         run: cargo clippy --locked --all-targets -- -D warnings
-      - name: Clippy (all features)
-        run: cargo clippy --locked --all-targets --all-features -- -D warnings
+      # `lammpc` links liblammpc, so it stays out of this job. The lammpc job
+      # runs the same clippy command with every feature, including lammpc.
+      - name: Clippy (library features)
+        run: cargo clippy --locked --all-targets --features rgpot,rgpot-session -- -D warnings
 
   test:
     runs-on: ubuntu-latest
@@ -56,10 +58,12 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop' }}
       - name: Test (default)
         run: cargo test --locked --verbose
-      - name: Test (all features)
-        run: cargo test --locked --all-features --verbose
+      # `lammpc` links liblammpc, so it stays out of this job. The lammpc job
+      # tests every feature, including lammpc.
+      - name: Test (library features)
+        run: cargo test --locked --features rgpot,rgpot-session --verbose
       - name: Public items are documented
-        run: cargo rustdoc --locked --all-features -- -D missing_docs
+        run: cargo rustdoc --locked --features rgpot,rgpot-session -- -D missing_docs
       - name: Rustdoc builds without warnings
         run: ci/check_rustdoc.sh
       - name: Reject machine-local paths
@@ -85,7 +89,70 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop' }}
+      - name: Clippy (library features)
+        run: cargo clippy --locked --all-targets --features rgpot,rgpot-session -- -D warnings
+      - name: Test (library features)
+        run: cargo test --locked --features rgpot,rgpot-session
+
+  lammpc:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-name: lammpc
+          create-args: >-
+            meson
+            ninja
+            pkg-config
+            capnproto
+            cmake
+          condarc: |
+            channels:
+              - conda-forge
+      - name: Fetch lammpc (pinned rev)
+        run: |
+          set -euo pipefail
+          git clone https://github.com/OmniPotentRPC/lammpc "${RUNNER_TEMP}/lammpc"
+          git -C "${RUNNER_TEMP}/lammpc" checkout b9e6a1e984782aa674c94cccde46d1914bb4cd86
+      - name: LAMMPS release tag
+        id: lammps
+        working-directory: ${{ runner.temp }}/lammpc
+        run: |
+          set -euo pipefail
+          tag="$(sed -n 's/^LAMMPS_TAG=.*:-\([^}]*\)}.*/\1/p' scripts/build_lammps.sh)"
+          test -n "$tag"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+      - name: Cache LAMMPS build
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/lammpc/.lammps-install
+          key: lammps-${{ steps.lammps.outputs.tag }}-${{ runner.os }}-b9e6a1e984782aa674c94cccde46d1914bb4cd86
+      - name: Build and install lammpc (pinned rev)
+        shell: bash -l {0}
+        run: |
+          set -euo pipefail
+          cd "${RUNNER_TEMP}/lammpc"
+          bash scripts/build_lammps.sh
+          meson setup build --prefix="${RUNNER_TEMP}/lammpc-install" -Dwith_tests=false -Dwith_lammps=true -Dlammps_root="$PWD/.lammps-install"
+          meson compile -C build
+          meson install -C build
       - name: Clippy (all features)
+        env:
+          LAMMPC_LIB_DIR: ${{ runner.temp }}/lammpc-install/lib/x86_64-linux-gnu
+          LD_LIBRARY_PATH: ${{ runner.temp }}/lammpc-install/lib/x86_64-linux-gnu:${{ runner.temp }}/lammpc/.lammps-install/lib:${{ env.LD_LIBRARY_PATH }}
         run: cargo clippy --locked --all-targets --all-features -- -D warnings
-      - name: Test (all features)
-        run: cargo test --locked --all-features
+      - name: Test all features with lammpc
+        env:
+          LAMMPC_LIB_DIR: ${{ runner.temp }}/lammpc-install/lib/x86_64-linux-gnu
+          LD_LIBRARY_PATH: ${{ runner.temp }}/lammpc-install/lib/x86_64-linux-gnu:${{ runner.temp }}/lammpc/.lammps-install/lib:${{ env.LD_LIBRARY_PATH }}
+        run: cargo test --locked --all-features --verbose
+      - name: Rustdoc (all features)
+        env:
+          LAMMPC_LIB_DIR: ${{ runner.temp }}/lammpc-install/lib/x86_64-linux-gnu
+          LD_LIBRARY_PATH: ${{ runner.temp }}/lammpc-install/lib/x86_64-linux-gnu:${{ runner.temp }}/lammpc/.lammps-install/lib:${{ env.LD_LIBRARY_PATH }}
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --locked --no-deps --all-features --document-private-items

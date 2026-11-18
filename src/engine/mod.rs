@@ -27,6 +27,8 @@
 //!   molecular dynamics*. The Journal of Chemical Physics, 109, 7737–7744.
 //!   <https://doi.org/10.1063/1.477419>
 
+#[cfg(feature = "lammpc")]
+pub mod lammpc;
 pub mod native;
 #[cfg(feature = "rgpot")]
 pub mod rgpot;
@@ -588,6 +590,66 @@ pub(crate) fn inv_mass_metric_norm(
         z += (normal[i] * normal[i]) / masses[i];
     }
     z
+}
+
+/// Holonomic multiplier `lambda = -(n^T M^{-1} F) / (n^T M^{-1} n)`.
+///
+/// `F` is the physical force. The canonical mean of `lambda` is `dF/dc`
+/// (Sprik and Ciccotti 1998). A global rescaling of `masses` cancels, so an
+/// engine may pass either bare masses or the metal-unit dynamical masses.
+pub(crate) fn constraint_lagrange_multiplier(
+    forces: ArrayView1<'_, f64>,
+    masses: ArrayView1<'_, f64>,
+    plane: &HyperplaneConstraint,
+) -> f64 {
+    let z = inv_mass_metric_norm(plane.normal.view(), masses);
+    let mut normal_accel = 0.0_f64;
+    for i in 0..forces.len() {
+        normal_accel += plane.normal[i] * forces[i] / masses[i];
+    }
+    -normal_accel / z
+}
+
+/// Project positions onto a hyperplane and reject numerically unresolved residuals.
+pub(crate) fn shake_positions_in_place(
+    positions: &mut Array1<f64>,
+    masses: ArrayView1<'_, f64>,
+    plane: &HyperplaneConstraint,
+) -> Result<(), FluxError> {
+    let z = inv_mass_metric_norm(plane.normal.view(), masses);
+    // Two passes reduce the residual left by the first floating-point projection.
+    for _ in 0..2 {
+        let sigma = dot(plane.normal.view(), positions.view()) - plane.offset;
+        let alpha = sigma / z;
+        for i in 0..positions.len() {
+            positions[i] -= alpha * plane.normal[i] / masses[i];
+        }
+    }
+    let scale = 1.0 + plane.offset.abs() + nrm2(positions.view());
+    let residual = (dot(plane.normal.view(), positions.view()) - plane.offset).abs() / scale;
+    if !residual.is_finite() || residual > HYPERPLANE_PROJECTION_TOL {
+        return Err(FluxError::ConstraintViolation {
+            residual,
+            tolerance: HYPERPLANE_PROJECTION_TOL,
+        });
+    }
+    Ok(())
+}
+
+/// Project velocities onto a hyperplane's tangent space in the mass metric.
+pub(crate) fn rattle_velocities_in_place(
+    velocities: &mut Array1<f64>,
+    masses: ArrayView1<'_, f64>,
+    plane: &HyperplaneConstraint,
+) {
+    let z = inv_mass_metric_norm(plane.normal.view(), masses);
+    for _ in 0..2 {
+        let nv = dot(plane.normal.view(), velocities.view());
+        let beta = nv / z;
+        for i in 0..velocities.len() {
+            velocities[i] -= beta * plane.normal[i] / masses[i];
+        }
+    }
 }
 
 pub(crate) fn box_muller_pair(rng: &mut StdRng) -> (f64, f64) {
