@@ -16,8 +16,103 @@
 //! image of the curvature sample's batch-means error: `κ` is proportional to
 //! `⟨λ⟩` and the rate to `sqrt(κ)`, so `σ_ln k = σ_λ / (2 |⟨λ⟩|)`.
 //!
+//! ## Theory and workflow
+//!
+//! Given a unit seed hyperplane `sigma(x) = n · x - c_0 = 0`, [`optimize_hyperplane`]
+//! executes four stages:
+//!
+//! 1. **Reactant relaxation**: Clears any active constraint and descends from
+//!    the engine's current positions by backtracking line search along `F(x)`
+//!    (up to `8 * max_outer_steps` updates) until `max_i |F_i| <= SERIES_FLAT_TOL`
+//!    and the directional slope `-n · F` rises across `x_min` (`s_min = n · x_min`,
+//!    `V_min = V(x_min)`). Stationary maxima or plateaus along `n` are escaped
+//!    by stepping `-max_translation * n`.
+//! 2. **Dividing-surface placement**: If the seed point `x_min + (c_0 - s_min) n`
+//!    already has vanishing normal slope (`|-n · F| <= SERIES_FLAT_TOL`) and
+//!    `V(x_seed) > V_min`, `c^* = c_0` is kept. Otherwise, the offset walks from
+//!    `s_min` in direction `sign(c_0 - s_min)` (`+1` when `c_0 >= s_min`) in
+//!    steps of `max_translation` (up to `max_outer_steps` steps) to bracket the
+//!    first sign change of the normal slope, then bisects `[lo, hi]` to
+//!    `SERIES_FLAT_TOL * (1 + hi)` to locate `c^*` with barrier
+//!    `ΔV = V(x_min + (c^* - s_min) n) - V_min > 0`.
+//! 3. **Curvature probe sampling**: Places a parallel probe plane at distance
+//!    `δ = min(max_translation, 0.5 * |c^* - s_min|)` from `s_min` toward `c^*`
+//!    (`c_probe = s_min + sign(c^* - s_min) * δ`), calls
+//!    [`crate::hyperplane::sample_hyperplane`] for
+//!    `max(max_outer_steps * sample_step_factor, min_sample_steps)` steps after
+//!    `burn_in_steps`, and infers the reactant curvature
+//!    `κ = ⟨λ⟩ / (c_probe - s_min) > 0`.
+//! 4. **Harmonic rate and uncertainty**: Evaluates the flux mass
+//!    `μ = (sum_i n_i^2 / m_i)^-1` via [`rgsaddle::flux_mass`] (keeping a length
+//!    mismatch on [`FluxError::Shape`] and non-finite or non-positive masses on
+//!    [`FluxError::InvalidConfig`]), angular frequency `ω = sqrt(κ / μ)`, rate
+//!    `k = (ω / 2π) exp(-ΔV / k_B T)`, and delta-method standard error
+//!    `σ_k = k * σ_λ / (2 |⟨λ⟩|)`.
+//!
+//! ## Assumptions
+//!
+//! - Single reaction coordinate along the fixed unit normal `n` (`||n||_2 = 1`);
+//!   variational rotation of `n` on the unit sphere moves from `rgsaddle`.
+//! - Positive barrier `ΔV > 0` above the reactant minimum and positive harmonic
+//!   reactant curvature `κ > 0` at the probe offset `c_probe`.
+//! - Strictly positive thermal energy `k_B * T > 0` and masses `m_i > 0`.
+//!
+//! ## Units
+//!
+//! - `seed_plane.offset` and `OhtstConfig::max_translation` have length unit `[L]`.
+//! - `OhtstConfig::max_rotation` is in radians (dimensionless).
+//! - `OhtstConfig::time_step` has engine time unit `[T]`.
+//! - `OhtstEstimate::rate` and `OhtstEstimate::standard_error` have inverse time
+//!   units `[T]^-1` (`sqrt([E] / ([M] [L]^2))`).
+//!
+//! ## Engine wiring
+//!
+//! [`optimize_hyperplane`] accepts `&mut E` for any `E: DynamicsEngine + ?Sized`
+//! (`NativeEngine` over `PointSurface`, `EindirSurface`, or `RgpotSurface`,
+//! `LammpcEngine` under the `lammpc` feature, or `RgpotSessionEngine`). It
+//! captures an `EngineSnapshot` on entry and restores `positions`, `velocities`,
+//! `cell`, `thermostat`, and `constraint` before returning.
+//!
+//! ## Example
+//!
+//! ```rust
+//! use ndarray::{Array1, ArrayView1};
+//! use rgflux::engine::native::{NativeConfig, NativeEngine};
+//! use rgflux::engine::{DynamicsEngine, HyperplaneConstraint, ThermostatConfig};
+//! use rgflux::ohtst::{OhtstConfig, optimize_hyperplane};
+//!
+//! struct DoubleWell1D;
+//! impl rgsaddle::PointSurface for DoubleWell1D {
+//!     fn eval(&self, x: ArrayView1<f64>) -> Result<(f64, Array1<f64>), rgsaddle::SaddleError> {
+//!         let u = x[0];
+//!         let w = u * u - 1.0;
+//!         Ok((0.25 * w * w, Array1::from_vec(vec![u * w])))
+//!     }
+//! }
+//!
+//! let cfg = NativeConfig::default()
+//!     .with_masses(Array1::from_vec(vec![1.0]))
+//!     .with_thermostat(ThermostatConfig::default().with_gamma(1.0).with_temperature(0.1))
+//!     .with_seed(17);
+//! let mut engine = NativeEngine::new(DoubleWell1D, cfg)?;
+//! engine.set_positions(Array1::from_vec(vec![-1.0]).view())?;
+//!
+//! let seed = HyperplaneConstraint::from_direction(Array1::from_vec(vec![1.0]).view(), 0.0)?;
+//! let ohtst_cfg = OhtstConfig::default()
+//!     .with_burn_in_steps(32)
+//!     .with_min_sample_steps(64)
+//!     .with_sample_step_factor(2)
+//!     .with_seed(17);
+//! let est = optimize_hyperplane(&mut engine, &seed, &ohtst_cfg)?;
+//! assert_eq!(est.plane.offset, 0.0);
+//! assert!(est.rate > 0.0 && est.rate.is_finite());
+//! # Ok::<(), rgflux::FluxError>(())
+//! ```
+//!
 //! ## References
 //!
+//! - Goswami, R. (2025). *Efficient Exploration of Chemical Kinetics*.
+//!   arXiv:2510.21368. <https://doi.org/10.48550/arXiv.2510.21368>
 //! - Goswami, R., and Jónsson, H. (2026). *Adaptive Pruning for Increased
 //!   Robustness and Reduced Computational Overhead in Gaussian Process
 //!   Accelerated Saddle Point Searches*. ChemPhysChem, 27, e202500730.
@@ -26,19 +121,19 @@
 //!   nudged elastic band method with Hessian eigenmode alignment*. Frontiers
 //!   in Chemistry, 14, 1807063. <https://doi.org/10.3389/fchem.2026.1807063>
 //! - Jóhannesson, G. H., and Jónsson, H. (2001). *Optimization of hyperplanar
-//!   transition states*. The Journal of Chemical Physics, 115, 9644–9656.
+//!   transition states*. The Journal of Chemical Physics, 115, 9644-9656.
 //!   <https://doi.org/10.1063/1.1415499>
 //! - Bligaard, T., and Jónsson, H. (2005). *Optimization of hyperplanar
 //!   transition states: Application to 2D test problems*. Computer Physics
-//!   Communications, 169, 284–288. <https://doi.org/10.1016/j.cpc.2005.03.064>
+//!   Communications, 169, 284-288. <https://doi.org/10.1016/j.cpc.2005.03.064>
 //! - Sprik, M., and Ciccotti, G. (1998). *Free energy from constrained
-//!   molecular dynamics*. The Journal of Chemical Physics, 109, 7737–7744.
+//!   molecular dynamics*. The Journal of Chemical Physics, 109, 7737-7744.
 //!   <https://doi.org/10.1063/1.477419>
 //! - Vineyard, G. H. (1957). *Frequency factors and isotope effects in solid
 //!   state rate processes*. Journal of Physics and Chemistry of Solids, 3,
-//!   121–127. <https://doi.org/10.1016/0022-3697(57)90059-8>
+//!   121-127. <https://doi.org/10.1016/0022-3697(57)90059-8>
 //! - Bennett, C. H. (1976). *Efficient estimation of free energy differences
-//!   from Monte Carlo data*. Journal of Computational Physics, 22, 245–268.
+//!   from Monte Carlo data*. Journal of Computational Physics, 22, 245-268.
 //!   <https://doi.org/10.1016/0021-9991(76)90078-4>
 //! - Shirts, M. R., and Chodera, J. D. (2008). *Statistically optimal analysis
 //!   of samples from multiple equilibrium states*. The Journal of Chemical
@@ -66,43 +161,62 @@ use crate::stats::{SERIES_FLAT_TOL, StatsConfig};
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct OhtstConfig {
-    /// Maximum Riemannian trust-region outer iterations.
+    /// Maximum Riemannian trust-region / bracketing outer iterations (`>= 1`).
+    ///
+    /// Default: `32`.
     pub max_outer_steps: usize,
-    /// Consecutive accepted planes within gradient noise required to stop.
+    /// Consecutive accepted planes within gradient noise required to stop
+    /// (reserved for variational normal optimization).
+    ///
+    /// Default: `3`.
     pub patience: usize,
-    /// Trust-region cap on normal translation per step.
+    /// Trust-region cap on normal translation per step and curvature probe step (`> 0`).
+    ///
+    /// Default: `0.25`.
     pub max_translation: f64,
-    /// Trust-region cap on normal rotation angle (radians) per step.
+    /// Trust-region cap on normal rotation angle (radians) per step (`>= 0`).
+    ///
+    /// Default: `0.25`.
     pub max_rotation: f64,
-    /// Minimum two-state BAR overlap before emitting a low-overlap warning.
+    /// Minimum two-state BAR overlap before emitting a low-overlap warning
+    /// (reserved for variational normal optimization).
+    ///
+    /// Default: `0.03`.
     pub min_overlap: f64,
-    /// Combine reversible work across all plane nodes with MBAR when `true`.
+    /// Combine reversible work across all plane nodes with MBAR when `true`
+    /// (reserved for variational normal optimization).
+    ///
+    /// Default: `true`.
     pub use_mbar: bool,
     /// Deterministic PRNG seed.
+    ///
+    /// Default: `1`.
     pub seed: u64,
     /// Batch-means uncertainty settings.
+    ///
+    /// Default: [`StatsConfig::default()`].
     pub stats: StatsConfig,
     /// Equilibration steps discarded before the curvature sample.
     ///
-    /// Default: 256.
+    /// Default: `256`.
     pub burn_in_steps: usize,
-    /// Lower bound on the curvature-sample length.
+    /// Lower bound on the curvature-sample length (`>= 2`).
     ///
     /// The length used is the greater of this bound and
     /// [`Self::max_outer_steps`] times [`Self::sample_step_factor`].
-    /// Default: 128.
+    /// Default: `128`.
     pub min_sample_steps: usize,
     /// Multiplier on [`Self::max_outer_steps`] when sizing the curvature sample.
     ///
-    /// Default: 64, so a default optimization samples at least 2048 steps.
+    /// Default: `64`, so a default optimization samples at least `2048` steps.
     pub sample_step_factor: usize,
-    /// Steps between retained configurations in the curvature sample.
+    /// Steps between retained configurations in the curvature sample (`>= 1`).
     ///
-    /// Default: 16.
+    /// Default: `16`.
     pub retention_stride: usize,
-    /// Integration timestep of the curvature sample, in the engine time unit.
+    /// Integration timestep of the curvature sample, in the engine time unit (`> 0`).
     ///
-    /// Default: 0.01.
+    /// Default: `0.01`.
     pub time_step: f64,
 }
 
@@ -161,6 +275,20 @@ pub struct OhtstEstimate {
 /// surface. Otherwise the offset walks along the normal to the first
 /// normal-force zero. The reactant curvature is `κ = ⟨λ⟩ / δ` from a
 /// constrained sample a distance `δ` from the minimum toward that surface.
+///
+/// # Errors
+///
+/// - [`FluxError::InvalidConfig`] when a [`OhtstConfig`] field violates its
+///   bounds, thermal energy `k_B * T <= 0`, the flux-mass metric from
+///   [`rgsaddle::flux_mass`] is non-finite or non-positive, reactant
+///   minimization stalls or exhausts its budget, no stationary dividing
+///   surface with positive barrier is found along `seed_plane.normal`, or the
+///   sampled reactant curvature `κ <= 0`.
+/// - [`FluxError::Shape`] when `seed_plane.normal.len()` does not match
+///   `engine.dof()` or `engine.masses().len()`.
+/// - [`FluxError::NonFinite`] when the evaluated rate or standard error
+///   overflows or underflows to zero.
+/// - Any [`FluxError`] propagated by `engine` or [`sample_hyperplane`].
 pub fn optimize_hyperplane<E: DynamicsEngine + ?Sized>(
     engine: &mut E,
     seed_plane: &HyperplaneConstraint,

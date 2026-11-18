@@ -38,15 +38,21 @@
 //!
 //! ## References
 //!
+//! - Goswami, R. (2025). *Efficient Exploration of Chemical Kinetics*.
+//!   arXiv:2510.21368. <https://doi.org/10.48550/arXiv.2510.21368>
+//! - Goswami, R., and Jónsson, H. (2026). *Adaptive Pruning for Increased
+//!   Robustness and Reduced Computational Overhead in Gaussian Process
+//!   Accelerated Saddle Point Searches*. ChemPhysChem, 27, e202500730.
+//!   <https://doi.org/10.1002/cphc.202500730>
 //! - Bennett, C. H. (1977). *Molecular Dynamics and Transition State Theory:
 //!   The Simulation of Infrequent Events*. In *Algorithms for Chemical
-//!   Computations*, ACS Symposium Series, 46, 63–97.
+//!   Computations*, ACS Symposium Series, 46, 63-97.
 //!   <https://doi.org/10.1021/bk-1977-0046.ch004>
 //! - Chandler, D. (1978). *Statistical mechanics of isomerization dynamics in
 //!   liquids and the transition state approximation*. The Journal of Chemical
-//!   Physics, 68, 2959. <https://doi.org/10.1063/1.436049>
+//!   Physics, 68, 2959-2970. <https://doi.org/10.1063/1.436049>
 //! - Kramers, H. A. (1940). *Brownian motion in a field of force and the
-//!   diffusion model of chemical reactions*. Physica, 7, 284–304.
+//!   diffusion model of chemical reactions*. Physica, 7, 284-304.
 //!   <https://doi.org/10.1016/S0031-8914(40)90098-2>
 
 use ndarray::ArrayView2;
@@ -142,10 +148,16 @@ impl ReactiveTrajectory {
 #[non_exhaustive]
 pub struct BennettChandlerConfig {
     /// Inclusive start fraction `[0, 1)` of the trajectory length for the plateau window.
+    ///
+    /// Default: [`DEFAULT_PLATEAU_START_FRACTION`] (`0.5`).
     pub plateau_start_fraction: f64,
     /// Exclusive end fraction `(0, 1]` of the trajectory length for the plateau window.
+    ///
+    /// Default: [`DEFAULT_PLATEAU_END_FRACTION`] (`1.0`).
     pub plateau_end_fraction: f64,
     /// Batch-means and stationarity configuration applied to the plateau window.
+    ///
+    /// Default: [`StatsConfig::default()`].
     pub stats: StatsConfig,
 }
 
@@ -170,14 +182,24 @@ with_setters!(BennettChandlerConfig {
 #[non_exhaustive]
 pub struct ShootingConfig {
     /// Number of integration steps per trajectory (`>= 4`).
+    ///
+    /// Default: [`DEFAULT_SHOOTING_STEPS`] (`200`).
     pub steps: usize,
     /// Integration timestep `dt > 0`.
+    ///
+    /// Default: [`DEFAULT_SHOOTING_TIME_STEP`] (`0.01`).
     pub time_step: f64,
     /// Shoot antithetic velocity pairs `(+v, -v)` from each dividing-surface configuration.
+    ///
+    /// Default: `true`.
     pub antithetic: bool,
     /// Deterministic base PRNG seed.
+    ///
+    /// Default: `1`.
     pub seed: u64,
     /// Plateau and uncertainty configuration passed to [`estimate_bennett_chandler`].
+    ///
+    /// Default: [`BennettChandlerConfig::default()`].
     pub estimator: BennettChandlerConfig,
 }
 

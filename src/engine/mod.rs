@@ -4,28 +4,33 @@
 //! simulation package. Static potential energy surfaces enter through
 //! [`ForceSurface`], which is implemented for every [`rgsaddle::PointSurface`],
 //! for [`eindir_core::DifferentiableObjective`] via [`EindirSurface`], and
-//! (behind the `rgpot` feature) for `rgpot` callback potentials. External
-//! molecular dynamics packages (OpenMM, GROMACS `nblib`, and LAMMPS) enter
-//! through `rgpot_session` (behind the `rgpot-session` feature).
+//! (behind the `rgpot` feature) for `rgpot` callback potentials. Direct
+//! LAMMPS sessions enter through `lammpc` (behind the `lammpc` feature), and
+//! external molecular dynamics packages (OpenMM, GROMACS `nblib`, and LAMMPS)
+//! also enter through `rgpot_session` (behind the `rgpot-session` feature).
 //!
 //! ## References
 //!
+//! - Goswami, R. (2025). *Efficient Exploration of Chemical Kinetics*.
+//!   arXiv:2510.21368. <https://doi.org/10.48550/arXiv.2510.21368>
 //! - Leimkuhler, B., and Matthews, C. (2012). *Rational Construction of
 //!   Stochastic Numerical Methods for Molecular Sampling*. Applied Mathematics
 //!   Research eXpress. <https://doi.org/10.1093/amrx/abs010>
 //! - Leimkuhler, B., and Matthews, C. (2016). *Efficient molecular dynamics
-//!   using geodesic integration and solvent–solute splitting*. Proceedings of
+//!   using geodesic integration and solvent-solute splitting*. Proceedings of
 //!   the Royal Society A, 472, 20160138. <https://doi.org/10.1098/rspa.2016.0138>
 //! - Ryckaert, J.-P., Ciccotti, G., and Berendsen, H. J. C. (1977). *Numerical
 //!   integration of the cartesian equations of motion of a system with
 //!   constraints: molecular dynamics of n-alkanes*. Journal of Computational
-//!   Physics, 23, 327–341. <https://doi.org/10.1016/0021-9991(77)90098-5>
+//!   Physics, 23, 327-341. <https://doi.org/10.1016/0021-9991(77)90098-5>
 //! - Andersen, H. C. (1983). *Rattle: A "velocity" version of the shake
 //!   algorithm for molecular dynamics calculations*. Journal of Computational
-//!   Physics, 52, 24–34. <https://doi.org/10.1016/0021-9991(83)90014-1>
+//!   Physics, 52, 24-34. <https://doi.org/10.1016/0021-9991(83)90014-1>
 //! - Sprik, M., and Ciccotti, G. (1998). *Free energy from constrained
-//!   molecular dynamics*. The Journal of Chemical Physics, 109, 7737–7744.
+//!   molecular dynamics*. The Journal of Chemical Physics, 109, 7737-7744.
 //!   <https://doi.org/10.1063/1.477419>
+//! - Higham, N. J. (2002). *Accuracy and Stability of Numerical Algorithms*
+//!   (2nd ed.). SIAM. <https://doi.org/10.1137/1.9780898718027>
 
 #[cfg(feature = "lammpc")]
 pub mod lammpc;
@@ -167,10 +172,16 @@ where
 #[non_exhaustive]
 pub struct ThermostatConfig {
     /// Langevin friction coefficient `gamma >= 0` in inverse time units (`0` gives NVE).
+    ///
+    /// Default: `1.0`.
     pub gamma: f64,
     /// Absolute temperature `T >= 0`.
+    ///
+    /// Default: `1.0`.
     pub temperature: f64,
     /// Boltzmann constant `k_B > 0` in the engine's energy-per-temperature unit (`1` for reduced units).
+    ///
+    /// Default: `1.0`.
     pub boltzmann: f64,
 }
 
@@ -224,8 +235,12 @@ impl ThermostatConfig {
 #[non_exhaustive]
 pub struct HyperplaneConstraint {
     /// Unit normal vector `n` (`||n||_2 = 1`) oriented from reactant toward product.
+    ///
+    /// Default: `Array1::from_vec(vec![1.0])`.
     pub normal: Array1<f64>,
     /// Scalar plane offset `c` in `n · x - c = 0`.
+    ///
+    /// Default: `0.0`.
     pub offset: f64,
 }
 

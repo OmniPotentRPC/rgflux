@@ -1,14 +1,175 @@
 //! Projected Average Force Integration (PAFI) along minimum-energy paths.
 //!
-//! Integrates the curvature-corrected hyperplane mean force
-//! `<(grad V · n)(1 - psi)>` across planes orthogonal to a converged band or
-//! spline reaction path to obtain finite-temperature free-energy barriers
-//! without a predefined collective variable.
+//! [`pafi_profile`] turns a converged reaction path, such as a nudged elastic
+//! band, into a finite-temperature free-energy profile `F(s)`, a barrier
+//! `Delta F`, and a normalized rate, without a predefined collective variable.
+//! It samples the constrained dynamics on hyperplanes orthogonal to a spline
+//! through the path images and integrates the mean constraint force along the
+//! path (Swinburne and Marinica, 2018).
 //!
-//! Note: implementation moves from rgsaddle.
+//! ## Theory
+//!
+//! Let `X(s)` be the path, `M = diag(m_i)` the mass matrix of the engine, and
+//! `s` the arc length in the mass-weighted metric, `ds^2 = dX^T M dX`. The
+//! plane at `s` has the unit normal `n(s) = M X'(s) / |M X'(s)|` and the
+//! equation `sigma(x, s) = n(s) . (x - X(s)) = 0`, so the planes are
+//! orthogonal to the path in the metric `M`. With `lambda` the Lagrange
+//! multiplier of the holonomic constraint on that plane, the free-energy
+//! gradient along the path is the constrained mean force with a correction for
+//! the tilt of neighbouring planes:
+//!
+//! `dF/ds = < lambda (n . X' - (x - X) . n') >_{plane at s}`
+//!
+//! where `n' = dn/ds` is the curvature of the normal. On a straight path
+//! `n' = 0` and this is the Sprik and Ciccotti (1998) mean constraint force,
+//! which [`crate::hyperplane::sample_hyperplane`] samples for a single plane.
+//! The term `(x - X) . n'` is the Jacobian of the plane foliation. Omitting it
+//! on a curved path gives a wrong profile.
+//!
+//! The profile is the trapezoid integral of the per-plane mean forces,
+//! `F(s_k) - F(s_0) = sum_j 0.5 (g_{j-1} + g_j) (s_j - s_{j-1})`. The barrier is
+//! `Delta F = max_k F(s_k)` at the dividing plane `s*`, and the normalized rate
+//! is
+//!
+//! `k = sqrt(k_B T / (2 pi)) exp(-F(s*) / k_B T) / Z_R`
+//!
+//! with `Z_R = 2 * \int_0^{s*} exp(-F(s) / k_B T) ds`, also evaluated by the
+//! trapezoid rule.
+//!
+//! ## What the code does
+//!
+//! 1. The images become a cubic spline in the chord-length parameter
+//!    `sqrt(sum_j m_j dx_j^2)` between neighbours. The end second derivatives
+//!    come from linear extrapolation of the second derivative (the not-a-knot
+//!    condition), so the first and last planes keep the curvature of the path.
+//!    Three images give one parabola and two images a straight line.
+//! 2. `planes` planes sit at equally spaced values of that parameter, from
+//!    the first to the last image. Each carries its anchor `X(s_k)`, the
+//!    normal, and the curvature `n'`.
+//! 3. A zero-temperature check integrates `dV/ds` over the anchors with the
+//!    trapezoid rule and compares it with the end-to-end energy change
+//!    `Delta E_0`, see [`PafiConfig::zero_temperature_tol`]. A mismatch
+//!    returns [`FluxError::InvalidConfig`] before any sampling.
+//! 4. On each plane the engine is constrained, placed at the anchor, given
+//!    Maxwell-Boltzmann velocities, run for `burn_in_steps`, and then run for
+//!    `sample_steps` steps that each record
+//!    `lambda (n . X' - (x - X) . n')`. Batch means over the samples give the
+//!    mean force and its standard error on each plane.
+//! 5. The profile, barrier and rate follow from the plane means. The
+//!    standard errors of the planes are independent and propagate through the
+//!    trapezoid weights and, for the rate, through `Z_R` by the delta method.
+//! 6. With `target_error` set, steps 4 and 5 repeat for up to `max_rounds`
+//!    rounds, each adding `sample_steps` fresh samples to every plane, until
+//!    the standard error of the barrier is at most `target_error`. Without
+//!    it there is one round. The returned profile uses all samples so far.
+//!    Missing the target after `max_rounds` rounds is not an error: compare
+//!    [`FreeEnergyProfile::barrier_error`] with the target.
+//!
+//! The engine is restored on return, including on errors. Positions,
+//! velocities, the periodic cell, the thermostat and the constraint go back to
+//! their old values. The stochastic stream does not: each plane reseeds it
+//! with `seed + 4099 * plane + 1000003 * round` (wrapping), so the stream is
+//! left where the last plane put it.
+//!
+//! ## Assumptions
+//!
+//! - The images form a smooth path of at least two images, distinct in the
+//!   mass-weighted metric, with one coordinate per degree of freedom of the
+//!   engine.
+//! - Thermal excursions in a plane stay inside the tube where neighbouring
+//!   planes do not intersect, so `n . X' - (x - X) . n'`, the speed at which
+//!   the planes sweep through space, stays positive.
+//! - Each plane equilibrates within `burn_in_steps`. The samples start at the
+//!   anchor, so a plane whose thermal centre lies far from its anchor needs a
+//!   long burn-in.
+//! - The free energy rises somewhere along the path, so the dividing plane is
+//!   not the first one. Otherwise `Z_R` is zero and the call fails.
+//!
+//! ## Units
+//!
+//! - Positions, path images and masses use the units of the engine. Arc
+//!   lengths `s` are mass-weighted, `sqrt(mass) * length`, and equal lengths
+//!   for unit masses.
+//! - Energies, `free_energy`, `standard_error`, `barrier`, `barrier_error`,
+//!   `target_error` and the energy part of the tolerance are in engine energy
+//!   units. `time_step` is in engine time units.
+//! - [`FreeEnergyProfile::normalized_rate`] has units of inverse engine time
+//!   and [`FreeEnergyProfile::reactant_partition`] has the units of `s`.
+//! - `k_B T` comes from [`crate::engine::ThermostatConfig::thermal_energy`] of
+//!   the engine and must be positive.
+//!
+//! ## Engine wiring
+//!
+//! [`pafi_profile`] accepts any `E: DynamicsEngine + ?Sized`: the native
+//! engine over a [`rgsaddle::PointSurface`], an [`crate::EindirSurface`] or an
+//! `rgpot` surface, a session engine, or `LammpcEngine`. [`pafi_profile_dyn`]
+//! takes `&mut dyn DynamicsEngine`. The engine has to report
+//! [`crate::StepReport::constraint_force`] on constrained steps, and provide
+//! [`crate::DynamicsEngine::energy_and_forces`] for the zero-temperature
+//! check.
+//!
+//! ## Example
+//!
+//! A straight path through the widening double well
+//! `V(x, y) = (1 - x^2)^2 + 0.5 (1.5 + 0.5 x) y^2` with `k_B T = 0.2`. The
+//! exact barrier from `x = -1` to the saddle at `x = 0` is
+//! `1 + 0.5 k_B T ln(1.5) = 1.04`. This run is far too short for that
+//! accuracy, so the example only checks the shape of the result.
+//!
+//! ```rust
+//! use ndarray::{Array1, Array2, ArrayView1};
+//! use rgflux::engine::ThermostatConfig;
+//! use rgflux::engine::native::{NativeConfig, NativeEngine};
+//! use rgflux::pafi::{PafiConfig, pafi_profile};
+//! use rgflux::stats::StatsConfig;
+//!
+//! struct WideningWell;
+//! impl rgsaddle::PointSurface for WideningWell {
+//!     fn eval(
+//!         &self,
+//!         r: ArrayView1<'_, f64>,
+//!     ) -> Result<(f64, Array1<f64>), rgsaddle::SaddleError> {
+//!         let (x, y) = (r[0], r[1]);
+//!         let well = 1.0 - x * x;
+//!         let k = 1.5 + 0.5 * x;
+//!         Ok((
+//!             well * well + 0.5 * k * y * y,
+//!             Array1::from_vec(vec![-4.0 * x * well + 0.25 * y * y, k * y]),
+//!         ))
+//!     }
+//! }
+//!
+//! let config = PafiConfig::default()
+//!     .with_burn_in_steps(200)
+//!     .with_sample_steps(400)
+//!     .with_stats(StatsConfig::default().with_min_batches(4));
+//! let mut engine = NativeEngine::new(
+//!     WideningWell,
+//!     NativeConfig::default()
+//!         .with_masses(Array1::from_vec(vec![1.0, 1.0]))
+//!         .with_thermostat(
+//!             ThermostatConfig::default()
+//!                 .with_gamma(1.5)
+//!                 .with_temperature(0.2),
+//!         ),
+//! )?;
+//!
+//! let mut path = Array2::<f64>::zeros((config.planes, 2));
+//! for k in 0..config.planes {
+//!     path[[k, 0]] = -1.0 + (k as f64) / ((config.planes - 1) as f64);
+//! }
+//! let profile = pafi_profile(&mut engine, path.view(), &config)?;
+//! assert_eq!(profile.free_energy.len(), config.planes);
+//! assert_eq!(profile.free_energy[0], 0.0);
+//! assert!(profile.barrier.is_finite() && profile.barrier_error > 0.0);
+//! assert!(profile.normalized_rate > 0.0);
+//! # Ok::<(), rgflux::FluxError>(())
+//! ```
 //!
 //! ## References
 //!
+//! - Goswami, R. (2025). *Efficient Exploration of Chemical Kinetics*.
+//!   arXiv:2510.21368. <https://doi.org/10.48550/arXiv.2510.21368>
 //! - Goswami, R., Gunde, M., and Jónsson, H. (2026). *Enhanced climbing image
 //!   nudged elastic band method with Hessian eigenmode alignment*. Frontiers
 //!   in Chemistry, 14, 1807063. <https://doi.org/10.3389/fchem.2026.1807063>
@@ -18,6 +179,9 @@
 //! - Swinburne, T. D., and Marinica, M.-C. (2018). *Unsupervised Calculation
 //!   of Free Energy Barriers in Large Crystalline Systems*. Physical Review
 //!   Letters, 120, 135503. <https://doi.org/10.1103/PhysRevLett.120.135503>
+//! - Sprik, M., and Ciccotti, G. (1998). *Free energy from constrained
+//!   molecular dynamics*. The Journal of Chemical Physics, 109, 7737 to 7744.
+//!   <https://doi.org/10.1063/1.477419>
 
 use std::f64::consts::{PI, TAU};
 
@@ -59,17 +223,33 @@ const DEFAULT_ZERO_TEMPERATURE_TOL: f64 = ZERO_TEMPERATURE_SAFETY_FACTOR
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct PafiConfig {
-    /// Number of hyperplanes discretized along the reaction path (`>= 2`).
+    /// Number of hyperplanes placed at equal spacing along the spline path
+    /// (`>= 2`).
+    ///
+    /// Default: `9`.
     pub planes: usize,
-    /// Equilibration steps discarded on each hyperplane.
+    /// Equilibration steps discarded on each hyperplane before sampling
+    /// (`>= 1`). Every plane and every round starts from the anchor again.
+    ///
+    /// Default: `500`.
     pub burn_in_steps: usize,
     /// Production steps added per hyperplane and adaptive round (`>= 2`).
+    ///
+    /// Default: `4_000`.
     pub sample_steps: usize,
-    /// Integration timestep `dt > 0`.
+    /// Integration timestep `dt > 0` in engine time units.
+    ///
+    /// Default: `0.002`.
     pub time_step: f64,
-    /// Optional target standard error on the integrated barrier `Delta F`.
+    /// Optional target standard error on the integrated barrier `Delta F`
+    /// (finite and `>= 0`), in engine energy units. `None` runs one round.
+    ///
+    /// Default: `None`.
     pub target_error: Option<f64>,
-    /// Maximum adaptive resampling rounds when `target_error` is set.
+    /// Maximum sampling rounds (`>= 1`). Rounds after the first only run when
+    /// `target_error` is set and not yet reached.
+    ///
+    /// Default: `4`.
     pub max_rounds: usize,
     /// Relative tolerance on the zero-temperature path-force integral versus
     /// `Delta E_0`, in units of `max(1, |Delta E_0|)`.
@@ -81,11 +261,19 @@ pub struct PafiConfig {
     /// planes, 0.32% at 17 and 0.08% at 33. The default, about 2.6%, is twice
     /// the 9-plane value. Paths that turn through more than a quarter circle,
     /// or fewer planes, need a proportionally larger tolerance. Larger values
-    /// weaken the guard against inconsistent forces and tangents.
+    /// weaken the guard against inconsistent forces and tangents. Must be
+    /// finite and `>= 0`.
+    ///
+    /// Default: `2 * (pi^2 / 12) / 8^2`, about `0.0257`.
     pub zero_temperature_tol: f64,
-    /// Deterministic PRNG seed.
+    /// Base of the deterministic per-plane seeds `seed + 4099 * plane + 1000003 * round`
+    /// (wrapping).
+    ///
+    /// Default: `1`.
     pub seed: u64,
-    /// Batch-means uncertainty settings for per-plane forces.
+    /// Batch-means uncertainty settings for the per-plane force series.
+    ///
+    /// Default: [`StatsConfig::default`].
     pub stats: StatsConfig,
 }
 
@@ -121,17 +309,24 @@ with_setters!(PafiConfig {
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct FreeEnergyProfile {
-    /// Normalized arc-length coordinates `s_k` along the path.
+    /// Plane coordinates `s_k`: the mass-weighted chord-length parameter of
+    /// the spline, from `0` at the first image to the total path length at
+    /// the last, at equal spacing. They are not scaled to `[0, 1]`.
     pub arc_lengths: Vec<f64>,
-    /// Integrated free energy `F(s_k) - F(s_0)` at each plane.
+    /// Integrated free energy `F(s_k) - F(s_0)` at each plane, so the first
+    /// entry is `0`.
     pub free_energy: Vec<f64>,
-    /// Propagated block-averaged standard error at each plane.
+    /// Standard error of `free_energy` at each plane, propagated from the
+    /// batch-means errors of the plane forces through the trapezoid weights.
+    /// The first entry is `0`.
     pub standard_error: Vec<f64>,
-    /// Free-energy barrier `Delta F = max_s F(s)` at dividing plane `s*`.
+    /// Free-energy barrier `Delta F = max_k F(s_k)`, attained at the dividing
+    /// plane `s*`.
     pub barrier: f64,
     /// Standard error of [`Self::barrier`].
     pub barrier_error: f64,
-    /// Index `s*` where [`Self::barrier`] is attained.
+    /// Index of the dividing plane `s*`: the first plane where
+    /// [`Self::barrier`] is attained.
     pub dividing_index: usize,
     /// Reactant-side normalization
     /// `Z_R = 2 * \int_0^{s*} exp(-F(s) / k_B T) ds`.
@@ -618,6 +813,34 @@ fn path_force_relative_error(arcs: &[f64], energies: &[f64], gradients: &[f64]) 
 }
 
 /// Integrate the PAFI free-energy profile and normalized rate along `path_images`.
+///
+/// `path_images` has shape `(images, dof)`, one row per image, in the length
+/// units of the engine, and `dof` must equal the number of degrees of freedom
+/// of `engine`. The module documentation describes the method, the units and
+/// the restoration of the engine on return.
+///
+/// # Errors
+///
+/// Returns [`FluxError::InvalidConfig`] when
+///
+/// - `time_step` is not finite and positive, `burn_in_steps` is `0`,
+///   `sample_steps` is below `2`, `max_rounds` is `0`, `planes` is below `2`,
+///   `zero_temperature_tol` is negative or not finite, or `target_error` is
+///   negative or not finite,
+/// - `path_images` has fewer than two rows, or two neighbouring images
+///   coincide in the mass-weighted metric,
+/// - the thermal energy `k_B T` of the engine is not positive,
+/// - the zero-temperature check of [`PafiConfig::zero_temperature_tol`] fails,
+/// - a plane normal degenerates, or the dividing plane is the first plane so
+///   that the reactant partition `Z_R` is not positive.
+///
+/// Returns [`FluxError::EmptyInput`] for an empty coordinate axis and
+/// [`FluxError::Shape`] when the engine masses do not match the path
+/// coordinates. [`FluxError::NonFinite`] reports non-finite path coordinates,
+/// constraint forces, force samples, profile values or plane means. Errors
+/// from the engine and from the batch-means estimator are passed through, for
+/// example an invalid [`StatsConfig`] or an engine that does not report the
+/// constraint force on a constrained step.
 pub fn pafi_profile<E: DynamicsEngine + ?Sized>(
     engine: &mut E,
     path_images: ArrayView2<'_, f64>,
@@ -722,9 +945,9 @@ pub fn pafi_profile<E: DynamicsEngine + ?Sized>(
 
 /// Trait-object entry point for [`pafi_profile`] over [`DynamicsEngine`].
 ///
-/// The algorithm path is identical to [`pafi_profile`], enabling direct
-/// dispatch through `&mut dyn DynamicsEngine` for native and `rgpot`-backed
-/// engines without code forks.
+/// The algorithm, errors and restoration of the engine are those of
+/// [`pafi_profile`]. This function only fixes the engine type to the trait
+/// object, so one call site serves native, `rgpot` and session engines.
 pub fn pafi_profile_dyn(
     engine: &mut dyn DynamicsEngine,
     path_images: ArrayView2<'_, f64>,
