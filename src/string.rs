@@ -203,7 +203,7 @@ fn finite_temperature_string_inner<E: DynamicsEngine + ?Sized>(
             images.nrows()
         };
         let mut maximum_force = 0.0_f64;
-        for image_index in first..end {
+        for (image_index, covariance) in covariances.iter_mut().enumerate().take(end).skip(first) {
             let seed = mixed_seed(config.seed, iteration, image_index, 0);
             let sampled = sample_image(
                 engine,
@@ -218,7 +218,7 @@ fn finite_temperature_string_inner<E: DynamicsEngine + ?Sized>(
             mean_positions
                 .row_mut(image_index)
                 .assign(&sampled.mean_position);
-            covariances[image_index] = sampled.position_covariance;
+            *covariance = sampled.position_covariance;
             let force_norm = nrm2(sampled.mean_projected_force.view());
             maximum_force = maximum_force.max(force_norm);
             let update = sampled.mean_projected_force * config.evolution_step;
