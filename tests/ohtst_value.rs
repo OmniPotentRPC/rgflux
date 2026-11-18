@@ -149,6 +149,9 @@ fn hyperplane_mean_force_matches_harmonic_offsets() -> Result<(), FluxError> {
             sampled.mean_force,
             sampled.standard_error
         );
+        assert_eq!(sampled.mean_projected_force, Array1::zeros(1));
+        assert_eq!(sampled.mean_position, Array1::from_vec(vec![offset]));
+        assert_eq!(sampled.position_covariance[[0, 0]], 0.0);
     }
     Ok(())
 }

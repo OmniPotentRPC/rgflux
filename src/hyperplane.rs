@@ -27,9 +27,9 @@
 
 pub use crate::engine::HyperplaneConstraint;
 
-use ndarray::Array2;
+use ndarray::{Array1, Array2, ArrayView1, Axis};
 
-use crate::engine::{DynamicsEngine, EngineSnapshot};
+use crate::engine::{DynamicsEngine, EngineSnapshot, validate_finite_slice};
 use crate::error::FluxError;
 use crate::stats::{StatsConfig, batch_means};
 
@@ -85,6 +85,33 @@ pub struct HyperplaneSample {
     pub standard_error: f64,
     /// Retained configurations on the hyperplane (`(n_retained, dof)`).
     pub configurations: Array2<f64>,
+    /// Mean physical force projected into the sampled plane.
+    pub mean_projected_force: Array1<f64>,
+    /// Mean production position.
+    pub mean_position: Array1<f64>,
+    /// Population covariance of production positions.
+    pub position_covariance: Array2<f64>,
+}
+
+/// Build the plane through a path `image`, orthogonal to its `tangent`.
+pub fn plane_from_path_image(
+    image: ArrayView1<'_, f64>,
+    tangent: ArrayView1<'_, f64>,
+) -> Result<HyperplaneConstraint, FluxError> {
+    if image.len() != tangent.len() {
+        return Err(FluxError::Shape {
+            expected: image.len(),
+            got: tangent.len(),
+            context: "path image tangent",
+        });
+    }
+    validate_finite_slice(image, "path image")?;
+    let mut plane = HyperplaneConstraint::from_direction(tangent, 0.0)?;
+    plane.offset = plane.normal.dot(&image);
+    if !plane.offset.is_finite() {
+        return Err(FluxError::NonFinite("path plane offset"));
+    }
+    Ok(plane)
 }
 
 /// Sample a hyperplane through `engine`.
@@ -130,6 +157,9 @@ pub fn sample_hyperplane<E: DynamicsEngine + ?Sized>(
         let mut force_series = Vec::with_capacity(config.sample_steps);
         let mut retained_flat = Vec::new();
         let mut retained_count = 0_usize;
+        let mut mean_projected_force = Array1::zeros(engine.dof());
+        let mut mean_position = Array1::zeros(engine.dof());
+        let mut covariance_accumulator = Array2::zeros((engine.dof(), engine.dof()));
         for step_idx in 0..config.sample_steps {
             let report = engine.step(config.time_step)?;
             let lambda = report.constraint_force.ok_or(FluxError::InvalidConfig(
@@ -140,8 +170,33 @@ pub fn sample_hyperplane<E: DynamicsEngine + ?Sized>(
             }
             force_series.push(lambda);
 
+            let (_, mut projected_force) = engine.energy_and_forces()?;
+            if projected_force.len() != engine.dof() {
+                return Err(FluxError::Shape {
+                    expected: engine.dof(),
+                    got: projected_force.len(),
+                    context: "hyperplane physical force",
+                });
+            }
+            validate_finite_slice(projected_force.view(), "hyperplane physical force")?;
+            let normal_component = projected_force.dot(&plane.normal);
+            projected_force.scaled_add(-normal_component, &plane.normal);
+            let sample_count = (step_idx + 1) as f64;
+            let projected_force_delta = &projected_force - &mean_projected_force;
+            mean_projected_force.scaled_add(sample_count.recip(), &projected_force_delta);
+
+            let position = engine.positions().to_owned();
+            validate_finite_slice(position.view(), "hyperplane position")?;
+            let position_delta = &position - &mean_position;
+            mean_position.scaled_add(sample_count.recip(), &position_delta);
+            let updated_delta = &position - &mean_position;
+            covariance_accumulator += &position_delta
+                .view()
+                .insert_axis(Axis(1))
+                .dot(&updated_delta.view().insert_axis(Axis(0)));
+
             if step_idx % config.retention_stride == 0 {
-                retained_flat.extend(engine.positions().iter().copied());
+                retained_flat.extend(position.iter().copied());
                 retained_count += 1;
             }
         }
@@ -149,11 +204,15 @@ pub fn sample_hyperplane<E: DynamicsEngine + ?Sized>(
         let estimate = batch_means(&force_series, &config.stats)?;
         let configurations = Array2::from_shape_vec((retained_count, engine.dof()), retained_flat)
             .map_err(|_| FluxError::InvalidConfig("failed to reshape retained configurations"))?;
+        let position_covariance = covariance_accumulator / config.sample_steps as f64;
         Ok(HyperplaneSample {
             plane: plane.clone(),
             mean_force: estimate.mean,
             standard_error: estimate.standard_error,
             configurations,
+            mean_projected_force,
+            mean_position,
+            position_covariance,
         })
     })();
 
