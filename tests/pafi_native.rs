@@ -5,7 +5,7 @@ use std::f64::consts::PI;
 use ndarray::{Array1, Array2, ArrayView1};
 use rgflux::engine::native::{NativeConfig, NativeEngine};
 use rgflux::engine::{DynamicsEngine, ThermostatConfig};
-use rgflux::pafi::{PafiConfig, pafi_profile};
+use rgflux::pafi::{FreeEnergyProfile, PafiConfig, pafi_profile};
 use rgflux::stats::StatsConfig;
 
 struct WideningDoubleWell;
@@ -163,46 +163,82 @@ fn pafi_widening_barrier_mass_anisotropic_matches_analytic_within_reported_se() 
     );
 }
 
-#[test]
-fn curved_mass_weighted_harmonic_profile_requires_jacobian() {
-    let thermal = 0.2_f64;
-    let radius = 1.2_f64;
-    let ax = 3.0_f64;
-    let ay = 1.0_f64;
+const CURVED_THERMAL: f64 = 0.2;
+const CURVED_RADIUS: f64 = 1.2;
+const CURVED_FORCE_CONSTANT_X: f64 = 3.0;
+const CURVED_FORCE_CONSTANT_Y: f64 = 1.0;
+const CURVED_PLANES: usize = 9;
+const CURVED_SEED: u64 = 1_234;
+
+/// Largest disagreement, as a fraction of the analytic barrier, between an
+/// end plane of the curved path and the same plane seen from a path that
+/// continues past it. Common random numbers make the two runs share their
+/// sampling noise, so the residual is not statistical: it is 0.03% of the
+/// barrier with not-a-knot endpoints and 7.8% with natural ones.
+const END_PLANE_AGREEMENT: f64 = 1.0 / 64.0;
+
+/// Profile along the quarter circle `theta` in `[pi / 2, 0]`, sampled at
+/// `CURVED_PLANES + extra_images` equally spaced images and planes. With
+/// `extra_images = 1` the arc continues one image spacing past `theta = 0`,
+/// so the plane at `theta = 0` is an interior plane of the longer path while
+/// every plane before it keeps its position, tangent and per-plane seed.
+fn curved_profile(extra_images: usize) -> FreeEnergyProfile {
     let theta_start = PI * 0.5;
     let theta_end = 0.0_f64;
-    let planes = 49usize;
-    let path = mass_weighted_circular_path(radius, theta_start, theta_end, planes);
+    let images = CURVED_PLANES + extra_images;
+    let spacing = (theta_end - theta_start) / ((CURVED_PLANES - 1) as f64);
+    let path = mass_weighted_circular_path(
+        CURVED_RADIUS,
+        theta_start,
+        theta_end + spacing * (extra_images as f64),
+        images,
+    );
     let config = PafiConfig::default()
-        .with_planes(planes)
-        .with_burn_in_steps(10_000)
-        .with_sample_steps(20_000)
-        .with_time_step(0.0005)
+        .with_planes(images)
+        .with_burn_in_steps(3_000)
+        .with_sample_steps(54_000)
         .with_stats(StatsConfig::default().with_min_batches(4))
-        .with_seed(1_234);
+        .with_seed(CURVED_SEED);
     let mut engine = NativeEngine::new(
-        AnisotropicHarmonic { ax, ay },
+        AnisotropicHarmonic {
+            ax: CURVED_FORCE_CONSTANT_X,
+            ay: CURVED_FORCE_CONSTANT_Y,
+        },
         NativeConfig::default()
             .with_masses(Array1::from_vec(vec![1.0, 4.0]))
-            .with_seed(1_234)
+            .with_seed(CURVED_SEED)
             .with_thermostat(
                 ThermostatConfig::default()
                     .with_gamma(1.5)
-                    .with_temperature(thermal)
+                    .with_temperature(CURVED_THERMAL)
                     .with_boltzmann(1.0),
             ),
     )
     .expect("native engine");
-    engine.shoot_velocities(1_234).expect("initial velocities");
+    engine
+        .shoot_velocities(CURVED_SEED)
+        .expect("initial velocities");
+    pafi_profile(&mut engine, path.view(), &config).expect("curved profile")
+}
 
-    let profile = pafi_profile(&mut engine, path.view(), &config).expect("curved profile");
-    let analytic_barrier = 0.5 * thermal * (ax / ay).ln();
+#[test]
+fn curved_mass_weighted_harmonic_profile_requires_jacobian() {
+    let (profile, longer) = std::thread::scope(|scope| {
+        let base = scope.spawn(|| curved_profile(0));
+        let longer = scope.spawn(|| curved_profile(1));
+        (
+            base.join().expect("curved profile thread"),
+            longer.join().expect("longer curved profile thread"),
+        )
+    });
+    let analytic_barrier =
+        0.5 * CURVED_THERMAL * (CURVED_FORCE_CONSTANT_X / CURVED_FORCE_CONSTANT_Y).ln();
     let z = (profile.barrier - analytic_barrier).abs() / profile.barrier_error;
     eprintln!(
         "curved harmonic barrier={:.8} se={:.8} analytic={:.8} z={:.4}",
         profile.barrier, profile.barrier_error, analytic_barrier, z
     );
-    assert_eq!(profile.dividing_index, planes - 1);
+    assert_eq!(profile.dividing_index, CURVED_PLANES - 1);
     assert!(
         z <= 4.0,
         "curved barrier {:.8} ± {:.8} versus analytic {:.8} gives z={:.4}",
@@ -210,6 +246,25 @@ fn curved_mass_weighted_harmonic_profile_requires_jacobian() {
         profile.barrier_error,
         analytic_barrier,
         z
+    );
+
+    // Natural spline endpoints zero the normal curvature `dn/ds` on the end
+    // planes. That shifts the last free-energy increment by far less than the
+    // sampling error, so compare against the longer path, which sees the same
+    // plane with the curvature of an interior plane.
+    let tolerance = END_PLANE_AGREEMENT * analytic_barrier;
+    let worst = (1..CURVED_PLANES)
+        .map(|k| {
+            let increment = profile.free_energy[k] - profile.free_energy[k - 1];
+            let reference = longer.free_energy[k] - longer.free_energy[k - 1];
+            (increment - reference).abs()
+        })
+        .fold(0.0_f64, f64::max);
+    eprintln!("end-plane disagreement={worst:.8} tolerance={tolerance:.8}");
+    assert!(
+        worst <= tolerance,
+        "free-energy increments differ by up to {worst:.8} from those of a longer path, \
+         above the tolerance {tolerance:.8}"
     );
 }
 
