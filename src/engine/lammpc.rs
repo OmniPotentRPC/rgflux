@@ -384,7 +384,7 @@ impl LammpcEngine {
         let cfg = LammpcMdConfig {
             time_step_ps: dt,
             thermal_energy_ev: md_thermal,
-            friction_per_ps: self.thermostat.gamma.max(MIN_POSITIVE_THERMAL_ENERGY_EV),
+            friction_per_ps: self.thermostat.gamma,
             seed: self.seed,
             coordinates: LammpcPlaneCoordinates::Cartesian,
         };
