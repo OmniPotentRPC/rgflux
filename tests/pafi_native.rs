@@ -316,6 +316,12 @@ fn normalized_pafi_rate_matches_analytic_profile() {
         profile.reactant_partition,
         reconstructed_zr
     );
+    assert!(
+        (profile.reactant_log_partition - reconstructed_zr.ln()).abs() <= 1.0e-12,
+        "reactant log partition mismatch: {:.16e} vs {:.16e}",
+        profile.reactant_log_partition,
+        reconstructed_zr.ln()
+    );
 
     let intervals = 20_000usize;
     let dx = 1.0 / (intervals as f64);
