@@ -505,3 +505,229 @@ fn probe_sampling(config: &OhtstConfig) -> HyperplaneConfig {
         .with_seed(config.seed)
         .with_stats(config.stats.clone())
 }
+
+#[cfg(test)]
+mod tests {
+    use ndarray::{Array1, ArrayView1};
+
+    use super::{
+        OhtstConfig, dividing_surface, flux_mass, optimize_hyperplane, probe_sampling,
+        rate_standard_error, validate_config,
+    };
+    use crate::engine::native::{NativeConfig, NativeEngine};
+    use crate::engine::{DynamicsEngine, ForceSurface, HyperplaneConstraint, ThermostatConfig};
+    use crate::error::FluxError;
+    use crate::stats::{SERIES_FLAT_TOL, StatsConfig};
+
+    const TEST_SEED: u64 = 41;
+    const TEST_TEMPERATURE: f64 = 0.1;
+    const TEST_STEP: f64 = 0.1;
+    const TEST_SAMPLE_STEPS: usize = 2;
+
+    struct SymmetricDoubleWell;
+
+    impl ForceSurface for SymmetricDoubleWell {
+        fn energy_and_forces(
+            &self,
+            positions: ArrayView1<'_, f64>,
+            _cell: Option<&[f64; 9]>,
+        ) -> Result<(f64, Array1<f64>), FluxError> {
+            if positions.len() != 1 {
+                return Err(FluxError::Shape {
+                    expected: 1,
+                    got: positions.len(),
+                    context: "SymmetricDoubleWell positions",
+                });
+            }
+            let x = positions[0];
+            let well = x * x - 1.0;
+            Ok((0.25 * well * well, Array1::from_vec(vec![-x * well])))
+        }
+    }
+
+    fn engine_at(position: f64, mass: f64) -> Result<NativeEngine<SymmetricDoubleWell>, FluxError> {
+        let mut engine = NativeEngine::new(
+            SymmetricDoubleWell,
+            NativeConfig::default()
+                .with_masses(Array1::from_vec(vec![mass]))
+                .with_thermostat(
+                    ThermostatConfig::default()
+                        .with_gamma(1.0)
+                        .with_temperature(TEST_TEMPERATURE),
+                )
+                .with_seed(TEST_SEED),
+        )?;
+        engine.set_positions(Array1::from_vec(vec![position]).view())?;
+        Ok(engine)
+    }
+
+    fn short_config() -> OhtstConfig {
+        OhtstConfig::default()
+            .with_max_outer_steps(32)
+            .with_max_translation(TEST_STEP)
+            .with_burn_in_steps(0)
+            .with_min_sample_steps(TEST_SAMPLE_STEPS)
+            .with_sample_step_factor(0)
+            .with_retention_stride(1)
+            .with_time_step(0.01)
+            .with_seed(TEST_SEED)
+    }
+
+    fn config_error(config: &OhtstConfig) -> &'static str {
+        match validate_config(config) {
+            Err(FluxError::InvalidConfig(message)) => message,
+            other => panic!("expected InvalidConfig, got {other:?}"),
+        }
+    }
+
+    fn check_every_invalid_ohtst_configuration_domain() {
+        let base = OhtstConfig::default();
+        assert!(validate_config(&base).is_ok());
+        assert!(
+            validate_config(
+                &base
+                    .clone()
+                    .with_max_rotation(0.0)
+                    .with_min_sample_steps(2)
+            )
+            .is_ok()
+        );
+        assert_eq!(
+            config_error(&base.clone().with_max_outer_steps(0)),
+            "OhtstConfig::max_outer_steps must be at least 1"
+        );
+        for value in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+            assert_eq!(
+                config_error(&base.clone().with_max_translation(value)),
+                "OhtstConfig::max_translation must be finite and positive"
+            );
+        }
+        for value in [-1.0, f64::NAN, f64::INFINITY] {
+            assert_eq!(
+                config_error(&base.clone().with_max_rotation(value)),
+                "OhtstConfig::max_rotation must be finite and non-negative"
+            );
+        }
+        assert_eq!(
+            config_error(&base.clone().with_min_sample_steps(1)),
+            "OhtstConfig::min_sample_steps must be at least 2"
+        );
+        assert_eq!(
+            config_error(&base.clone().with_retention_stride(0)),
+            "OhtstConfig::retention_stride must be at least 1"
+        );
+        for value in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+            assert_eq!(
+                config_error(&base.clone().with_time_step(value)),
+                "OhtstConfig::time_step must be finite and positive"
+            );
+        }
+    }
+
+    fn check_flux_mass_uses_the_inverse_mass_metric() -> Result<(), FluxError> {
+        let normal = Array1::from_vec(vec![0.6, 0.8]);
+        let masses = Array1::from_vec(vec![2.0, 4.0]);
+        let expected = 1.0 / (0.36 / 2.0 + 0.64 / 4.0);
+        let actual = flux_mass(normal.view(), masses.view())?;
+        assert!((actual - expected).abs() <= 4.0 * f64::EPSILON * expected);
+        Ok(())
+    }
+
+    fn check_rate_uncertainty_matches_delta_method_with_nonzero_error() -> Result<(), FluxError> {
+        let rate = 2.0;
+        let lambda = 0.5;
+        let lambda_error = 0.1;
+        let expected = rate * 0.5 * lambda_error / lambda;
+        let actual = rate_standard_error(rate, lambda, lambda_error)?;
+        assert!((actual - expected).abs() <= f64::EPSILON);
+        Ok(())
+    }
+
+    fn check_probe_sampling_maps_every_ohtst_sampling_field() {
+        let stats = StatsConfig::default()
+            .with_batch_size(3)
+            .with_min_batches(2);
+        let config = OhtstConfig::default()
+            .with_max_outer_steps(7)
+            .with_burn_in_steps(11)
+            .with_min_sample_steps(13)
+            .with_sample_step_factor(5)
+            .with_retention_stride(17)
+            .with_time_step(0.02)
+            .with_seed(19)
+            .with_stats(stats.clone());
+        let mapped = probe_sampling(&config);
+        assert_eq!(mapped.burn_in_steps, 11);
+        assert_eq!(mapped.sample_steps, 35);
+        assert_eq!(mapped.retention_stride, 17);
+        assert_eq!(mapped.time_step, 0.02);
+        assert_eq!(mapped.seed, 19);
+        assert_eq!(mapped.stats, stats);
+
+        let minimum_limited = probe_sampling(
+            &config
+                .with_max_outer_steps(2)
+                .with_min_sample_steps(13)
+                .with_sample_step_factor(5),
+        );
+        assert_eq!(minimum_limited.sample_steps, 13);
+    }
+
+    fn check_off_stationary_seed_brackets_and_bisects_the_analytic_root() -> Result<(), FluxError> {
+        let mut engine = engine_at(-1.0, 1.0)?;
+        let minimum = Array1::from_vec(vec![-1.0]);
+        let seed = HyperplaneConstraint::from_direction(Array1::from_vec(vec![1.0]).view(), -0.4)?;
+        let dividing = dividing_surface(&mut engine, &minimum, 0.0, &seed, &short_config())?;
+        assert!(dividing.offset.abs() <= 2.0 * SERIES_FLAT_TOL);
+        assert!(dividing.point[0].abs() <= 2.0 * SERIES_FLAT_TOL);
+        Ok(())
+    }
+
+    fn check_curvature_is_positive_from_both_sides() -> Result<(), FluxError> {
+        let seed = HyperplaneConstraint::from_direction(Array1::from_vec(vec![1.0]).view(), 0.0)?;
+        let config = short_config();
+        let mut rates = Vec::new();
+        for start in [-1.0, 1.0] {
+            let mut engine = engine_at(start, 1.0)?;
+            let estimate = optimize_hyperplane(&mut engine, &seed, &config)?;
+            rates.push(estimate.rate);
+        }
+        assert!((rates[0] - rates[1]).abs() <= 64.0 * f64::EPSILON * rates[0]);
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_every_invalid_ohtst_configuration_domain() -> Result<(), FluxError> {
+        check_every_invalid_ohtst_configuration_domain();
+        check_curvature_is_positive_from_both_sides()
+    }
+
+    #[test]
+    fn flux_mass_uses_the_inverse_mass_metric() -> Result<(), FluxError> {
+        check_flux_mass_uses_the_inverse_mass_metric()?;
+        check_curvature_is_positive_from_both_sides()
+    }
+
+    #[test]
+    fn rate_uncertainty_matches_delta_method_with_nonzero_error() -> Result<(), FluxError> {
+        check_rate_uncertainty_matches_delta_method_with_nonzero_error()?;
+        check_curvature_is_positive_from_both_sides()
+    }
+
+    #[test]
+    fn probe_sampling_maps_every_ohtst_sampling_field() -> Result<(), FluxError> {
+        check_probe_sampling_maps_every_ohtst_sampling_field();
+        check_curvature_is_positive_from_both_sides()
+    }
+
+    #[test]
+    fn off_stationary_seed_brackets_and_bisects_the_analytic_root() -> Result<(), FluxError> {
+        check_off_stationary_seed_brackets_and_bisects_the_analytic_root()?;
+        check_curvature_is_positive_from_both_sides()
+    }
+
+    #[test]
+    fn curvature_is_positive_from_both_sides_of_the_reactant_minimum() -> Result<(), FluxError> {
+        check_curvature_is_positive_from_both_sides()
+    }
+}
