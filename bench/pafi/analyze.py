@@ -5,11 +5,6 @@ import math
 import pathlib
 import statistics
 
-import numpy as np
-from scipy.integrate import quad
-from scipy.stats import fisher_exact, mannwhitneyu
-
-
 REACTANT_PARTITION_ERROR = (
     "invalid configuration: PAFI reactant partition must be finite and positive"
 )
@@ -26,18 +21,42 @@ class AnalysisError(RuntimeError):
     pass
 
 
+def load_analysis_dependencies():
+    global np, quad, fisher_exact, mannwhitneyu
+    import numpy as np
+    from scipy.integrate import quad
+    from scipy.stats import fisher_exact, mannwhitneyu
+
+
 def arguments():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--raw-dir", type=pathlib.Path, required=True)
-    parser.add_argument("--vacancy-raw-dir", type=pathlib.Path, required=True)
-    parser.add_argument("--vacancy-path", type=pathlib.Path, required=True)
-    parser.add_argument(
-        "--vacancy-static-reference", type=pathlib.Path, required=True
-    )
-    parser.add_argument("--metadata", type=pathlib.Path, required=True)
-    parser.add_argument("--output-json", type=pathlib.Path, required=True)
-    parser.add_argument("--output-markdown", type=pathlib.Path, required=True)
-    return parser.parse_args()
+    parser.add_argument("--raw-dir", type=pathlib.Path)
+    parser.add_argument("--vacancy-raw-dir", type=pathlib.Path)
+    parser.add_argument("--vacancy-path", type=pathlib.Path)
+    parser.add_argument("--vacancy-static-reference", type=pathlib.Path)
+    parser.add_argument("--metadata", type=pathlib.Path)
+    parser.add_argument("--output-json", type=pathlib.Path)
+    parser.add_argument("--output-markdown", type=pathlib.Path)
+    parser.add_argument("--validate-results", type=pathlib.Path)
+    args = parser.parse_args()
+    if args.validate_results is None:
+        required = (
+            "raw_dir",
+            "vacancy_raw_dir",
+            "vacancy_path",
+            "vacancy_static_reference",
+            "metadata",
+            "output_json",
+            "output_markdown",
+        )
+        missing = [
+            name.replace("_", "-")
+            for name in required
+            if getattr(args, name) is None
+        ]
+        if missing:
+            parser.error("the following arguments are required: " + ", ".join(missing))
+    return args
 
 
 def finite_values(values, context):
@@ -485,11 +504,10 @@ def validate_coordinates(values, planes, context):
     if span <= 0.0:
         raise AnalysisError(f"{context}: coordinates do not span a positive interval")
     normalized = [(value - values[0]) / span for value in values]
-    if not np.allclose(
-        normalized,
-        np.linspace(0.0, 1.0, planes),
-        rtol=0.0,
-        atol=PLANE_COORDINATE_ABS_TOL,
+    expected = (index / (planes - 1) for index in range(planes))
+    if any(
+        abs(actual - target) > PLANE_COORDINATE_ABS_TOL
+        for actual, target in zip(normalized, expected)
     ):
         raise AnalysisError(f"{context}: coordinates are not the declared uniform grid")
 
@@ -621,6 +639,11 @@ def validate_result(result):
 
 def main():
     args = arguments()
+    if args.validate_results is not None:
+        result = json.loads(args.validate_results.read_text())
+        print(json.dumps(validate_result(result), sort_keys=True))
+        return
+    load_analysis_dependencies()
     metadata = json.loads(args.metadata.read_text())
     vacancy_path = json.loads(args.vacancy_path.read_text())
     vacancy_static = json.loads(args.vacancy_static_reference.read_text())

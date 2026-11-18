@@ -14,7 +14,7 @@ categories = ["science"]
 [lib]
 crate-type = ["lib"]
 
-[[example]]
+[[bin]]
 name = "pafi-dimer-coverage"
 path = "bench/pafi/src/main.rs"
 
@@ -42,6 +42,7 @@ rgpot-core = { version = "=3.7.0", git = "https://github.com/OmniPotentRPC/rgpot
 eindir-core = "0.6.0"
 ndarray = "0.17"
 rand = "0.9"
+rgpot-pair = { version = "=3.7.0", git = "https://github.com/OmniPotentRPC/rgpot", rev = "424629e5ba9c0948b8d6224f5b49c014ffb4ac7c" }
 thiserror = "2"
 capnp = { version = "0.20.6", optional = true }
 
@@ -49,7 +50,6 @@ capnp = { version = "0.20.6", optional = true }
 approx = "0.5"
 proptest = "1.6"
 pyo3 = { version = "0.27", features = ["auto-initialize"] }
-rgpot-pair = { version = "=3.7.0", git = "https://github.com/OmniPotentRPC/rgpot", rev = "424629e5ba9c0948b8d6224f5b49c014ffb4ac7c" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 

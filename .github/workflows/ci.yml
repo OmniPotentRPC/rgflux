@@ -64,6 +64,15 @@ jobs:
         run: cargo test --locked --features rgpot,rgpot-session --verbose
       - name: Doc tests (library features)
         run: cargo test --locked --doc --features rgpot,rgpot-session --verbose
+      - name: PAFI coverage gates
+        run: |
+          set -euo pipefail
+          cargo build --locked --bin pafi-dimer-coverage
+          python3 bench/pafi/repro_zero_width_reactant_partition.py \
+            --native-bin target/debug/pafi-dimer-coverage
+          python3 bench/pafi/test_analyze.py
+          python3 bench/pafi/analyze.py \
+            --validate-results bench/pafi/results.json
       - name: Public items are documented
         run: cargo rustdoc --locked --features rgpot,rgpot-session -- -D missing_docs
       - name: Rustdoc builds without warnings
