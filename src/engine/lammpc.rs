@@ -1407,6 +1407,9 @@ mod tests {
         .expect("plane");
         let mut engine =
             LammpcEngine::new(LammpcConfig::default().with_constraint(plane)).expect("engine");
+        engine
+            .set_positions(Array1::from_vec(vec![0.0, 0.0, 0.0, 4.2, 0.0, 0.0]).view())
+            .expect("separated atoms");
         let positions = engine.positions.clone();
         engine.config_bytes = vec![0_u8; CAPNP_WORD_BYTES];
         engine.md_initialized = true;
