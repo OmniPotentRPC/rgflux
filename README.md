@@ -10,8 +10,8 @@ Kinetics code is engine-agnostic: trajectory samplers drive the `engine::Dynamic
 - `stats` — batch means, Geyer effective sample size (`n_eff`), and Geweke two-window stationarity diagnostics.
 - `kappa` and `kappa::bennett_chandler` — Bennett-Chandler reactive-flux transmission coefficient estimator over recorded dividing-surface velocity and side histories, plus generic trajectory shooting over any `DynamicsEngine`.
 - `hyperplane` — shared holonomic hyperplane sampler with normal and projected forces, mean positions, covariances, and retained configurations.
-- `pafi` — Projected Average Force Integration along reaction paths (*implementation moves from rgsaddle*).
-- `ohtst` — fixed-normal harmonic OH-TST over the shared hyperplane sampler; the normal is not variationally optimized.
+- `pafi` — Projected Average Force Integration API owned by the rare-event kinetics crate; its current profile entry point reports that the estimator is not yet implemented.
+- `ohtst` — fixed-normal harmonic OH-TST over the shared hyperplane sampler; the supplied seed normal remains fixed.
 - `string` — finite-temperature strings and strings with swarms of trajectories over the shared sampler.
 - `ffs` — Forward Flux Sampling across ordered interfaces.
 - `network` — symmetry-resolved kinetic rate networks and kinetic Monte Carlo rate tables (*implementation moves from rgsaddle*).

@@ -1,9 +1,8 @@
-//! Constrained hyperplane sampling, mean force, torque, and control variates.
+//! Constrained hyperplane sampling and mean-force observables.
 //!
 //! Samples configurations restricted to a hyperplane `n · x - c = 0` through
-//! [`crate::engine::DynamicsEngine`] to estimate the hyperplane free-energy
-//! derivatives `dA/dc` and `dA/dn` along with in-plane virial and zero-variance
-//! harmonic control variates.
+//! [`crate::engine::DynamicsEngine`] to estimate `dA/dc`, in-plane physical
+//! forces, mean positions, and position covariances.
 //!
 //! Note: implementation moves from rgsaddle.
 //!
@@ -432,5 +431,42 @@ mod restore_tests {
         let mut engine = ScriptedEngine::new(true, true);
         let err = sample_hyperplane(&mut engine, &plane, &config).unwrap_err();
         assert_eq!(err, FluxError::InvalidConfig("scripted step failed"));
+    }
+
+    #[test]
+    fn sampling_rejects_a_zero_time_step() {
+        let plane =
+            HyperplaneConstraint::from_direction(Array1::from_vec(vec![1.0]).view(), 0.2).unwrap();
+        let config = HyperplaneConfig::default()
+            .with_sample_steps(2)
+            .with_time_step(0.0);
+        let mut engine = ScriptedEngine::new(false, false);
+
+        let err = sample_hyperplane(&mut engine, &plane, &config).unwrap_err();
+
+        assert_eq!(
+            err,
+            FluxError::InvalidConfig("HyperplaneConfig::time_step must be finite and positive")
+        );
+    }
+
+    #[test]
+    fn sampling_tracks_population_statistics_and_retention_stride() {
+        let plane =
+            HyperplaneConstraint::from_direction(Array1::from_vec(vec![1.0]).view(), 0.2).unwrap();
+        let config = HyperplaneConfig::default()
+            .with_burn_in_steps(0)
+            .with_sample_steps(3)
+            .with_retention_stride(2)
+            .with_time_step(0.01);
+        let mut engine = ScriptedEngine::new(false, false);
+
+        let sampled = sample_hyperplane(&mut engine, &plane, &config).unwrap();
+
+        assert_eq!(sampled.configurations.nrows(), 2);
+        assert_eq!(sampled.configurations[[0, 0]], 1.2);
+        assert_eq!(sampled.configurations[[1, 0]], 3.2);
+        assert_eq!(sampled.mean_position, Array1::from_vec(vec![2.2]));
+        assert_eq!(sampled.position_covariance[[0, 0]], 2.0 / 3.0);
     }
 }

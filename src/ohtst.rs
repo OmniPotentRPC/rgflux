@@ -49,18 +49,10 @@ use crate::stats::{SERIES_FLAT_TOL, StatsConfig};
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct OhtstConfig {
-    /// Maximum Riemannian trust-region outer iterations.
+    /// Maximum offset-search iterations along the fixed normal.
     pub max_outer_steps: usize,
-    /// Consecutive accepted planes within gradient noise required to stop.
-    pub patience: usize,
-    /// Trust-region cap on normal translation per step.
+    /// Maximum offset translation per search iteration.
     pub max_translation: f64,
-    /// Trust-region cap on normal rotation angle (radians) per step.
-    pub max_rotation: f64,
-    /// Minimum two-state BAR overlap before emitting a low-overlap warning.
-    pub min_overlap: f64,
-    /// Combine reversible work across all plane nodes with MBAR when `true`.
-    pub use_mbar: bool,
     /// Deterministic PRNG seed.
     pub seed: u64,
     /// Batch-means uncertainty settings.
@@ -93,11 +85,7 @@ impl Default for OhtstConfig {
     fn default() -> Self {
         Self {
             max_outer_steps: 32,
-            patience: 3,
             max_translation: 0.25,
-            max_rotation: 0.25,
-            min_overlap: 0.03,
-            use_mbar: true,
             seed: 1,
             stats: StatsConfig::default(),
             burn_in_steps: 256,
@@ -111,11 +99,7 @@ impl Default for OhtstConfig {
 
 with_setters!(OhtstConfig {
     with_max_outer_steps => max_outer_steps: val usize,
-    with_patience => patience: val usize,
     with_max_translation => max_translation: val f64,
-    with_max_rotation => max_rotation: val f64,
-    with_min_overlap => min_overlap: val f64,
-    with_use_mbar => use_mbar: val bool,
     with_seed => seed: val u64,
     with_stats => stats: val StatsConfig,
     with_burn_in_steps => burn_in_steps: val usize,
@@ -172,11 +156,6 @@ fn validate_config(config: &OhtstConfig) -> Result<(), FluxError> {
     if !config.max_translation.is_finite() || config.max_translation <= 0.0 {
         return Err(FluxError::InvalidConfig(
             "OhtstConfig::max_translation must be finite and positive",
-        ));
-    }
-    if !config.max_rotation.is_finite() || config.max_rotation < 0.0 {
-        return Err(FluxError::InvalidConfig(
-            "OhtstConfig::max_rotation must be finite and non-negative",
         ));
     }
     if config.min_sample_steps < 2 {
@@ -244,9 +223,10 @@ fn evaluate_harmonic_rate<E: DynamicsEngine + ?Sized>(
     let probe_plane = HyperplaneConstraint::from_direction(seed_plane.normal.view(), probe_offset)?;
     let sampled = sample_hyperplane(engine, &probe_plane, &probe_sampling(config))?;
     let lambda = sampled.mean_force;
-    // Divide by the offset that the constraint actually holds. `s_min + probe`
-    // is not always `probe` away from `s_min` in binary64.
-    let displacement = (probe_offset - s_min).abs();
+    // Divide by the signed offset that the constraint actually holds.
+    // `s_min + probe` is not always `probe` away from `s_min` in binary64.
+    // The mean constraint force has the same sign as this displacement.
+    let displacement = probe_offset - s_min;
     let kappa = lambda / displacement;
     if !(kappa.is_finite() && kappa > 0.0) {
         return Err(FluxError::InvalidConfig(
@@ -499,4 +479,33 @@ fn probe_sampling(config: &OhtstConfig) -> HyperplaneConfig {
         .with_time_step(config.time_step)
         .with_seed(config.seed)
         .with_stats(config.stats.clone())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{OhtstConfig, probe_sampling};
+    use crate::stats::StatsConfig;
+
+    #[test]
+    fn probe_sampling_copies_curvature_sampling_options() {
+        let stats = StatsConfig::default().with_min_batches(3);
+        let config = OhtstConfig::default()
+            .with_max_outer_steps(5)
+            .with_sample_step_factor(7)
+            .with_min_sample_steps(29)
+            .with_burn_in_steps(11)
+            .with_retention_stride(4)
+            .with_time_step(0.125)
+            .with_seed(17)
+            .with_stats(stats.clone());
+
+        let sampling = probe_sampling(&config);
+
+        assert_eq!(sampling.burn_in_steps, 11);
+        assert_eq!(sampling.sample_steps, 35);
+        assert_eq!(sampling.retention_stride, 4);
+        assert_eq!(sampling.time_step, 0.125);
+        assert_eq!(sampling.seed, 17);
+        assert_eq!(sampling.stats, stats);
+    }
 }

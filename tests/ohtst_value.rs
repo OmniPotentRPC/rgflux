@@ -32,6 +32,7 @@ const SEED: u64 = 17;
 const THERMAL: f64 = 0.005;
 const SEAM: f64 = 0.25;
 const HARMONIC_RATE_ROUNDOFF_ULPS: f64 = 64.0;
+const DIVIDING_OFFSET_TOLERANCE: f64 = 1_024.0 * f64::EPSILON;
 
 struct HarmonicBarrier;
 
@@ -43,6 +44,28 @@ impl PointSurface for HarmonicBarrier {
             ));
         }
         let x = position[0];
+        let (energy, slope) = barrier_energy_slope(x);
+        Ok((energy, Array1::from_vec(vec![slope])))
+    }
+}
+
+struct AsymmetricRightBarrier;
+
+impl PointSurface for AsymmetricRightBarrier {
+    fn eval(&self, position: ArrayView1<f64>) -> Result<(f64, Array1<f64>), SaddleError> {
+        if position.len() != 1 {
+            return Err(SaddleError::Shape(
+                "AsymmetricRightBarrier is one dimensional".into(),
+            ));
+        }
+        let x = position[0];
+        if x > 1.0 {
+            let displacement = x - 1.0;
+            return Ok((
+                4.0 * displacement * displacement,
+                Array1::from_vec(vec![8.0 * displacement]),
+            ));
+        }
         let (energy, slope) = barrier_energy_slope(x);
         Ok((energy, Array1::from_vec(vec![slope])))
     }
@@ -193,6 +216,72 @@ fn ohtst_rate_matches_harmonic_tst_and_rgsaddle() -> Result<(), Box<dyn std::err
         estimate.standard_error,
         rg.0,
         rg.1
+    );
+    Ok(())
+}
+
+#[test]
+fn ohtst_walks_from_both_reactant_wells_to_the_known_dividing_surface() -> Result<(), FluxError> {
+    let config = OhtstConfig::default()
+        .with_max_translation(0.05)
+        .with_seed(SEED);
+    let normal = Array1::from_vec(vec![1.0]);
+
+    let mut left = engine(HarmonicBarrier, THERMAL)?;
+    left.set_positions(Array1::from_vec(vec![-1.0]).view())?;
+    let left_seed = HyperplaneConstraint::from_direction(normal.view(), 0.2)?;
+    let left_estimate = optimize_hyperplane(&mut left, &left_seed, &config)?;
+    assert!(
+        left_estimate.plane.offset.abs() <= DIVIDING_OFFSET_TOLERANCE,
+        "left-hand walk stopped at {}",
+        left_estimate.plane.offset
+    );
+
+    let mut right = engine(HarmonicBarrier, THERMAL)?;
+    right.set_positions(Array1::from_vec(vec![1.0]).view())?;
+    let right_seed = HyperplaneConstraint::from_direction(normal.view(), -0.2)?;
+    let right_estimate = optimize_hyperplane(&mut right, &right_seed, &config)?;
+    assert!(
+        right_estimate.plane.offset.abs() <= DIVIDING_OFFSET_TOLERANCE,
+        "right-hand walk stopped at {}",
+        right_estimate.plane.offset
+    );
+    assert!(
+        right_estimate.rate.is_finite() && right_estimate.rate > 0.0,
+        "toward=-1 should retain a positive reactant curvature"
+    );
+    Ok(())
+}
+
+#[test]
+fn ohtst_negative_probe_direction_uses_the_reactant_side_curvature() -> Result<(), FluxError> {
+    let (barrier, _, _) = barrier_polynomial();
+    let expected_rate = harmonic_tst_rate(barrier, THERMAL);
+    let config = OhtstConfig::default()
+        .with_max_translation(0.05)
+        .with_seed(SEED);
+    let normal = Array1::from_vec(vec![1.0]);
+    let seed = HyperplaneConstraint::from_direction(normal.view(), -0.2)?;
+    let mut sampler = engine(AsymmetricRightBarrier, THERMAL)?;
+    sampler.set_positions(Array1::from_vec(vec![1.0]).view())?;
+
+    let estimate = optimize_hyperplane(&mut sampler, &seed, &config)?;
+
+    assert!(
+        estimate.plane.offset.abs() <= DIVIDING_OFFSET_TOLERANCE,
+        "right-hand walk stopped at {}",
+        estimate.plane.offset
+    );
+    assert!(
+        within_harmonic_rate_error(
+            estimate.rate,
+            expected_rate,
+            estimate.standard_error,
+            config.stats.max_z_score
+        ),
+        "negative probe sampled rate {} ± {} instead of {expected_rate}",
+        estimate.rate,
+        estimate.standard_error
     );
     Ok(())
 }

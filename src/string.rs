@@ -89,11 +89,11 @@ with_setters!(FiniteTemperatureStringConfig {
 pub struct FiniteTemperatureString {
     /// Final, equal-arc path images.
     pub images: Array2<f64>,
-    /// Mean projected force at every final-cycle image.
+    /// Mean projected force at every image before the final update and reparametrization.
     pub mean_projected_forces: Array2<f64>,
-    /// Mean sampled position at every final-cycle image.
+    /// Mean sampled position at every image before the final update and reparametrization.
     pub mean_positions: Array2<f64>,
-    /// Position covariance at every final-cycle image.
+    /// Position covariance at every image before the final update and reparametrization.
     pub position_covariances: Vec<Array2<f64>>,
     /// Number of completed cycles.
     pub iterations: usize,
@@ -155,7 +155,7 @@ with_setters!(SwarmStringConfig {
 pub struct SwarmString {
     /// Final, equal-arc path images.
     pub images: Array2<f64>,
-    /// Mean sampled displacement at every final-cycle image.
+    /// Mean sampled displacement at every image before the final update and reparametrization.
     pub mean_displacements: Array2<f64>,
     /// Number of completed cycles.
     pub iterations: usize,

@@ -10,14 +10,14 @@
 | =kappa::bennett_chandler= | Engine-free reactive-flux estimator and =DynamicsEngine= trajectory shooter | Implemented |
 | =kappa= | Surface-shooting quench classifiers and first-crossing estimators | Implementation moves from =rgsaddle= |
 | =hyperplane= | Constrained hyperplane sampling with running mean force, projected force, position, covariance, and retained configurations | Implemented |
-| =pafi= | Projected Average Force Integration along reaction paths | Implementation moves from =rgsaddle= |
-| =ohtst= | Fixed-normal harmonic Optimal Hyperplanar Transition State Theory using the shared hyperplane sampler | Implemented; rotating-plane optimization moves from =rgsaddle= |
+| =pafi= | Projected Average Force Integration along reaction paths | =rgflux= owns the rare-event API; the current profile entry point returns =Unimplemented= |
+| =ohtst= | Fixed-normal harmonic Optimal Hyperplanar Transition State Theory using the shared hyperplane sampler | Implemented with the supplied normal held fixed |
 | =string= | Finite-temperature string and string method with swarms over shared constrained trajectories | Implemented |
 | =ffs= | Forward Flux Sampling across ordered interfaces | Implemented |
 | =network= | Symmetry-resolved rate networks and kinetic Monte Carlo rate tables | Implementation moves from =rgsaddle= |
 
 * String method API
 
-=finite_temperature_string= accepts any mutable =DynamicsEngine=, an =(images, dof)= array, and =FiniteTemperatureStringConfig=. Its result contains final images and the final-cycle projected forces, sampled positions, and position covariances. =swarm_string= accepts =SwarmStringConfig= and reports final images and mean swarm displacements. Both configuration structs are =#[non_exhaustive]=, implement =Default=, and provide chainable =with_*= builders.
+=finite_temperature_string= accepts any mutable =DynamicsEngine=, an =(images, dof)= array, and =FiniteTemperatureStringConfig=. Its result contains final images and the projected forces, sampled positions, and position covariances collected immediately before the last image update and reparametrization. =swarm_string= accepts =SwarmStringConfig= and reports final images and mean swarm displacements collected before its final update and reparametrization. Both configuration structs are =#[non_exhaustive]=, implement =Default=, and provide chainable =with_*= builders.
 
 The current implementation uses non-periodic equal-chord redistribution through the public =rgsaddle::reparametrize= utility. Hyperplane integration itself continues to respect the cell owned by the dynamics engine.
