@@ -15,6 +15,10 @@ use rgflux::kappa::kramers_transmission_coefficient;
 use rgflux::ohtst::{OhtstConfig, optimize_hyperplane};
 use rgflux::pafi::{PafiConfig, pafi_profile};
 use rgflux::stats::StatsConfig;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 fn extract_rust_blocks(org_source: &str) -> Vec<String> {
     let mut blocks = Vec::new();
@@ -34,46 +38,165 @@ fn extract_rust_blocks(org_source: &str) -> Vec<String> {
 }
 
 #[test]
-fn org_guide_rust_blocks_are_non_empty_and_complete() {
+fn org_guide_rust_blocks_compile_and_run() {
     let getting_started = include_str!("../docs/orgmode/getting-started.org");
     let gs_blocks = extract_rust_blocks(getting_started);
     assert_eq!(gs_blocks.len(), 2, "getting-started.org has 2 Rust blocks");
-    for block in &gs_blocks {
-        assert!(block.contains("fn main() -> Result<(), rgflux::FluxError>"));
-    }
+    run_extracted_blocks("getting_started", &gs_blocks);
 
     let howto = include_str!("../docs/orgmode/howto.org");
     let howto_blocks = extract_rust_blocks(howto);
     assert_eq!(howto_blocks.len(), 6, "howto.org has 6 Rust blocks");
-    for block in &howto_blocks {
-        assert!(block.contains("fn main() -> Result<(), rgflux::FluxError>"));
+    run_extracted_blocks("howto", &howto_blocks);
+}
+
+fn run_extracted_blocks(label: &str, blocks: &[String]) {
+    for block in blocks {
+        assert!(
+            block.contains("fn main() -> Result<(), rgflux::FluxError>"),
+            "missing `main` in extracted {label} block:\n{block}"
+        );
     }
+    let sandbox = make_sandbox_dir(label);
+    write_sandbox_manifest(&sandbox);
+    let bins_dir = sandbox.join("src").join("bin");
+    fs::create_dir_all(&bins_dir).expect("create bin directory");
+    for (index, block) in blocks.iter().enumerate() {
+        let file = bins_dir.join(format!("block_{index}.rs"));
+        fs::write(file, block).expect("write extracted Rust block");
+    }
+    for (index, _) in blocks.iter().enumerate() {
+        let output = Command::new("cargo")
+            .arg("run")
+            .arg("--quiet")
+            .arg("--bin")
+            .arg(format!("block_{index}"))
+            .current_dir(&sandbox)
+            .env(
+                "CARGO_TARGET_DIR",
+                Path::new(env!("CARGO_MANIFEST_DIR")).join("target/doc_examples"),
+            )
+            .output()
+            .expect("run extracted Rust block");
+        assert!(
+            output.status.success(),
+            "{label} block {index} failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    fs::remove_dir_all(&sandbox).expect("remove sandbox");
+}
+
+fn make_sandbox_dir(label: &str) -> PathBuf {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("time")
+        .as_nanos();
+    std::env::temp_dir().join(format!("rgflux_doc_examples_{label}_{nanos}"))
+}
+
+fn write_sandbox_manifest(sandbox: &Path) {
+    fs::create_dir_all(sandbox).expect("create sandbox");
+    let manifest = format!(
+        r#"[package]
+name = "rgflux-doc-examples"
+version = "0.0.0"
+edition = "2024"
+
+[dependencies]
+ndarray = "0.17"
+rgsaddle = {{ version = "=0.5.0", git = "https://github.com/OmniPotentRPC/rgsaddle", rev = "92a74493d16364a1ba8542a63598ce8bcee5387c", default-features = false }}
+rgmin = {{ version = "=0.6.0", git = "https://github.com/OmniPotentRPC/rgmin", rev = "eb8d3e4123183bd3f5ca82852332eeddb5d17f54", default-features = false }}
+rgflux = {{ path = "{}" }}
+"#,
+        env!("CARGO_MANIFEST_DIR")
+    );
+    fs::write(sandbox.join("Cargo.toml"), manifest).expect("write sandbox manifest");
 }
 
 #[test]
 fn reference_pafi_defaults_match_the_code() {
     let reference = include_str!("../docs/orgmode/reference.org");
     let defaults = PafiConfig::default();
-    let rows = [
-        format!("| =planes= | =usize= | ={}= |", defaults.planes),
-        format!(
-            "| =burn_in_steps= | =usize= | ={}= |",
-            defaults.burn_in_steps
-        ),
-        "| =sample_steps= | =usize= | =4_000= |".to_string(),
-        format!("| =time_step= | =f64= | ={}= |", defaults.time_step),
-        format!("| =max_rounds= | =usize= | ={}= |", defaults.max_rounds),
-        format!("| =seed= | =u64= | ={}= |", defaults.seed),
-        format!("\\approx {:.4}\\) |", defaults.zero_temperature_tol),
-    ];
-    for row in &rows {
-        assert!(
-            reference.contains(row.as_str()),
-            "reference.org lacks {row}"
-        );
-    }
+    let pafi_rows = extract_pafi_reference_rows(reference);
+    assert_eq!(pafi_rows.len(), 9, "expected all PAFI rows to be present");
+    assert_row_contains(
+        &pafi_rows,
+        "=planes=",
+        format!("=usize= | ={}=", defaults.planes).as_str(),
+    );
+    assert_row_contains(
+        &pafi_rows,
+        "=burn_in_steps=",
+        format!("=usize= | ={}=", defaults.burn_in_steps).as_str(),
+    );
+    assert_row_contains(&pafi_rows, "=sample_steps=", "=usize= | =4_000=");
+    assert_row_contains(
+        &pafi_rows,
+        "=time_step=",
+        format!("=f64= | ={}=", defaults.time_step).as_str(),
+    );
+    assert_row_contains(&pafi_rows, "=target_error=", "=Option<f64>= | =None=");
+    assert_row_contains(
+        &pafi_rows,
+        "=max_rounds=",
+        format!("=usize= | ={}=", defaults.max_rounds).as_str(),
+    );
+    assert_row_contains(&pafi_rows, "=zero_temperature_tol=", "\\approx");
+    assert_row_contains(
+        &pafi_rows,
+        "=seed=",
+        format!("=u64= | ={}=", defaults.seed).as_str(),
+    );
+    assert_row_contains(
+        &pafi_rows,
+        "=stats=",
+        "=StatsConfig= | =StatsConfig::default()=",
+    );
     assert_eq!(defaults.sample_steps, 4_000);
     assert!(defaults.target_error.is_none());
+}
+
+#[test]
+fn reference_pafi_row_drop_is_detected() {
+    let reference = include_str!("../docs/orgmode/reference.org");
+    let dropped = reference
+        .lines()
+        .filter(|line| !line.contains("| =target_error= |"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let rows = extract_pafi_reference_rows(&dropped);
+    assert_eq!(rows.len(), 8);
+}
+
+fn extract_pafi_reference_rows(reference: &str) -> Vec<String> {
+    let mut rows = Vec::new();
+    let mut in_pafi_table = false;
+    for line in reference.lines() {
+        if line.trim() == "** =pafi::PafiConfig=" {
+            in_pafi_table = true;
+            continue;
+        }
+        if in_pafi_table && line.starts_with("** ") {
+            break;
+        }
+        if in_pafi_table && line.starts_with("| =") {
+            rows.push(line.to_string());
+        }
+    }
+    rows
+}
+
+fn assert_row_contains(rows: &[String], field: &str, fragment: &str) {
+    let row = rows
+        .iter()
+        .find(|row| row.contains(field))
+        .unwrap_or_else(|| panic!("missing row for {field}"));
+    assert!(
+        row.contains(fragment),
+        "row for {field} lacks expected fragment `{fragment}`:\n{row}"
+    );
 }
 
 #[test]
