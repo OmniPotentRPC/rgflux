@@ -581,6 +581,7 @@ def main():
             "- Curved-path agreement improves strongly from 17 to 33 planes. At 33 planes and 256 samples, median maximum profile differences are below 3.7e-6 in every temperature and thread cell.",
             "- The accepted 17-plane straight profiles differ by 0.029 to 0.062 at 256 samples, exceeding the combined profile standard errors. This cell does not establish profile equivalence.",
             "- The exact interacting-basin dimer reference shows substantial absolute bias in both straight-path implementations. At T=0.1 and 0.2 rgflux is closer, so the temperature-growing pairwise discrepancy is carried by the LAMMPS side; it is not a units, Boltzmann-constant, Jacobian, plane-spacing, or tangent convention difference.",
+            "- The 191-atom vacancy profiles do not agree: median maximum differences are 0.54 to 0.58 eV, far above combined standard errors and A/A noise. rgflux barriers are about 0.10 to 0.12 eV lower even though independent static minimum and saddle energies agree within 1.0e-11 eV. Increasing from 17 to 33 planes does not remove the discrepancy.",
             "- Every 9-plane straight run is rejected by the unchanged zero-temperature quadrature tolerance. Curved runs additionally expose a direct-exponential overflow in reactant-partition evaluation.",
             "- The scalar native surface has no four-thread speedup. Four OpenMP threads slow the two-atom reference case, as expected when scheduling dominates potential work.",
         ]
