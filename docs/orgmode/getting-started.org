@@ -17,9 +17,11 @@ $ cargo check --features rgpot-session
 $ cargo check --features lammpc
 #+end_src
 
-The =lammpc= feature links =liblammpc= from pkg-config when available, or from
-=LAMMPC_DIR= (install prefix with =lib/= or =lib64/= and =include/=) when pkg-config
-is not configured.
+The =lammpc= feature links =liblammpc= from pkg-config when available, from
+=LAMMPC_DIR= (an install prefix with =lib/= or =lib64/=), or directly from
+=LAMMPC_LIB_DIR=. Include both =liblammpc= and its LAMMPS runtime on the
+loader path. =--all-features= therefore requires those libraries; builds with
+no features or with =rgpot,rgpot-session= do not.
 
 * Reactive-flux recrossing
 

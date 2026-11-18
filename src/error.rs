@@ -76,6 +76,22 @@ pub enum FluxError {
     #[error("lammpc backend error: {0}")]
     Lammpc(String),
 
+    /// A lammpc configuration field could inject another LAMMPS command.
+    #[error("unsafe LAMMPS command text in {field}")]
+    InvalidLammpcCommand {
+        /// Configuration field containing text outside the accepted command syntax.
+        field: &'static str,
+    },
+
+    /// A lammpc setup line mentions a forbidden LAMMPS directive.
+    #[error("forbidden LAMMPS directive `{directive}` in {field}")]
+    ForbiddenLammpcDirective {
+        /// Configuration field containing the directive.
+        field: &'static str,
+        /// Forbidden word found in the line.
+        directive: &'static str,
+    },
+
     /// An estimator whose implementation moves from `rgsaddle` or awaits wiring was called.
     #[error("not yet wired in rgflux: {0}")]
     Unimplemented(&'static str),

@@ -393,12 +393,223 @@ fn constraint_projection_overflow_is_reported() {
         .with_masses_by_type(vec![ARGON_MASS_AMU])
         .with_constraint(plane);
     let mut engine = LammpcEngine::new(cfg).expect("lammpc engine");
+    let original_positions = engine.positions().to_owned();
+    let original_velocities = engine.velocities().to_owned();
     let positions = Array1::from_vec(vec![f64::MAX, 0.0, 0.0, f64::MAX, 0.0, 0.0]);
 
     assert!(matches!(
         engine.set_positions(positions.view()),
         Err(FluxError::ConstraintViolation { .. })
     ));
+    assert_eq!(engine.positions(), original_positions.view());
+    assert_eq!(engine.velocities(), original_velocities.view());
+}
+
+#[test]
+fn rejected_constraint_update_preserves_the_previous_engine_state() {
+    let mut engine = LammpcEngine::new(LammpcConfig::default()).expect("lammpc engine");
+    let positions = Array1::from_vec(vec![f64::MAX, 0.0, 0.0, f64::MAX, 0.0, 0.0]);
+    engine
+        .set_positions(positions.view())
+        .expect("unconstrained positions");
+    let normal = Array1::from_vec(vec![1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
+    let plane = HyperplaneConstraint::from_direction(normal.view(), 0.0).expect("plane");
+
+    assert!(matches!(
+        engine.set_constraint(Some(plane)),
+        Err(FluxError::ConstraintViolation { .. })
+    ));
+    assert_eq!(engine.constraint(), None);
+    assert_eq!(engine.positions(), positions.view());
+}
+
+#[test]
+fn command_injection_text_is_rejected_with_the_field_name() {
+    let cases = [
+        (
+            LammpcConfig::default().with_pair_style("lj/cut 8.5; clear".to_string()),
+            "LammpcConfig::pair_style",
+        ),
+        (
+            LammpcConfig::default().with_pair_coeffs(vec!["1 1 0.010323 3.405\0 x".to_string()]),
+            "LammpcConfig::pair_coeffs",
+        ),
+        (
+            LammpcConfig::default().with_pair_coeffs(vec!["1 1 0.010323 3.405\rclear".to_string()]),
+            "LammpcConfig::pair_coeffs",
+        ),
+        (
+            LammpcConfig::default().with_pair_coeffs(vec!["1 1 0.010323 3.405;clear".to_string()]),
+            "LammpcConfig::pair_coeffs",
+        ),
+        (
+            LammpcConfig::default().with_boundary("p p p\nclear".to_string()),
+            "LammpcConfig::boundary",
+        ),
+        (
+            LammpcConfig::default().with_suffix("omp\nclear".to_string()),
+            "LammpcConfig::suffix",
+        ),
+        (
+            LammpcConfig::default().with_suffix("omp\rclear".to_string()),
+            "LammpcConfig::suffix",
+        ),
+        (
+            LammpcConfig::default().with_suffix("omp;clear".to_string()),
+            "LammpcConfig::suffix",
+        ),
+        (
+            LammpcConfig::default().with_extra_setup(vec!["neighbor 2.0 bin\0clear".to_string()]),
+            "LammpcConfig::extra_setup",
+        ),
+    ];
+
+    for (config, expected_field) in cases {
+        let error = match LammpcEngine::new(config) {
+            Ok(_) => panic!("unsafe command text was accepted"),
+            Err(error) => error,
+        };
+        assert_eq!(
+            error,
+            FluxError::InvalidLammpcCommand {
+                field: expected_field
+            }
+        );
+    }
+}
+
+#[test]
+fn extra_setup_rejects_shell_and_include_directives() {
+    for command in [
+        "shell touch /tmp/rgflux-sentinel",
+        "include setup.in",
+        "jump setup.in",
+        "python test input 1 return v_val format i",
+    ] {
+        let error = match LammpcEngine::new(
+            LammpcConfig::default().with_extra_setup(vec![command.to_string()]),
+        ) {
+            Ok(_) => panic!("forbidden directive should fail"),
+            Err(error) => error,
+        };
+        assert_eq!(
+            error,
+            FluxError::ForbiddenLammpcDirective {
+                field: "LammpcConfig::extra_setup",
+                directive: command.split_whitespace().next().expect("directive"),
+            }
+        );
+    }
+}
+
+fn setup_marker(name: &str) -> std::path::PathBuf {
+    let path = std::env::temp_dir().join(format!("rgflux-setup-{}-{name}", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+    path
+}
+
+/// Build an engine with `setup`, give LAMMPS the chance to run it, then
+/// require that the marker file was never created and that `new` failed
+/// with `expected`.
+fn assert_setup_rejected(setup: &str, marker: &std::path::Path, expected: &FluxError) {
+    let outcome = LammpcEngine::new(
+        LammpcConfig::default().with_extra_setup(vec![setup.to_string()]),
+    )
+    .map(|mut engine| {
+        let _ = engine.energy_and_forces();
+    });
+    let created = marker.exists();
+    let _ = std::fs::remove_file(marker);
+    assert!(!created, "LAMMPS ran setup line {setup:?}");
+    assert_eq!(
+        outcome.as_ref().err(),
+        Some(expected),
+        "setup line {setup:?} was not rejected"
+    );
+}
+
+fn forbidden(directive: &'static str) -> FluxError {
+    FluxError::ForbiddenLammpcDirective {
+        field: "LammpcConfig::extra_setup",
+        directive,
+    }
+}
+
+fn invalid_setup() -> FluxError {
+    FluxError::InvalidLammpcCommand {
+        field: "LammpcConfig::extra_setup",
+    }
+}
+
+#[test]
+fn extra_setup_rejects_shell_hidden_behind_other_directives() {
+    let marker = setup_marker("nested");
+    let path = marker.display();
+    assert_setup_rejected(
+        &format!("if 1 then \"shell touch {path}\""),
+        &marker,
+        &forbidden("if"),
+    );
+    assert_setup_rejected(
+        &format!("partition yes 1 shell touch {path}"),
+        &marker,
+        &forbidden("partition"),
+    );
+    assert_setup_rejected(
+        &format!("neighbor 2.0 bin shell touch {path}"),
+        &marker,
+        &forbidden("shell"),
+    );
+}
+
+#[test]
+fn extra_setup_rejects_directives_outside_the_allowlist() {
+    let marker = setup_marker("unlisted");
+    let path = marker.display();
+    assert_setup_rejected(&format!("log {path}"), &marker, &invalid_setup());
+    assert_setup_rejected("variable x equal 1", &marker, &invalid_setup());
+}
+
+#[test]
+fn extra_setup_rejects_non_ascii_separators_that_lammps_maps_to_spaces() {
+    let marker = setup_marker("unicode");
+    let path = marker.display();
+    for separator in ['\u{200b}', '\u{2060}', '\u{2063}', '\u{feff}'] {
+        assert_setup_rejected(
+            &format!("shell{separator}touch {path}"),
+            &marker,
+            &invalid_setup(),
+        );
+        assert_setup_rejected(
+            &format!("{separator}shell touch {path}"),
+            &marker,
+            &invalid_setup(),
+        );
+    }
+}
+
+#[test]
+fn extra_setup_reports_shell_behind_a_comment_marker_as_forbidden() {
+    let marker = setup_marker("comment");
+    let path = marker.display();
+    assert_setup_rejected(&format!("shell#touch {path}"), &marker, &forbidden("shell"));
+}
+
+#[test]
+fn extra_setup_allowlisted_directives_are_accepted_by_lammps() {
+    let mut engine = LammpcEngine::new(LammpcConfig::default().with_extra_setup(vec![
+        "neighbor 2.0 bin".to_string(),
+        "neigh_modify every 1 delay 0 check yes".to_string(),
+        "comm_modify cutoff 12.0".to_string(),
+        "pair_modify shift yes".to_string(),
+    ]))
+    .expect("allowlisted setup");
+    engine
+        .set_positions(Array1::from_vec(vec![0.0, 0.0, 0.0, 4.2, 0.0, 0.0]).view())
+        .expect("positions");
+    let (energy, forces) = engine.energy_and_forces().expect("LAMMPS accepts setup");
+    assert!(energy.is_finite());
+    assert!(forces.iter().all(|value| value.is_finite()));
 }
 
 fn velocity_bits(engine: &LammpcEngine) -> Vec<u64> {

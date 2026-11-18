@@ -1,0 +1,8 @@
+Lammpc configuration updates and failed steps preserve the last accepted
+Rust-side state, recreate the lammpc session after backend failures, compare
+timesteps relatively, reject unsafe text in =pair_style=, =pair_coeffs=,
+=boundary= and =suffix=, and accept only =neighbor=, =neigh_modify=,
+=comm_modify= and =pair_modify= lines in =extra_setup=, with no non-ASCII text,
+quotes, =$=, =&=, =#= or the words =if=, =partition=, =shell=, =include=,
+=jump=, =python=, =label= and =next=. An engine whose session cannot be
+recreated after an error is poisoned and every later call returns an error.

@@ -627,7 +627,7 @@ pub(crate) fn shake_positions_in_place(
     }
     let scale = 1.0 + plane.offset.abs() + nrm2(positions.view());
     let residual = (dot(plane.normal.view(), positions.view()) - plane.offset).abs() / scale;
-    if !residual.is_finite() || residual > HYPERPLANE_PROJECTION_TOL {
+    if residual > HYPERPLANE_PROJECTION_TOL {
         return Err(FluxError::ConstraintViolation {
             residual,
             tolerance: HYPERPLANE_PROJECTION_TOL,
