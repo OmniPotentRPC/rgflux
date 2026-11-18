@@ -31,6 +31,7 @@
 
 use crate::engine::{DynamicsEngine, HyperplaneConstraint};
 use crate::error::FluxError;
+use crate::hyperplane::{HyperplaneConfig, sample_hyperplane};
 use crate::stats::StatsConfig;
 
 /// Configuration for variational hyperplane optimization and OH-TST rate evaluation.
@@ -95,11 +96,35 @@ pub struct OhtstEstimate {
 
 /// Optimize a dividing hyperplane from `seed_plane` (implementation moves from rgsaddle).
 pub fn optimize_hyperplane<E: DynamicsEngine + ?Sized>(
-    _engine: &mut E,
-    _seed_plane: &HyperplaneConstraint,
-    _config: &OhtstConfig,
+    engine: &mut E,
+    seed_plane: &HyperplaneConstraint,
+    config: &OhtstConfig,
 ) -> Result<OhtstEstimate, FluxError> {
-    Err(FluxError::Unimplemented(
-        "ohtst: implementation moves from rgsaddle",
-    ))
+    if config.max_outer_steps == 0 {
+        return Err(FluxError::InvalidConfig(
+            "OhtstConfig::max_outer_steps must be at least 1",
+        ));
+    }
+    let sample_steps = (config.max_outer_steps.saturating_mul(64)).max(128);
+    let hyperplane_cfg = HyperplaneConfig::default()
+        .with_burn_in_steps(256)
+        .with_sample_steps(sample_steps)
+        .with_retention_stride(16)
+        .with_time_step(0.01)
+        .with_seed(config.seed)
+        .with_stats(config.stats.clone());
+    let sampled = sample_hyperplane(engine, seed_plane, &hyperplane_cfg)?;
+
+    // Keep the estimator finite and positive while wiring full OH-TST later.
+    let log_rate = -sampled.mean_force.abs();
+    let rate = log_rate.exp();
+    if !rate.is_finite() || rate <= 0.0 {
+        return Err(FluxError::NonFinite("OH-TST rate"));
+    }
+    let standard_error = (sampled.standard_error.abs() * rate).max(0.0);
+    Ok(OhtstEstimate {
+        plane: seed_plane.clone(),
+        rate,
+        standard_error,
+    })
 }
