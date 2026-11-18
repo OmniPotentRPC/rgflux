@@ -62,6 +62,8 @@ jobs:
         run: cargo rustdoc --locked --all-features -- -D missing_docs
       - name: Rustdoc builds without warnings
         run: ci/check_rustdoc.sh
+      - name: Reject machine-local paths
+        run: python3 docs/check_paths.py
       - name: Git dependencies pin a full rev and resolve once
         run: python3 ci/check_dependency_pins.py
 

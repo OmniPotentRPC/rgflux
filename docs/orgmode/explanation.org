@@ -1,0 +1,10 @@
+#+TITLE: Explanation
+#+OPTIONS: toc:nil num:nil
+
+* Engine-agnostic kinetics
+
+Saddle-point searches in =rgsaddle= and local or Riemannian minimizers in =rgmin= query static energy and gradient surfaces @@rst::cite:`goswamiEnhancedClimbingImage2026,goswamiEfficientExploration2025`@@. Finite-temperature kinetics additionally requires finite-timestep propagation, thermal velocity seeding, dividing-surface velocity boundary rules, and holonomic hyperplane constraints.
+
+=rgflux::engine::DynamicsEngine= captures that contract in an object-safe trait. Samplers such as Bennett-Chandler shooting @@rst::cite:`bennettMolecularDynamics1977,chandlerStatisticalMechanics1978`@@, PAFI @@rst::cite:`swinburneUnsupervisedCalculation2018`@@, OH-TST @@rst::cite:`johannessonOptimizationHyperplanar2001,bligaardOptimizationHyperplanar2005`@@, and Forward Flux Sampling @@rst::cite:`allenSimulatingRareEvents2006,allenForwardFluxEfficiency2006`@@ drive any backend implementing =DynamicsEngine= without coupling rate estimators to a particular MD package.
+
+=engine::native= provides an in-process BAOAB Langevin integrator @@rst::cite:`leimkuhlerRationalConstruction2012,leimkuhlerGeodesicIntegration2016`@@ with SHAKE @@rst::cite:`ryckaertShake1977`@@ and RATTLE @@rst::cite:`andersenRattle1983`@@ hyperplane projection over any =rgsaddle::PointSurface=, =eindir_core::DifferentiableObjective=, or =rgpot= callback surface. External molecular dynamics engines (OpenMM, GROMACS =nblib=, and LAMMPS) enter through =rgpot-session=, wrapping =rgpot='s engine-agnostic MD session ABI.

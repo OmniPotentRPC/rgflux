@@ -1,0 +1,10 @@
+#+TITLE: How-to guides
+#+OPTIONS: toc:nil num:nil
+
+* Run constrained Langevin dynamics on a hyperplane
+
+Construct a =HyperplaneConstraint= from a unit normal \(\mathbf{n}\) and scalar offset \(c\), attach it to =NativeEngine=, and step with BAOAB + RATTLE. Each =StepReport= carries the holonomic Lagrange multiplier \(\lambda\), whose canonical mean equals \(dF/dc\) @@rst::cite:`sprikFreeEnergyConstrained1998,leimkuhlerGeodesicIntegration2016`@@.
+
+* Estimate a Bennett-Chandler transmission coefficient
+
+Pass recorded =ReactiveTrajectory= histories to =estimate_bennett_chandler= for engine-free analysis, or call =shoot_bennett_chandler= with a mutable =DynamicsEngine= and dividing-surface configurations to generate and reduce reactive-flux trajectories in one pass @@rst::cite:`bennettMolecularDynamics1977,chandlerStatisticalMechanics1978`@@.

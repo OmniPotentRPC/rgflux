@@ -1,0 +1,31 @@
+#+TITLE: Contributing
+#+OPTIONS: toc:nil num:nil
+
+* System prerequisites
+
+- Current stable Rust with =clippy= and =rustfmt=.
+- =jq= and =rustup= for minimum supported Rust version (=rust-version = "1.88"=) checks.
+- Python 3.12+ and Emacs 29+ (=emacs-nox=) when building the Sphinx documentation from =docs/orgmode=.
+
+* Build and test
+
+#+begin_src sh
+cargo fmt --all -- --check
+cargo clippy --locked --all-targets --all-features -- -D warnings
+cargo test --locked --all-features
+ci/check_rustdoc.sh
+python3 ci/check_dependency_pins.py
+python3 docs/check_paths.py
+#+end_src
+
+* Dependency pins
+
+Every git dependency in =Cargo.toml= pins a full 40-hex commit =rev= with the exact crate version at that revision (for example =version = "=0.5.0"=), never a branch or tag name. =ci/check_dependency_pins.py= verifies that =Cargo.lock= and =cargo tree -d --all-features= resolve a single copy of =rgflux=, =rgsaddle=, =rgmin=, =rgpot-core=, =eindir-core=, =dlpk=, =linkcell= and =minimage=.
+
+* Changelog fragments
+
+Add a newsfragment under =docs/newsfragments= named =+<slug>.<type>.org= matching one of the sections in =towncrier.toml=.
+
+* Contact
+
+Report issues at https://github.com/OmniPotentRPC/rgflux/issues. Maintainer: Rohit Goswami (rgoswami@ieee.org).

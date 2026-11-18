@@ -1,0 +1,43 @@
+#+TITLE: rgflux
+#+OPTIONS: toc:nil num:nil
+
+#+begin_export rst
+.. raw:: html
+
+     <div class="vi-hero">
+       <div class="vi-hero-brand">
+         <img class="vi-hero-mark" src="_static/mark.svg" width="64" height="64" alt="" />
+         <div>
+           <p class="vi-hero-name">rgflux</p>
+           <p class="vi-hero-tag">Rare-event kinetics over rgsaddle and rgmin</p>
+         </div>
+       </div>
+       <p class="vi-hero-tagline">Engine-agnostic reactive flux, hyperplane free energies, PAFI, OH-TST, FFS and rate networks.</p>
+       <div class="vi-hero-pills">
+         <span>DynamicsEngine trait</span>
+         <span>Bennett-Chandler recrossing</span>
+         <span>BAOAB + RATTLE reference</span>
+       </div>
+       <div class="vi-hero-actions">
+         <a class="vi-btn vi-btn-gold" href="getting-started.html">Get started</a>
+         <a class="vi-btn vi-btn-ghost" href="reference.html">Reference</a>
+       </div>
+     </div>
+#+end_export
+
+=rgflux= separates rare-event kinetics from specific force fields and molecular dynamics codes. Every sampler drives the =DynamicsEngine= trait, while recorded trajectory estimators such as =kappa::bennett_chandler= stay engine-free.
+
+#+begin_export rst
+.. toctree::
+   :maxdepth: 1
+   :caption: Guides
+   :hidden:
+
+   getting-started
+   howto
+   reference
+   explanation
+   reference/bibliography
+   contributing/index
+   changelog
+#+end_export

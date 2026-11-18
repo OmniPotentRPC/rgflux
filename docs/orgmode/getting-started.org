@@ -1,0 +1,21 @@
+#+TITLE: Getting started
+#+OPTIONS: toc:nil num:nil
+
+* Install
+
+Add =rgflux= from the repository while initial kinetics modules migrate from =rgsaddle=:
+
+#+begin_src console
+$ cargo add --git https://github.com/OmniPotentRPC/rgflux --branch develop
+#+end_src
+
+Enable optional =rgpot= features as needed:
+
+#+begin_src console
+$ cargo check --features rgpot
+$ cargo check --features rgpot-session
+#+end_src
+
+* Reactive-flux recrossing
+
+=kappa::bennett_chandler= estimates the time-dependent transmission coefficient \(\kappa(t)\) and its plateau mean with a block-averaged standard error from =stats=, either from pre-recorded dividing-surface velocity and side histories or by shooting trajectories through any =DynamicsEngine= implementation such as =engine::native::NativeEngine=.

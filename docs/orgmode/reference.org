@@ -1,0 +1,16 @@
+#+TITLE: Reference
+#+OPTIONS: toc:nil num:nil
+
+* Module overview
+
+| Module | Scope | Status |
+|---+---+---|
+| =engine= | =DynamicsEngine= trait, =ForceSurface=, =native= BAOAB/RATTLE backend, =rgpot= static PES wrapper, and =rgpot-session= MD session skeleton (=openmm=, =nblib=, =lammps=) | Implemented (=native=, =rgpot=) and =rgpot-session= skeleton |
+| =stats= | Batch means, effective sample size =n_eff=, and stationarity diagnostics | Implemented; spline propagation moves from =rgsaddle= |
+| =kappa::bennett_chandler= | Engine-free reactive-flux estimator and =DynamicsEngine= trajectory shooter | Implemented |
+| =kappa= | Surface-shooting quench classifiers and first-crossing estimators | Implementation moves from =rgsaddle= |
+| =hyperplane= | Constrained hyperplane sampling and zero-variance control variates | Implementation moves from =rgsaddle= |
+| =pafi= | Projected Average Force Integration along reaction paths | Implementation moves from =rgsaddle= |
+| =ohtst= | Optimal Hyperplanar Transition State Theory | Implementation moves from =rgsaddle= |
+| =ffs= | Forward Flux Sampling across ordered interfaces | Scaffold config and types |
+| =network= | Symmetry-resolved rate networks and kinetic Monte Carlo rate tables | Implementation moves from =rgsaddle= |
