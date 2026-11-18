@@ -65,6 +65,28 @@ pub struct OhtstConfig {
     pub seed: u64,
     /// Batch-means uncertainty settings.
     pub stats: StatsConfig,
+    /// Equilibration steps discarded before the curvature sample.
+    ///
+    /// Default: 256.
+    pub burn_in_steps: usize,
+    /// Lower bound on the curvature-sample length.
+    ///
+    /// The length used is the greater of this bound and
+    /// [`Self::max_outer_steps`] times [`Self::sample_step_factor`].
+    /// Default: 128.
+    pub min_sample_steps: usize,
+    /// Multiplier on [`Self::max_outer_steps`] when sizing the curvature sample.
+    ///
+    /// Default: 64, so a default optimization samples at least 2048 steps.
+    pub sample_step_factor: usize,
+    /// Steps between retained configurations in the curvature sample.
+    ///
+    /// Default: 16.
+    pub retention_stride: usize,
+    /// Integration timestep of the curvature sample, in the engine time unit.
+    ///
+    /// Default: 0.01.
+    pub time_step: f64,
 }
 
 impl Default for OhtstConfig {
@@ -78,6 +100,11 @@ impl Default for OhtstConfig {
             use_mbar: true,
             seed: 1,
             stats: StatsConfig::default(),
+            burn_in_steps: 256,
+            min_sample_steps: 128,
+            sample_step_factor: 64,
+            retention_stride: 16,
+            time_step: 0.01,
         }
     }
 }
@@ -91,6 +118,11 @@ with_setters!(OhtstConfig {
     with_use_mbar => use_mbar: val bool,
     with_seed => seed: val u64,
     with_stats => stats: val StatsConfig,
+    with_burn_in_steps => burn_in_steps: val usize,
+    with_min_sample_steps => min_sample_steps: val usize,
+    with_sample_step_factor => sample_step_factor: val usize,
+    with_retention_stride => retention_stride: val usize,
+    with_time_step => time_step: val f64,
 });
 
 /// Variational OH-TST rate estimate and optimal dividing hyperplane.
@@ -104,15 +136,6 @@ pub struct OhtstEstimate {
     /// Propagated standard error of [`Self::rate`].
     pub standard_error: f64,
 }
-
-/// Curvature-probe timestep, in the engine time unit.
-const PROBE_TIME_STEP: f64 = 0.01;
-
-/// Production steps of the reactant curvature sample.
-const PROBE_SAMPLE_STEPS: usize = 32;
-
-/// Steps discarded before the curvature sample.
-const PROBE_BURN_IN: usize = 8;
 
 /// Optimize the offset of `seed_plane` and return the harmonic OH-TST rate.
 ///
@@ -137,12 +160,8 @@ pub fn optimize_hyperplane<E: DynamicsEngine + ?Sized>(
     }
     let snapshot = EngineSnapshot::capture(engine);
     let result = evaluate_harmonic_rate(engine, seed_plane, config);
-    let restored = snapshot.restore(engine);
-    match (result, restored) {
-        (Ok(estimate), Ok(())) => Ok(estimate),
-        (Err(err), _) => Err(err),
-        (Ok(_), Err(err)) => Err(err),
-    }
+    snapshot.restore(engine)?;
+    result
 }
 
 fn validate_config(config: &OhtstConfig) -> Result<(), FluxError> {
@@ -159,6 +178,21 @@ fn validate_config(config: &OhtstConfig) -> Result<(), FluxError> {
     if !config.max_rotation.is_finite() || config.max_rotation < 0.0 {
         return Err(FluxError::InvalidConfig(
             "OhtstConfig::max_rotation must be finite and non-negative",
+        ));
+    }
+    if config.min_sample_steps < 2 {
+        return Err(FluxError::InvalidConfig(
+            "OhtstConfig::min_sample_steps must be at least 2",
+        ));
+    }
+    if config.retention_stride == 0 {
+        return Err(FluxError::InvalidConfig(
+            "OhtstConfig::retention_stride must be at least 1",
+        ));
+    }
+    if !config.time_step.is_finite() || config.time_step <= 0.0 {
+        return Err(FluxError::InvalidConfig(
+            "OhtstConfig::time_step must be finite and positive",
         ));
     }
     Ok(())
@@ -438,12 +472,23 @@ fn flux_mass(normal: ArrayView1<'_, f64>, masses: ArrayView1<'_, f64>) -> Result
     Ok(1.0 / metric)
 }
 
+fn curvature_sample_steps(config: &OhtstConfig) -> usize {
+    let scaled = config
+        .max_outer_steps
+        .saturating_mul(config.sample_step_factor);
+    if scaled > config.min_sample_steps {
+        scaled
+    } else {
+        config.min_sample_steps
+    }
+}
+
 fn probe_sampling(config: &OhtstConfig) -> HyperplaneConfig {
     HyperplaneConfig::default()
-        .with_burn_in_steps(PROBE_BURN_IN)
-        .with_sample_steps(PROBE_SAMPLE_STEPS)
-        .with_retention_stride(1)
-        .with_time_step(PROBE_TIME_STEP)
+        .with_burn_in_steps(config.burn_in_steps)
+        .with_sample_steps(curvature_sample_steps(config))
+        .with_retention_stride(config.retention_stride)
+        .with_time_step(config.time_step)
         .with_seed(config.seed)
         .with_stats(config.stats.clone())
 }

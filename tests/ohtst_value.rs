@@ -123,7 +123,15 @@ fn hyperplane_mean_force_matches_harmonic_offsets() -> Result<(), FluxError> {
             HyperplaneConstraint::from_direction(Array1::from_vec(vec![1.0]).view(), offset)?;
         let mut sampler = engine(UnitHarmonic, 0.5)?;
         sampler.set_positions(Array1::from_vec(vec![offset]).view())?;
+        let positions = sampler.positions().to_owned();
+        let velocities = sampler.velocities().to_owned();
+        let constraint = sampler.constraint().cloned();
+        let thermostat = *sampler.thermostat();
         let sampled = sample_hyperplane(&mut sampler, &plane, &config)?;
+        assert_eq!(sampler.positions(), positions.view());
+        assert_eq!(sampler.velocities(), velocities.view());
+        assert_eq!(sampler.constraint(), constraint.as_ref());
+        assert_eq!(sampler.thermostat(), &thermostat);
         assert!(
             within_reported_error(sampled.mean_force, offset, sampled.standard_error, coverage),
             "mean force {} ± {} against analytic {offset} at coverage {coverage}",
@@ -145,8 +153,16 @@ fn ohtst_rate_matches_harmonic_tst_and_rgsaddle() -> Result<(), Box<dyn std::err
 
     let mut sampler = engine(HarmonicBarrier, THERMAL)?;
     sampler.set_positions(Array1::from_vec(vec![-1.0]).view())?;
+    let positions = sampler.positions().to_owned();
+    let velocities = sampler.velocities().to_owned();
+    let constraint = sampler.constraint().cloned();
+    let thermostat = *sampler.thermostat();
     let seed = HyperplaneConstraint::from_direction(Array1::from_vec(vec![1.0]).view(), 0.0)?;
     let estimate = optimize_hyperplane(&mut sampler, &seed, &config)?;
+    assert_eq!(sampler.positions(), positions.view());
+    assert_eq!(sampler.velocities(), velocities.view());
+    assert_eq!(sampler.constraint(), constraint.as_ref());
+    assert_eq!(sampler.thermostat(), &thermostat);
     assert!(
         within_reported_error(estimate.rate, analytic, estimate.standard_error, coverage),
         "rgflux rate {} ± {} against harmonic TST {analytic}",
