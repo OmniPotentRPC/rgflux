@@ -623,3 +623,16 @@ pub fn pafi_profile<E: DynamicsEngine + ?Sized>(
     profile.normalized_rate_error = block_se(&rate_blocks, "PAFI rate block estimate")?;
     Ok(profile)
 }
+
+/// Trait-object entry point for [`pafi_profile`] over [`DynamicsEngine`].
+///
+/// The algorithm path is identical to [`pafi_profile`], enabling direct
+/// dispatch through `&mut dyn DynamicsEngine` for native and `rgpot`-backed
+/// engines without code forks.
+pub fn pafi_profile_dyn(
+    engine: &mut dyn DynamicsEngine,
+    path_images: ArrayView2<'_, f64>,
+    config: &PafiConfig,
+) -> Result<FreeEnergyProfile, FluxError> {
+    pafi_profile(engine, path_images, config)
+}
