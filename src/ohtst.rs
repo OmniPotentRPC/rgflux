@@ -1,11 +1,17 @@
 //! Optimal Hyperplanar Transition State Theory (OH-TST).
 //!
-//! Variationally maximizes the free energy of a dividing hyperplane on the
-//! product manifold `S(U) x R` via [`rgmin`]'s Riemannian trust region,
-//! combines reversible work along plane paths by quadrature, BAR, or MBAR, and
-//! pairs the optimal plane with a recrossing transmission coefficient.
+//! [`optimize_hyperplane`] holds the seed normal fixed and places the offset on
+//! the dividing surface that is stationary along that normal. The reported
+//! rate is the harmonic hyperplanar TST rate
 //!
-//! Note: implementation moves from rgsaddle.
+//! `k = sqrt(κ / μ) / 2π * exp(-ΔV / kT)`,
+//!
+//! where `κ` is the reactant curvature inferred from the sampled constraint
+//! force, `μ = 1 / (nᵀ M⁻¹ n)` is the flux mass, and `ΔV` is the potential
+//! difference from the reactant minimum to the dividing surface. On a harmonic
+//! reactant this is the closed-form harmonic TST rate. The standard error is
+//! the first-order delta-method image of the curvature sample's batch-means
+//! error.
 //!
 //! ## References
 //!
@@ -29,10 +35,15 @@
 //!   of samples from multiple equilibrium states*. The Journal of Chemical
 //!   Physics, 129, 124105. <https://doi.org/10.1063/1.2978177>
 
-use crate::engine::{DynamicsEngine, HyperplaneConstraint};
+use std::f64::consts::TAU;
+
+use ndarray::{Array1, ArrayView1};
+use rgmin::vecops::dot;
+
+use crate::engine::{DynamicsEngine, HyperplaneConstraint, ThermostatConfig};
 use crate::error::FluxError;
 use crate::hyperplane::{HyperplaneConfig, sample_hyperplane};
-use crate::stats::StatsConfig;
+use crate::stats::{SERIES_FLAT_TOL, StatsConfig};
 
 /// Configuration for variational hyperplane optimization and OH-TST rate evaluation.
 #[derive(Clone, Debug, PartialEq)]
@@ -94,37 +105,371 @@ pub struct OhtstEstimate {
     pub standard_error: f64,
 }
 
-/// Optimize a dividing hyperplane from `seed_plane` (implementation moves from rgsaddle).
+/// Curvature-probe timestep, in the engine time unit.
+const PROBE_TIME_STEP: f64 = 0.01;
+
+/// Production steps of the reactant curvature sample.
+const PROBE_SAMPLE_STEPS: usize = 32;
+
+/// Steps discarded before the curvature sample.
+const PROBE_BURN_IN: usize = 8;
+
+/// Optimize the offset of `seed_plane` and return the harmonic OH-TST rate.
+///
+/// The normal is held at the seed. A seed whose normal force already vanishes,
+/// and whose potential lies above the reactant minimum, is the dividing
+/// surface. Otherwise the offset walks along the normal to the first
+/// normal-force zero. The reactant curvature is `κ = ⟨λ⟩ / δ` from a
+/// constrained sample a distance `δ` from the minimum toward that surface.
 pub fn optimize_hyperplane<E: DynamicsEngine + ?Sized>(
     engine: &mut E,
     seed_plane: &HyperplaneConstraint,
     config: &OhtstConfig,
 ) -> Result<OhtstEstimate, FluxError> {
+    validate_config(config)?;
+    seed_plane.validate()?;
+    if seed_plane.normal.len() != engine.dof() {
+        return Err(FluxError::Shape {
+            expected: engine.dof(),
+            got: seed_plane.normal.len(),
+            context: "OH-TST seed plane",
+        });
+    }
+    let snapshot = EngineSnapshot::capture(engine);
+    let result = evaluate_harmonic_rate(engine, seed_plane, config);
+    let restored = snapshot.restore(engine);
+    match (result, restored) {
+        (Ok(estimate), Ok(())) => Ok(estimate),
+        (Err(err), _) => Err(err),
+        (Ok(_), Err(err)) => Err(err),
+    }
+}
+
+fn validate_config(config: &OhtstConfig) -> Result<(), FluxError> {
     if config.max_outer_steps == 0 {
         return Err(FluxError::InvalidConfig(
             "OhtstConfig::max_outer_steps must be at least 1",
         ));
     }
-    let sample_steps = (config.max_outer_steps.saturating_mul(64)).max(128);
-    let hyperplane_cfg = HyperplaneConfig::default()
-        .with_burn_in_steps(256)
-        .with_sample_steps(sample_steps)
-        .with_retention_stride(16)
-        .with_time_step(0.01)
-        .with_seed(config.seed)
-        .with_stats(config.stats.clone());
-    let sampled = sample_hyperplane(engine, seed_plane, &hyperplane_cfg)?;
+    if !config.max_translation.is_finite() || config.max_translation <= 0.0 {
+        return Err(FluxError::InvalidConfig(
+            "OhtstConfig::max_translation must be finite and positive",
+        ));
+    }
+    if !config.max_rotation.is_finite() || config.max_rotation < 0.0 {
+        return Err(FluxError::InvalidConfig(
+            "OhtstConfig::max_rotation must be finite and non-negative",
+        ));
+    }
+    Ok(())
+}
 
-    // Keep the estimator finite and positive while wiring full OH-TST later.
-    let log_rate = -sampled.mean_force.abs();
-    let rate = log_rate.exp();
-    if !rate.is_finite() || rate <= 0.0 {
+fn evaluate_harmonic_rate<E: DynamicsEngine + ?Sized>(
+    engine: &mut E,
+    seed_plane: &HyperplaneConstraint,
+    config: &OhtstConfig,
+) -> Result<OhtstEstimate, FluxError> {
+    let kt = engine.thermostat().thermal_energy()?;
+    if kt <= 0.0 {
+        return Err(FluxError::InvalidConfig(
+            "OH-TST requires a positive thermal energy k_B * T",
+        ));
+    }
+    let mu = flux_mass(seed_plane.normal.view(), engine.masses())?;
+    engine.set_constraint(None)?;
+
+    let minimum = reactant_minimum(engine, seed_plane, config)?;
+    engine.set_positions(minimum.view())?;
+    let (energy_min, _) = engine.energy_and_forces()?;
+
+    let dividing = dividing_surface(engine, &minimum, energy_min, seed_plane, config)?;
+    engine.set_positions(dividing.point.view())?;
+    let (energy_dividing, _) = engine.energy_and_forces()?;
+    let barrier = energy_dividing - energy_min;
+    if !(barrier.is_finite() && barrier > 0.0) {
+        return Err(FluxError::InvalidConfig(
+            "OH-TST dividing surface must lie above the reactant minimum",
+        ));
+    }
+
+    let separation = (dividing.offset - dot(seed_plane.normal.view(), minimum.view())).abs();
+    let probe = if config.max_translation < 0.5 * separation {
+        config.max_translation
+    } else {
+        0.5 * separation
+    };
+    if !(probe.is_finite() && probe > 0.0) {
+        return Err(FluxError::InvalidConfig(
+            "OH-TST curvature probe length vanished",
+        ));
+    }
+    let s_min = dot(seed_plane.normal.view(), minimum.view());
+    let toward = if dividing.offset >= s_min { 1.0 } else { -1.0 };
+    let probe_offset = s_min + toward * probe;
+    let probe_point = shifted(minimum.view(), seed_plane.normal.view(), toward * probe);
+    engine.set_positions(probe_point.view())?;
+    let probe_plane = HyperplaneConstraint::from_direction(seed_plane.normal.view(), probe_offset)?;
+    let sampled = sample_hyperplane(engine, &probe_plane, &probe_sampling(config))?;
+    let lambda = sampled.mean_force;
+    // Divide by the offset that the constraint actually holds. `s_min + probe`
+    // is not always `probe` away from `s_min` in binary64.
+    let displacement = (probe_offset - s_min).abs();
+    let kappa = lambda / displacement;
+    if !(kappa.is_finite() && kappa > 0.0) {
+        return Err(FluxError::InvalidConfig(
+            "OH-TST reactant curvature must be finite and positive",
+        ));
+    }
+
+    let omega = (kappa / mu).sqrt();
+    let rate = omega / TAU * (-barrier / kt).exp();
+    if !(rate.is_finite() && rate > 0.0) {
         return Err(FluxError::NonFinite("OH-TST rate"));
     }
-    let standard_error = (sampled.standard_error.abs() * rate).max(0.0);
+    let sigma_ln = 0.5 * sampled.standard_error / lambda.abs();
+    let standard_error = (rate * sigma_ln).abs();
+    if !standard_error.is_finite() {
+        return Err(FluxError::NonFinite("OH-TST rate error"));
+    }
     Ok(OhtstEstimate {
-        plane: seed_plane.clone(),
+        plane: dividing.plane,
         rate,
         standard_error,
     })
+}
+
+struct DividingSurface {
+    plane: HyperplaneConstraint,
+    point: Array1<f64>,
+    offset: f64,
+}
+
+fn dividing_surface<E: DynamicsEngine + ?Sized>(
+    engine: &mut E,
+    minimum: &Array1<f64>,
+    energy_min: f64,
+    seed_plane: &HyperplaneConstraint,
+    config: &OhtstConfig,
+) -> Result<DividingSurface, FluxError> {
+    let normal = seed_plane.normal.view();
+    let s_min = dot(normal, minimum.view());
+    let seed_point = shifted(minimum.view(), normal, seed_plane.offset - s_min);
+    let seed_slope = normal_slope(engine, seed_point.view(), normal)?;
+    let (seed_energy, _) = {
+        engine.set_positions(seed_point.view())?;
+        engine.energy_and_forces()?
+    };
+    if slope_vanishes(seed_slope) && seed_energy > energy_min {
+        return Ok(DividingSurface {
+            plane: seed_plane.clone(),
+            point: seed_point,
+            offset: seed_plane.offset,
+        });
+    }
+
+    let direction = if seed_plane.offset >= s_min {
+        1.0
+    } else {
+        -1.0
+    };
+    let mut hi = config.max_translation;
+    let mut crossed = false;
+    for _ in 0..config.max_outer_steps {
+        let point = shifted(minimum.view(), normal, direction * hi);
+        let slope = direction * normal_slope(engine, point.view(), normal)?;
+        if slope <= 0.0 {
+            crossed = true;
+            break;
+        }
+        hi += config.max_translation;
+    }
+    if !crossed {
+        return Err(FluxError::InvalidConfig(
+            "OH-TST found no stationary dividing surface along the seed normal",
+        ));
+    }
+    let mut lo = hi - config.max_translation;
+    let tol = SERIES_FLAT_TOL * (1.0 + hi);
+    while hi - lo > tol {
+        let mid = 0.5 * (lo + hi);
+        let point = shifted(minimum.view(), normal, direction * mid);
+        let slope = direction * normal_slope(engine, point.view(), normal)?;
+        if slope > 0.0 {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    let offset = s_min + direction * hi;
+    let point = shifted(minimum.view(), normal, direction * hi);
+    let plane = HyperplaneConstraint::from_direction(normal, offset)?;
+    Ok(DividingSurface {
+        plane,
+        point,
+        offset,
+    })
+}
+
+fn reactant_minimum<E: DynamicsEngine + ?Sized>(
+    engine: &mut E,
+    seed_plane: &HyperplaneConstraint,
+    config: &OhtstConfig,
+) -> Result<Array1<f64>, FluxError> {
+    let normal = seed_plane.normal.clone();
+    let limit = config.max_outer_steps.saturating_mul(8);
+    for _ in 0..limit {
+        let position = engine.positions().to_owned();
+        let (energy, force) = engine.energy_and_forces()?;
+        if force_is_stationary(force.view()) {
+            let curvature = directional_curvature(
+                engine,
+                position.view(),
+                normal.view(),
+                config.max_translation,
+            )?;
+            if curvature > 0.0 {
+                return Ok(engine.positions().to_owned());
+            }
+            displace(engine, normal.view(), -config.max_translation)?;
+            continue;
+        }
+        if !descend_once(engine, energy, force.view())? {
+            return Err(FluxError::InvalidConfig(
+                "OH-TST reactant minimization stalled before the force vanished",
+            ));
+        }
+    }
+    Err(FluxError::InvalidConfig(
+        "OH-TST reactant minimization exceeded its iteration budget",
+    ))
+}
+
+fn descend_once<E: DynamicsEngine + ?Sized>(
+    engine: &mut E,
+    energy: f64,
+    force: ArrayView1<'_, f64>,
+) -> Result<bool, FluxError> {
+    let start = engine.positions().to_owned();
+    let mut step = 1.0_f64;
+    for _ in 0..24 {
+        let trial = shifted(start.view(), force, step);
+        engine.set_positions(trial.view())?;
+        let (trial_energy, _) = engine.energy_and_forces()?;
+        if trial_energy < energy {
+            return Ok(true);
+        }
+        step *= 0.5;
+    }
+    engine.set_positions(start.view())?;
+    Ok(false)
+}
+
+fn directional_curvature<E: DynamicsEngine + ?Sized>(
+    engine: &mut E,
+    point: ArrayView1<'_, f64>,
+    normal: ArrayView1<'_, f64>,
+    step: f64,
+) -> Result<f64, FluxError> {
+    let ahead = normal_slope(engine, shifted(point, normal, step).view(), normal)?;
+    let behind = normal_slope(engine, shifted(point, normal, -step).view(), normal)?;
+    engine.set_positions(point)?;
+    Ok((ahead - behind) / (2.0 * step))
+}
+
+fn normal_slope<E: DynamicsEngine + ?Sized>(
+    engine: &mut E,
+    point: ArrayView1<'_, f64>,
+    normal: ArrayView1<'_, f64>,
+) -> Result<f64, FluxError> {
+    engine.set_positions(point)?;
+    let (_, force) = engine.energy_and_forces()?;
+    Ok(-dot(normal, force.view()))
+}
+
+fn displace<E: DynamicsEngine + ?Sized>(
+    engine: &mut E,
+    normal: ArrayView1<'_, f64>,
+    distance: f64,
+) -> Result<(), FluxError> {
+    let next = shifted(engine.positions(), normal, distance);
+    engine.set_positions(next.view())
+}
+
+fn shifted(origin: ArrayView1<'_, f64>, direction: ArrayView1<'_, f64>, scale: f64) -> Array1<f64> {
+    let mut out = origin.to_owned();
+    for (slot, component) in out.iter_mut().zip(direction.iter()) {
+        *slot += scale * *component;
+    }
+    out
+}
+
+fn force_is_stationary(force: ArrayView1<'_, f64>) -> bool {
+    let mut peak = 0.0_f64;
+    for component in force {
+        let magnitude = component.abs();
+        if magnitude > peak {
+            peak = magnitude;
+        }
+    }
+    peak <= SERIES_FLAT_TOL
+}
+
+fn slope_vanishes(slope: f64) -> bool {
+    slope.abs() <= SERIES_FLAT_TOL * (1.0 + slope.abs())
+}
+
+fn flux_mass(normal: ArrayView1<'_, f64>, masses: ArrayView1<'_, f64>) -> Result<f64, FluxError> {
+    if normal.len() != masses.len() {
+        return Err(FluxError::Shape {
+            expected: masses.len(),
+            got: normal.len(),
+            context: "OH-TST flux mass",
+        });
+    }
+    let mut metric = 0.0_f64;
+    for (component, mass) in normal.iter().zip(masses.iter()) {
+        metric += component * component / mass;
+    }
+    if !(metric.is_finite() && metric > 0.0) {
+        return Err(FluxError::InvalidConfig(
+            "OH-TST flux mass metric must be finite and positive",
+        ));
+    }
+    Ok(1.0 / metric)
+}
+
+fn probe_sampling(config: &OhtstConfig) -> HyperplaneConfig {
+    HyperplaneConfig::default()
+        .with_burn_in_steps(PROBE_BURN_IN)
+        .with_sample_steps(PROBE_SAMPLE_STEPS)
+        .with_retention_stride(1)
+        .with_time_step(PROBE_TIME_STEP)
+        .with_seed(config.seed)
+        .with_stats(config.stats.clone())
+}
+
+struct EngineSnapshot {
+    constraint: Option<HyperplaneConstraint>,
+    thermostat: ThermostatConfig,
+    positions: Array1<f64>,
+    velocities: Array1<f64>,
+}
+
+impl EngineSnapshot {
+    fn capture<E: DynamicsEngine + ?Sized>(engine: &E) -> Self {
+        Self {
+            constraint: engine.constraint().cloned(),
+            thermostat: *engine.thermostat(),
+            positions: engine.positions().to_owned(),
+            velocities: engine.velocities().to_owned(),
+        }
+    }
+
+    fn restore<E: DynamicsEngine + ?Sized>(self, engine: &mut E) -> Result<(), FluxError> {
+        engine.set_constraint(self.constraint)?;
+        engine.set_thermostat(self.thermostat)?;
+        engine.set_positions(self.positions.view())?;
+        engine.set_velocities(self.velocities.view())?;
+        Ok(())
+    }
 }

@@ -87,7 +87,7 @@ pub struct HyperplaneSample {
     pub configurations: Array2<f64>,
 }
 
-/// Sample a hyperplane through `engine` (implementation moves from rgsaddle).
+/// Sample a hyperplane through `engine`.
 pub fn sample_hyperplane<E: DynamicsEngine + ?Sized>(
     engine: &mut E,
     plane: &HyperplaneConstraint,
@@ -116,17 +116,15 @@ pub fn sample_hyperplane<E: DynamicsEngine + ?Sized>(
         });
     }
 
-    let previous_constraint = engine.constraint().cloned();
-    let previous_thermostat = *engine.thermostat();
-    let previous_positions = engine.positions().to_owned();
-    let previous_velocities = engine.velocities().to_owned();
+    let snapshot = EngineSnapshot::capture(engine);
 
     let result = (|| -> Result<HyperplaneSample, FluxError> {
+        engine.reseed(config.seed)?;
         engine.set_constraint(Some(plane.clone()))?;
         engine.shoot_velocities(config.seed)?;
 
         for _ in 0..config.burn_in_steps {
-            let _ = engine.step(config.time_step)?;
+            engine.step(config.time_step)?;
         }
 
         let mut force_series = Vec::with_capacity(config.sample_steps);
@@ -159,10 +157,36 @@ pub fn sample_hyperplane<E: DynamicsEngine + ?Sized>(
         })
     })();
 
-    let _ = engine.set_constraint(previous_constraint);
-    let _ = engine.set_thermostat(previous_thermostat);
-    let _ = engine.set_positions(previous_positions.view());
-    let _ = engine.set_velocities(previous_velocities.view());
+    let restored = snapshot.restore(engine);
+    match (result, restored) {
+        (Ok(sample), Ok(())) => Ok(sample),
+        (Err(err), _) => Err(err),
+        (Ok(_), Err(err)) => Err(err),
+    }
+}
 
-    result
+struct EngineSnapshot {
+    constraint: Option<crate::engine::HyperplaneConstraint>,
+    thermostat: crate::engine::ThermostatConfig,
+    positions: ndarray::Array1<f64>,
+    velocities: ndarray::Array1<f64>,
+}
+
+impl EngineSnapshot {
+    fn capture<E: DynamicsEngine + ?Sized>(engine: &E) -> Self {
+        Self {
+            constraint: engine.constraint().cloned(),
+            thermostat: *engine.thermostat(),
+            positions: engine.positions().to_owned(),
+            velocities: engine.velocities().to_owned(),
+        }
+    }
+
+    fn restore<E: DynamicsEngine + ?Sized>(self, engine: &mut E) -> Result<(), FluxError> {
+        engine.set_constraint(self.constraint)?;
+        engine.set_thermostat(self.thermostat)?;
+        engine.set_positions(self.positions.view())?;
+        engine.set_velocities(self.velocities.view())?;
+        Ok(())
+    }
 }
