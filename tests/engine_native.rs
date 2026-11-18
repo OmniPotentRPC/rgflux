@@ -175,6 +175,29 @@ fn double_well_2d_constraint_holds_machine_precision_zero_under_rattle_and_shake
 }
 
 #[test]
+fn projection_overflow_keeps_the_legacy_native_acceptance_behavior() {
+    let plane =
+        HyperplaneConstraint::from_direction(Array1::from_vec(vec![1.0, 1.0, 0.0]).view(), 0.0)
+            .expect("plane");
+    let mut engine = NativeEngine::new(
+        AnisotropicHarmonic {
+            stiffness: [1.0, 1.0, 1.0],
+        },
+        NativeConfig::default()
+            .with_masses(Array1::from_elem(3, 1.0))
+            .with_constraint(plane),
+    )
+    .expect("engine");
+    let positions = Array1::from_vec(vec![f64::MAX, f64::MAX, 0.0]);
+
+    engine
+        .set_positions(positions.view())
+        .expect("legacy native projection accepts a NaN residual");
+
+    assert!(engine.positions().iter().any(|value| value.is_nan()));
+}
+
+#[test]
 fn harmonic_well_constraint_force_mean_matches_analytic_df_dc() {
     // V(x1, x2) = (1/2) k1 x1^2 + (1/2) k2 x2^2 on n1 x1 + n2 x2 = c.
     // Exact marginal variance of xi = n · x is k_B T (n1^2 / k1 + n2^2 / k2),

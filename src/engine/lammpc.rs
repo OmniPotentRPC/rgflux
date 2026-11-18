@@ -29,6 +29,8 @@ use crate::error::FluxError;
 const METAL_LENGTH_UNIT: &str = "angstrom";
 const METAL_ENERGY_UNIT: &str = "eV";
 const MIN_POSITIVE_THERMAL_ENERGY_EV: f64 = f64::MIN_POSITIVE;
+/// Relative tolerance for deciding whether a constrained-MD timestep changed.
+const TIMESTEP_RELATIVE_TOL: f64 = 8.0 * f64::EPSILON;
 /// LAMMPS metal-unit factor `mvv2e`: `amu * (Å/ps)^2` equals this many eV.
 pub const MASS_VELOCITY_TO_EV: f64 = 0.000_103_642_696_562_621_75;
 const LAMMPC_ABI_VERSION: c_int = 0;
@@ -165,13 +167,13 @@ pub struct LammpcConfig {
     pub type_to_atomic_number: Vec<i32>,
     /// Per-type masses in amu (`type_to_atomic_number` order).
     pub masses_by_type: Vec<f64>,
-    /// `pair_style` argument string.
+    /// `pair_style` arguments without NULs, newlines, or command separators.
     pub pair_style: String,
     /// `pair_coeff` lines, one entry per command.
     pub pair_coeffs: Vec<String>,
-    /// Optional extra setup lines applied after pair setup.
+    /// Optional single-command setup lines without embedded command separators.
     pub extra_setup: Vec<String>,
-    /// LAMMPS boundary argument string (`"p p p"` by default).
+    /// LAMMPS boundary arguments without NULs, newlines, or command separators.
     pub boundary: String,
     /// Optional LAMMPS suffix (`omp`, `gpu`, `kk`).
     pub suffix: String,
@@ -257,6 +259,11 @@ impl LammpcEngine {
                 "LammpcConfig::pair_style must be non-empty",
             ));
         }
+        validate_lammps_command_text(&config.pair_style, "LammpcConfig::pair_style")?;
+        validate_lammps_command_text(&config.boundary, "LammpcConfig::boundary")?;
+        for command in &config.extra_setup {
+            validate_lammps_command_text(command, "LammpcConfig::extra_setup")?;
+        }
         let _ = config.thermostat.thermal_energy()?;
 
         let dof = config.atomic_numbers.len() * 3;
@@ -314,13 +321,40 @@ impl LammpcEngine {
     }
 
     fn project_state_onto_constraint(&mut self) -> Result<(), FluxError> {
-        if let Some(plane) = &self.constraint {
-            shake_positions_in_place(&mut self.positions, self.masses.view(), plane)?;
-            rattle_velocities_in_place(&mut self.velocities, self.masses.view(), plane);
+        let (positions, velocities) = self.projected_state(
+            self.positions.clone(),
+            self.velocities.clone(),
+            self.constraint.as_ref(),
+        )?;
+        self.positions = positions;
+        self.velocities = velocities;
+        if self.constraint.is_some() {
             self.md_initialized = false;
             self.md_timestep_ps = None;
         }
         Ok(())
+    }
+
+    fn projected_state(
+        &self,
+        mut positions: Array1<f64>,
+        mut velocities: Array1<f64>,
+        constraint: Option<&HyperplaneConstraint>,
+    ) -> Result<(Array1<f64>, Array1<f64>), FluxError> {
+        if let Some(plane) = constraint {
+            shake_positions_in_place(&mut positions, self.masses.view(), plane)?;
+            let scale = 1.0 + plane.offset.abs() + rgmin::vecops::nrm2(positions.view());
+            let residual = rgmin::vecops::dot(plane.normal.view(), positions.view()) - plane.offset;
+            let relative_residual = residual.abs() / scale;
+            if !relative_residual.is_finite() {
+                return Err(FluxError::ConstraintViolation {
+                    residual: relative_residual,
+                    tolerance: crate::engine::HYPERPLANE_PROJECTION_TOL,
+                });
+            }
+            rattle_velocities_in_place(&mut velocities, self.masses.view(), plane);
+        }
+        Ok((positions, velocities))
     }
 
     fn force_input_bytes(&self) -> Result<Vec<u8>, FluxError> {
@@ -388,7 +422,7 @@ impl LammpcEngine {
         if self.md_initialized
             && self
                 .md_timestep_ps
-                .is_some_and(|stored| (stored - dt).abs() <= f64::EPSILON)
+                .is_some_and(|stored| timesteps_match(stored, dt))
         {
             return Ok(());
         }
@@ -461,6 +495,8 @@ impl LammpcEngine {
         // SAFETY: live session and step_count=1 are valid.
         let rc_step = unsafe { lammpc_session_md_step(self.session.as_ptr(), 1) };
         if rc_step != 0 {
+            self.md_initialized = false;
+            self.md_timestep_ps = None;
             return Err(FluxError::Lammpc(last_error_message()));
         }
 
@@ -483,10 +519,10 @@ impl LammpcEngine {
         }
         validate_finite_slice(self.positions.view(), "LammpcEngine positions")?;
         validate_finite_slice(self.velocities.view(), "LammpcEngine velocities")?;
-        // The MD observation stores `n · F` and the projected force. The engine
-        // contract wants `lambda = -(n^T M^{-1} F) / (n^T M^{-1} n)` from the
-        // physical force, plus the endpoint energy, neither of which the
-        // observation carries. One profile evaluation supplies both.
+        // The MD state exposes the projected force and `n · F`, but ABI 0
+        // exposes no constrained endpoint energy. The engine report requires
+        // that energy, and the only energy entry point evaluates both energy
+        // and physical force. Use that force for the mass-weighted multiplier.
         let (potential_energy, forces) = self.call_calculate()?;
         let plane = self
             .constraint
@@ -674,8 +710,13 @@ impl DynamicsEngine for LammpcEngine {
             });
         }
         validate_finite_slice(positions, "LammpcEngine positions")?;
-        self.positions.assign(&positions);
-        self.project_state_onto_constraint()?;
+        let (positions, velocities) = self.projected_state(
+            positions.to_owned(),
+            self.velocities.clone(),
+            self.constraint.as_ref(),
+        )?;
+        self.positions = positions;
+        self.velocities = velocities;
         self.md_initialized = false;
         self.md_timestep_ps = None;
         Ok(())
@@ -751,8 +792,14 @@ impl DynamicsEngine for LammpcEngine {
                 });
             }
         }
+        let (positions, velocities) = self.projected_state(
+            self.positions.clone(),
+            self.velocities.clone(),
+            constraint.as_ref(),
+        )?;
         self.constraint = constraint;
-        self.project_state_onto_constraint()?;
+        self.positions = positions;
+        self.velocities = velocities;
         self.md_initialized = false;
         self.md_timestep_ps = None;
         Ok(())
@@ -776,7 +823,9 @@ impl DynamicsEngine for LammpcEngine {
                 "LammpcEngine::step requires a finite positive timestep",
             ));
         }
-        if self.constraint.is_some() {
+        let positions = self.positions.clone();
+        let velocities = self.velocities.clone();
+        let result = if self.constraint.is_some() {
             self.constrained_langevin_step(dt)
         } else if self.thermostat.gamma == 0.0 {
             self.unconstrained_nve_step(dt)
@@ -784,7 +833,15 @@ impl DynamicsEngine for LammpcEngine {
             Err(FluxError::BackendUnavailable(
                 "lammpc has no unconstrained Langevin ABI entry point",
             ))
+        };
+        if result.is_err() {
+            self.positions = positions;
+            self.velocities = velocities;
+            self.md_initialized = false;
+            self.md_timestep_ps = None;
+            self.nve_instance_ready = false;
         }
+        result
     }
 
     fn reseed(&mut self, seed: u64) -> Result<(), FluxError> {
@@ -916,6 +973,21 @@ fn encode_lammps_config(config: &LammpcConfig) -> Result<Vec<u8>, FluxError> {
     Ok(serialize::write_message_to_words(&message))
 }
 
+fn timesteps_match(stored: f64, requested: f64) -> bool {
+    let scale = stored.abs().max(requested.abs());
+    (stored - requested).abs() <= TIMESTEP_RELATIVE_TOL * scale
+}
+
+fn validate_lammps_command_text(value: &str, field: &'static str) -> Result<(), FluxError> {
+    if value
+        .chars()
+        .any(|character| matches!(character, '\0' | '\n' | '\r' | ';'))
+    {
+        return Err(FluxError::InvalidLammpcCommand { field });
+    }
+    Ok(())
+}
+
 fn result_message(result: &LammpcResult) -> String {
     let mut bytes = Vec::new();
     for &entry in &result.message {
@@ -1020,5 +1092,42 @@ fn last_error_message() -> String {
         "lammpc returned an empty error message".to_string()
     } else {
         text
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn timestep_matching_scales_with_the_requested_magnitude() {
+        let stored = 2.0_f64;
+        let adjacent = f64::from_bits(stored.to_bits() + 1);
+
+        assert!((stored - adjacent).abs() > f64::EPSILON);
+        assert!(timesteps_match(stored, adjacent));
+    }
+
+    #[test]
+    fn failed_constrained_step_invalidates_md_and_preserves_rust_state() {
+        let plane = HyperplaneConstraint::from_direction(
+            Array1::from_vec(vec![1.0, 0.0, 0.0, 0.0, 0.0, 0.0]).view(),
+            0.0,
+        )
+        .expect("plane");
+        let mut engine =
+            LammpcEngine::new(LammpcConfig::default().with_constraint(plane)).expect("engine");
+        let positions = engine.positions.clone();
+        let velocities = engine.velocities.clone();
+        engine.md_initialized = true;
+        engine.md_timestep_ps = Some(0.001);
+
+        let error = engine.step(0.001).expect_err("session was not initialized");
+
+        assert!(matches!(error, FluxError::Lammpc(_)));
+        assert_eq!(engine.positions, positions);
+        assert_eq!(engine.velocities, velocities);
+        assert!(!engine.md_initialized);
+        assert_eq!(engine.md_timestep_ps, None);
     }
 }

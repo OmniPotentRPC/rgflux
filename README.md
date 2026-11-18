@@ -36,8 +36,25 @@ fn main() -> Result<(), rgflux::FluxError> {
 
 ## Development checks
 
+The default, `rgpot`, and `rgpot-session` feature sets do not need an external
+MD library:
+
 ```sh
 cargo fmt --all -- --check
+cargo clippy --locked --all-targets -- -D warnings
+cargo test --locked
+cargo clippy --locked --all-targets --features rgpot,rgpot-session -- -D warnings
+cargo test --locked --features rgpot,rgpot-session
+```
+
+The `lammpc` feature links `liblammpc`, so install it first and expose its
+library directory through pkg-config, `LAMMPC_DIR`, or `LAMMPC_LIB_DIR`.
+Include the LAMMPS library directory in the runtime loader path. Once those
+libraries are available, `--features lammpc` and `--all-features` work:
+
+```sh
+export LAMMPC_LIB_DIR=/path/to/lammpc/lib
+export LD_LIBRARY_PATH="/path/to/lammpc/lib:/path/to/lammps/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 cargo clippy --locked --all-targets --all-features -- -D warnings
 cargo test --locked --all-features
 RUSTDOCFLAGS="-D warnings" cargo doc --locked --no-deps --all-features
