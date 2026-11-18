@@ -192,6 +192,8 @@ fn projection_overflow_keeps_the_legacy_native_acceptance_behavior() {
 
     engine
         .set_positions(positions.view())
+        // This locks the current contract while native and lammpc behavior
+        // remain aligned during migration.
         .expect("legacy native projection accepts a NaN residual");
 
     assert!(engine.positions().iter().any(|value| value.is_nan()));

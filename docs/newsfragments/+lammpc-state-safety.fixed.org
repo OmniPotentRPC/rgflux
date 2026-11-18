@@ -1,3 +1,5 @@
-Lammpc configuration updates and failed steps now preserve the last accepted
-Rust-side state, invalidate stale constrained-MD sessions, compare timesteps
-relatively, and reject text that could inject additional LAMMPS commands.
+Lammpc configuration updates and failed steps preserve the last accepted
+Rust-side state, recreate the lammpc session after backend failures, compare
+timesteps relatively, reject unsafe text in =pair_style=, =pair_coeffs=,
+=boundary= and =suffix=, and reject =shell=, =include=, =jump= and =python=
+directives in =extra_setup=.
