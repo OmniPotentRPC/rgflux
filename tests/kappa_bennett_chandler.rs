@@ -175,6 +175,42 @@ fn synthetic_recrossing_set_reproduces_exact_analytic_kappa_and_unclamped_sign()
 }
 
 #[test]
+fn inverted_barrier_small_system_has_unit_transmission() {
+    let trajectories = (0..16)
+        .map(|_| ReactiveTrajectory::new(1.0, vec![Side::Product; 24]).expect("trajectory"))
+        .collect::<Vec<_>>();
+    let cfg = BennettChandlerConfig::default()
+        .with_plateau_start_fraction(0.25)
+        .with_plateau_end_fraction(1.0)
+        .with_stats(StatsConfig::default().with_batch_size(1));
+    let est = estimate_bennett_chandler(&trajectories, &cfg).expect("estimate");
+    assert_abs_diff_eq!(est.plateau, 1.0, epsilon = ALGEBRAIC_TOL);
+    assert_eq!(est.standard_error, 0.0);
+}
+
+#[test]
+fn harmonic_recrossing_small_system_matches_closed_form_plateau() {
+    let n_steps = 24_usize;
+    let trajectories = (0..16)
+        .map(|_| {
+            let mut sides = vec![Side::Product; n_steps];
+            for side in sides.iter_mut().skip(12) {
+                *side = Side::Reactant;
+            }
+            ReactiveTrajectory::new(1.0, sides).expect("trajectory")
+        })
+        .collect::<Vec<_>>();
+    let cfg = BennettChandlerConfig::default()
+        .with_plateau_start_fraction(0.5)
+        .with_plateau_end_fraction(1.0)
+        .with_stats(StatsConfig::default().with_batch_size(1));
+    let est = estimate_bennett_chandler(&trajectories, &cfg).expect("estimate");
+    assert_abs_diff_eq!(est.kappa_t[0], 1.0, epsilon = ALGEBRAIC_TOL);
+    assert_abs_diff_eq!(est.kappa_t[23], 0.0, epsilon = ALGEBRAIC_TOL);
+    assert_abs_diff_eq!(est.plateau, 0.0, epsilon = ALGEBRAIC_TOL);
+}
+
+#[test]
 fn double_well_2d_native_shooting_matches_high_friction_kramers_within_se() {
     // 2D double well: V(x, y) = V0 (x^2 - 1)^2 + (1/2) k_y y^2.
     // At the saddle (0, 0) with dividing surface x = 0 (unit normal n = (1, 0)):
