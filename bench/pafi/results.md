@@ -2,10 +2,13 @@
 
 ## Verdict
 
-All 1728 planned executions completed with 0 process failures. rgflux retained 361 numerical or quadrature rejections; the reference accepted every execution.
+All 1728 planned dimer executions completed with 0 process failures. rgflux retained 361 numerical or quadrature rejections; the reference accepted every execution.
+The vacancy campaign adds 288 executions with 0 process failures and 0 retained rgflux rejections.
 
 - Curved-path agreement improves strongly from 17 to 33 planes. At 33 planes and 256 samples, median maximum profile differences are below 3.7e-6 in every temperature and thread cell.
 - The accepted 17-plane straight profiles differ by 0.029 to 0.062 at 256 samples, exceeding the combined profile standard errors. This cell does not establish profile equivalence.
+- The exact interacting-basin dimer reference shows substantial absolute bias in both straight-path implementations. At T=0.1 and 0.2 rgflux is closer, so the temperature-growing pairwise discrepancy is carried by the LAMMPS side; it is not a units, Boltzmann-constant, Jacobian, plane-spacing, or tangent convention difference.
+- The 191-atom vacancy profiles do not agree: median maximum differences are 0.54 to 0.58 eV, far above combined standard errors and A/A noise. rgflux barriers are about 0.10 to 0.12 eV lower even though independent static minimum and saddle energies agree within 1.0e-11 eV. Increasing from 17 to 33 planes does not remove the discrepancy.
 - Every 9-plane straight run is rejected by the unchanged zero-temperature quadrature tolerance. Curved runs additionally expose a direct-exponential overflow in reactant-partition evaluation.
 - The scalar native surface has no four-thread speedup. Four OpenMP threads slow the two-atom reference case, as expected when scheduling dominates potential work.
 
@@ -37,6 +40,35 @@ The table reports the largest sample count. Values are medians with interquartil
 | straight | 17 | 0.1 | 4 | 0.02933 [0.02485, 0.03874] | 0.02548 [0.01586, 0.03461] | 0.007432 | 0.005879 [0.005845, 0.005939] | 0.1152 [0.1148, 0.1174] | 3.66e-05 |
 | straight | 17 | 0.2 | 1 | 0.06216 [0.05079, 0.1092] | 0.06216 [0.05079, 0.1089] | 0.01175 | 0.005914 [0.005861, 0.005951] | 0.06635 [0.06451, 0.06664] | 3.66e-05 |
 | straight | 17 | 0.2 | 4 | 0.05491 [0.04435, 0.07351] | 0.05433 [0.04112, 0.07319] | 0.009035 | 0.005901 [0.005736, 0.005922] | 0.1125 [0.1115, 0.1139] | 3.66e-05 |
+
+### Error against the exact constrained dimer reference
+
+| case | planes | T | threads | exact barrier | rgflux max error | reference max error | rgflux barrier error | reference barrier error |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| curved | 17 | 0.05 | 1 | 0 | 3.09e-06 [2.017e-06, 4.077e-06] | 1.14e-07 [4.228e-08, 1.413e-07] | 3.09e-06 [1.681e-06, 4.077e-06] | 7.475e-09 [2.985e-09, 3.441e-08] |
+| curved | 17 | 0.05 | 4 | 0 | 3.084e-06 [1.692e-06, 5.021e-06] | 5.541e-08 [3.612e-08, 9.091e-08] | 1.801e-06 [1.449e-06, 4.489e-06] | 1.013e-08 [3.09e-09, 3.795e-08] |
+| curved | 17 | 0.1 | 1 | 0 | 3.683e-06 [2.572e-06, 5.418e-06] | 1.273e-05 [8.249e-06, 1.794e-05] | 3.645e-06 [2.41e-06, 5.418e-06] | 7.757e-06 [1.759e-06, 1.794e-05] |
+| curved | 17 | 0.1 | 4 | 0 | 4.811e-06 [4.179e-06, 1.056e-05] | 1.153e-05 [7.116e-06, 1.941e-05] | 4.811e-06 [4.179e-06, 1.056e-05] | 7.021e-06 [4.246e-07, 1.941e-05] |
+| curved | 17 | 0.2 | 1 | 0 | 1.031e-05 [8.321e-06, 1.16e-05] | 1.117e-05 [8.424e-06, 1.889e-05] | 1.031e-05 [8.321e-06, 1.16e-05] | 7.255e-06 [1.342e-06, 1.201e-05] |
+| curved | 17 | 0.2 | 4 | 0 | 7.531e-06 [6.58e-06, 1.274e-05] | 9.537e-06 [5.233e-06, 1.854e-05] | 6.736e-06 [5.671e-06, 1.274e-05] | 1.778e-06 [8.12e-07, 8.573e-06] |
+| curved | 33 | 0.05 | 1 | 0 | 2.767e-07 [1.58e-07, 3.756e-07] | 4.485e-09 [2.912e-09, 8.201e-09] | 2.767e-07 [1.58e-07, 3.756e-07] | 1.311e-09 [3.463e-10, 3.326e-09] |
+| curved | 33 | 0.05 | 4 | 0 | 2.592e-07 [1.353e-07, 3.849e-07] | 7.954e-09 [2.178e-09, 1.017e-08] | 1.677e-07 [1.331e-07, 3.849e-07] | 1.539e-09 [8.682e-10, 4.225e-09] |
+| curved | 33 | 0.1 | 1 | 0 | 4.146e-07 [3.373e-07, 9.861e-07] | 1.327e-06 [9.441e-07, 2.026e-06] | 3.615e-07 [2.727e-07, 9.861e-07] | 1.186e-06 [3.088e-07, 2.026e-06] |
+| curved | 33 | 0.1 | 4 | 0 | 2.431e-07 [1.994e-07, 3.501e-07] | 7.897e-07 [5.189e-07, 1.798e-06] | 2.109e-07 [9.024e-08, 2.405e-07] | 3.544e-07 [8.104e-08, 6.299e-07] |
+| curved | 33 | 0.2 | 1 | 0 | 4.221e-07 [3.235e-07, 8.084e-07] | 1.659e-06 [1.043e-06, 2.569e-06] | 3.653e-07 [1.695e-07, 6.351e-07] | 1.198e-06 [4.198e-08, 2.569e-06] |
+| curved | 33 | 0.2 | 4 | 0 | 5.384e-07 [3.462e-07, 9.084e-07] | 1.237e-06 [3.042e-07, 2.687e-06] | 5.384e-07 [1.765e-07, 9.084e-07] | 6.213e-08 [1.459e-08, 1.202e-06] |
+| straight | 9 | 0.05 | 1 | 0.722869 | n/a | 0.08797 [0.08797, 0.08797] | n/a | 0.08797 [0.08797, 0.08797] |
+| straight | 9 | 0.05 | 4 | 0.722869 | n/a | 0.08797 [0.08797, 0.08797] | n/a | 0.08797 [0.08797, 0.08797] |
+| straight | 9 | 0.1 | 1 | 0.516477 | n/a | 0.3062 [0.2994, 0.3121] | n/a | 0.3062 [0.2994, 0.3121] |
+| straight | 9 | 0.1 | 4 | 0.516477 | n/a | 0.2982 [0.2783, 0.3114] | n/a | 0.2982 [0.2783, 0.3114] |
+| straight | 9 | 0.2 | 1 | 0.22795 | n/a | 0.5743 [0.5668, 0.5856] | n/a | 0.5743 [0.5668, 0.5856] |
+| straight | 9 | 0.2 | 4 | 0.22795 | n/a | 0.5741 [0.5645, 0.5805] | n/a | 0.5741 [0.5645, 0.5805] |
+| straight | 17 | 0.05 | 1 | 0.722869 | 0.1022 [0.09779, 0.1055] | 0.09991 [0.09991, 0.09991] | 0.1022 [0.09779, 0.1055] | 0.09991 [0.09991, 0.09991] |
+| straight | 17 | 0.05 | 4 | 0.722869 | 0.09871 [0.09324, 0.107] | 0.09991 [0.09991, 0.09991] | 0.09871 [0.09324, 0.107] | 0.09991 [0.09991, 0.09991] |
+| straight | 17 | 0.1 | 1 | 0.516477 | 0.2686 [0.2627, 0.2878] | 0.2997 [0.2945, 0.3057] | 0.2686 [0.2627, 0.2878] | 0.2997 [0.2945, 0.3057] |
+| straight | 17 | 0.1 | 4 | 0.516477 | 0.2916 [0.2781, 0.3064] | 0.3045 [0.2935, 0.3126] | 0.2916 [0.2781, 0.3064] | 0.3045 [0.2935, 0.3126] |
+| straight | 17 | 0.2 | 1 | 0.22795 | 0.5115 [0.479, 0.534] | 0.5907 [0.5779, 0.5956] | 0.5115 [0.479, 0.534] | 0.5907 [0.5779, 0.5956] |
+| straight | 17 | 0.2 | 4 | 0.22795 | 0.5259 [0.5122, 0.5452] | 0.5874 [0.5729, 0.5969] | 0.5259 [0.5122, 0.5452] | 0.5874 [0.5729, 0.5969] |
 
 ### Cost and force calls at the largest sample count
 
@@ -144,6 +176,106 @@ The table reports the largest sample count. Values are medians with interquartil
 | straight | 17 | 0.2 | 1 | 256 | 0.06216 [0.05079, 0.1092] | 0.04396 [0.03476, 0.05131] | 7.66e-05 |
 | straight | 17 | 0.2 | 4 | 256 | 0.05491 [0.04435, 0.07351] | 0.03641 [0.02575, 0.05176] | 9.73e-05 |
 
+## Per-cell acceptance
+
+| case | planes | T | threads | samples | rgflux hits | reference hits | quadrature rejects | partition rejects | Fisher p |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| curved | 17 | 0.05 | 1 | 64 | 8/12 | 12/12 | 0 | 4 | 0.0932 |
+| curved | 17 | 0.05 | 4 | 64 | 7/12 | 12/12 | 0 | 5 | 0.0373 |
+| curved | 17 | 0.05 | 1 | 128 | 9/12 | 12/12 | 0 | 3 | 0.217 |
+| curved | 17 | 0.05 | 4 | 128 | 5/12 | 12/12 | 0 | 7 | 0.00458 |
+| curved | 17 | 0.05 | 1 | 256 | 7/12 | 12/12 | 0 | 5 | 0.0373 |
+| curved | 17 | 0.05 | 4 | 256 | 6/12 | 12/12 | 0 | 6 | 0.0137 |
+| curved | 17 | 0.1 | 1 | 64 | 11/12 | 12/12 | 0 | 1 | 1 |
+| curved | 17 | 0.1 | 4 | 64 | 7/12 | 12/12 | 0 | 5 | 0.0373 |
+| curved | 17 | 0.1 | 1 | 128 | 8/12 | 12/12 | 0 | 4 | 0.0932 |
+| curved | 17 | 0.1 | 4 | 128 | 6/12 | 12/12 | 0 | 6 | 0.0137 |
+| curved | 17 | 0.1 | 1 | 256 | 9/12 | 12/12 | 0 | 3 | 0.217 |
+| curved | 17 | 0.1 | 4 | 256 | 9/12 | 12/12 | 0 | 3 | 0.217 |
+| curved | 17 | 0.2 | 1 | 64 | 10/12 | 12/12 | 0 | 2 | 0.478 |
+| curved | 17 | 0.2 | 4 | 64 | 10/12 | 12/12 | 0 | 2 | 0.478 |
+| curved | 17 | 0.2 | 1 | 128 | 9/12 | 12/12 | 0 | 3 | 0.217 |
+| curved | 17 | 0.2 | 4 | 128 | 7/12 | 12/12 | 0 | 5 | 0.0373 |
+| curved | 17 | 0.2 | 1 | 256 | 7/12 | 12/12 | 0 | 5 | 0.0373 |
+| curved | 17 | 0.2 | 4 | 256 | 10/12 | 12/12 | 0 | 2 | 0.478 |
+| curved | 33 | 0.05 | 1 | 64 | 10/12 | 12/12 | 0 | 2 | 0.478 |
+| curved | 33 | 0.05 | 4 | 64 | 3/12 | 12/12 | 0 | 9 | 0.000337 |
+| curved | 33 | 0.05 | 1 | 128 | 9/12 | 12/12 | 0 | 3 | 0.217 |
+| curved | 33 | 0.05 | 4 | 128 | 8/12 | 12/12 | 0 | 4 | 0.0932 |
+| curved | 33 | 0.05 | 1 | 256 | 10/12 | 12/12 | 0 | 2 | 0.478 |
+| curved | 33 | 0.05 | 4 | 256 | 9/12 | 12/12 | 0 | 3 | 0.217 |
+| curved | 33 | 0.1 | 1 | 64 | 8/12 | 12/12 | 0 | 4 | 0.0932 |
+| curved | 33 | 0.1 | 4 | 64 | 8/12 | 12/12 | 0 | 4 | 0.0932 |
+| curved | 33 | 0.1 | 1 | 128 | 6/12 | 12/12 | 0 | 6 | 0.0137 |
+| curved | 33 | 0.1 | 4 | 128 | 6/12 | 12/12 | 0 | 6 | 0.0137 |
+| curved | 33 | 0.1 | 1 | 256 | 8/12 | 12/12 | 0 | 4 | 0.0932 |
+| curved | 33 | 0.1 | 4 | 256 | 7/12 | 12/12 | 0 | 5 | 0.0373 |
+| curved | 33 | 0.2 | 1 | 64 | 8/12 | 12/12 | 0 | 4 | 0.0932 |
+| curved | 33 | 0.2 | 4 | 64 | 10/12 | 12/12 | 0 | 2 | 0.478 |
+| curved | 33 | 0.2 | 1 | 128 | 9/12 | 12/12 | 0 | 3 | 0.217 |
+| curved | 33 | 0.2 | 4 | 128 | 6/12 | 12/12 | 0 | 6 | 0.0137 |
+| curved | 33 | 0.2 | 1 | 256 | 8/12 | 12/12 | 0 | 4 | 0.0932 |
+| curved | 33 | 0.2 | 4 | 256 | 9/12 | 12/12 | 0 | 3 | 0.217 |
+| straight | 9 | 0.05 | 1 | 64 | 0/12 | 12/12 | 12 | 0 | 7.4e-07 |
+| straight | 9 | 0.05 | 4 | 64 | 0/12 | 12/12 | 12 | 0 | 7.4e-07 |
+| straight | 9 | 0.05 | 1 | 128 | 0/12 | 12/12 | 12 | 0 | 7.4e-07 |
+| straight | 9 | 0.05 | 4 | 128 | 0/12 | 12/12 | 12 | 0 | 7.4e-07 |
+| straight | 9 | 0.05 | 1 | 256 | 0/12 | 12/12 | 12 | 0 | 7.4e-07 |
+| straight | 9 | 0.05 | 4 | 256 | 0/12 | 12/12 | 12 | 0 | 7.4e-07 |
+| straight | 9 | 0.1 | 1 | 64 | 0/12 | 12/12 | 12 | 0 | 7.4e-07 |
+| straight | 9 | 0.1 | 4 | 64 | 0/12 | 12/12 | 12 | 0 | 7.4e-07 |
+| straight | 9 | 0.1 | 1 | 128 | 0/12 | 12/12 | 12 | 0 | 7.4e-07 |
+| straight | 9 | 0.1 | 4 | 128 | 0/12 | 12/12 | 12 | 0 | 7.4e-07 |
+| straight | 9 | 0.1 | 1 | 256 | 0/12 | 12/12 | 12 | 0 | 7.4e-07 |
+| straight | 9 | 0.1 | 4 | 256 | 0/12 | 12/12 | 12 | 0 | 7.4e-07 |
+| straight | 9 | 0.2 | 1 | 64 | 0/12 | 12/12 | 12 | 0 | 7.4e-07 |
+| straight | 9 | 0.2 | 4 | 64 | 0/12 | 12/12 | 12 | 0 | 7.4e-07 |
+| straight | 9 | 0.2 | 1 | 128 | 0/12 | 12/12 | 12 | 0 | 7.4e-07 |
+| straight | 9 | 0.2 | 4 | 128 | 0/12 | 12/12 | 12 | 0 | 7.4e-07 |
+| straight | 9 | 0.2 | 1 | 256 | 0/12 | 12/12 | 12 | 0 | 7.4e-07 |
+| straight | 9 | 0.2 | 4 | 256 | 0/12 | 12/12 | 12 | 0 | 7.4e-07 |
+| straight | 17 | 0.05 | 1 | 64 | 12/12 | 12/12 | 0 | 0 | 1 |
+| straight | 17 | 0.05 | 4 | 64 | 12/12 | 12/12 | 0 | 0 | 1 |
+| straight | 17 | 0.05 | 1 | 128 | 12/12 | 12/12 | 0 | 0 | 1 |
+| straight | 17 | 0.05 | 4 | 128 | 12/12 | 12/12 | 0 | 0 | 1 |
+| straight | 17 | 0.05 | 1 | 256 | 12/12 | 12/12 | 0 | 0 | 1 |
+| straight | 17 | 0.05 | 4 | 256 | 12/12 | 12/12 | 0 | 0 | 1 |
+| straight | 17 | 0.1 | 1 | 64 | 12/12 | 12/12 | 0 | 0 | 1 |
+| straight | 17 | 0.1 | 4 | 64 | 12/12 | 12/12 | 0 | 0 | 1 |
+| straight | 17 | 0.1 | 1 | 128 | 12/12 | 12/12 | 0 | 0 | 1 |
+| straight | 17 | 0.1 | 4 | 128 | 12/12 | 12/12 | 0 | 0 | 1 |
+| straight | 17 | 0.1 | 1 | 256 | 12/12 | 12/12 | 0 | 0 | 1 |
+| straight | 17 | 0.1 | 4 | 256 | 12/12 | 12/12 | 0 | 0 | 1 |
+| straight | 17 | 0.2 | 1 | 64 | 12/12 | 12/12 | 0 | 0 | 1 |
+| straight | 17 | 0.2 | 4 | 64 | 12/12 | 12/12 | 0 | 0 | 1 |
+| straight | 17 | 0.2 | 1 | 128 | 12/12 | 12/12 | 0 | 0 | 1 |
+| straight | 17 | 0.2 | 4 | 128 | 12/12 | 12/12 | 0 | 0 | 1 |
+| straight | 17 | 0.2 | 1 | 256 | 12/12 | 12/12 | 0 | 0 | 1 |
+| straight | 17 | 0.2 | 4 | 256 | 12/12 | 12/12 | 0 | 0 | 1 |
+
+## Periodic FCC vacancy hop
+
+The pathway contains 191 atoms and 9 NEB images. The pinned rgsaddle run converged in 82 iterations at maximum force 0.000970102.
+
+This is a periodic 3 by 4 by 4 FCC vacancy hop using the same shifted platinum-parameter Morse potential on both sides. rgpot supplies the native link-cell/minimum-image neighbour stack; LAMMPS uses `morse/omp`. The explicit grid is 17 and 33 planes at kBT=0.025, 0.05, and 0.075 eV, with 12 seeds at one and four threads. The native potential time covers the complete rgpot surface call; overhead is the remaining rgflux wall time.
+
+| planes | T (eV) | threads | hits rgflux/reference | max |dF| | combined profile SE | A/A rgflux/reference | barrier rgflux (eV) | barrier reference (eV) | barrier SE rgflux/reference | wall rgflux/reference (s) | calls/plane rgflux/reference | potential/overhead per plane (s) | Fisher p |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 17 | 0.025 | 1 | 12/12 | 0.5713 [0.5605, 0.5781] | 0.007976 | 0.01108 [0.01097, 0.01243]/0.03014 [0.01925, 0.06003] | 2.103 [2.102, 2.109] | 2.226 [2.219, 2.231] | 0.002259/0.002688 | 1.569 [1.556, 1.59]/1.335 [1.325, 1.344] | 386 [386, 386]/384 [384, 384] | 0.07297 [0.07235, 0.07394]/0.01929 [0.01919, 0.01958] | 1 |
+| 17 | 0.025 | 4 | 12/12 | 0.5658 [0.5598, 0.5697] | 0.005459 | 0.01534 [0.008511, 0.01652]/0.0202 [0.01659, 0.02233] | 2.102 [2.099, 2.107] | 2.218 [2.214, 2.224] | 0.002564/0.002321 | 1.548 [1.545, 1.56]/0.7485 [0.7406, 0.7742] | 386 [386, 386]/384 [384, 384] | 0.07186 [0.0717, 0.07241]/0.01925 [0.0192, 0.01933] | 1 |
+| 17 | 0.05 | 1 | 12/12 | 0.5632 [0.5555, 0.5709] | 0.009173 | 0.03263 [0.01416, 0.04441]/0.02853 [0.02497, 0.03038] | 2.113 [2.105, 2.117] | 2.215 [2.213, 2.221] | 0.002803/0.002245 | 1.553 [1.547, 1.565]/1.346 [1.336, 1.359] | 386 [386, 386]/384 [384, 384] | 0.07211 [0.07187, 0.07272]/0.01921 [0.01915, 0.01929] | 1 |
+| 17 | 0.05 | 4 | 12/12 | 0.5814 [0.5598, 0.584] | 0.007147 | 0.02267 [0.02068, 0.02325]/0.03057 [0.01602, 0.03576] | 2.106 [2.102, 2.115] | 2.227 [2.214, 2.233] | 0.003384/0.004556 | 1.544 [1.542, 1.549]/0.7482 [0.7421, 0.7554] | 386 [386, 386]/384 [384, 384] | 0.07172 [0.0716, 0.07189]/0.01916 [0.01913, 0.01919] | 1 |
+| 17 | 0.075 | 1 | 12/12 | 0.5621 [0.5472, 0.5686] | 0.01004 | 0.03235 [0.02045, 0.04068]/0.0326 [0.02915, 0.03983] | 2.106 [2.095, 2.114] | 2.214 [2.197, 2.221] | 0.004599/0.006173 | 1.553 [1.549, 1.561]/1.35 [1.349, 1.356] | 386 [386, 386]/384 [384, 384] | 0.07219 [0.07191, 0.07256]/0.0192 [0.01915, 0.01926] | 1 |
+| 17 | 0.075 | 4 | 12/12 | 0.5639 [0.5468, 0.5697] | 0.01343 | 0.02123 [0.01645, 0.03027]/0.0662 [0.04059, 0.07797] | 2.1 [2.085, 2.115] | 2.206 [2.198, 2.232] | 0.005787/0.006898 | 1.549 [1.544, 1.559]/0.758 [0.753, 0.7743] | 386 [386, 386]/384 [384, 384] | 0.07193 [0.07165, 0.07242]/0.0192 [0.01918, 0.01927] | 1 |
+| 33 | 0.025 | 1 | 12/12 | 0.5613 [0.5532, 0.5715] | 0.004867 | 0.01373 [0.01102, 0.02449]/0.01378 [0.01137, 0.02106] | 2.144 [2.14, 2.151] | 2.245 [2.24, 2.251] | 0.002384/0.002087 | 3.002 [2.993, 3.01]/2.557 [2.541, 2.571] | 386 [386, 386]/384 [384, 384] | 0.07176 [0.07152, 0.07198]/0.0192 [0.01916, 0.01925] | 1 |
+| 33 | 0.025 | 4 | 12/12 | 0.5679 [0.5643, 0.5777] | 0.003706 | 0.01417 [0.01132, 0.01988]/0.01736 [0.01542, 0.02139] | 2.14 [2.136, 2.145] | 2.245 [2.242, 2.253] | 0.001769/0.002228 | 3.019 [2.997, 3.041]/1.442 [1.428, 1.467] | 386 [386, 386]/384 [384, 384] | 0.07221 [0.07163, 0.07272]/0.01926 [0.01919, 0.01935] | 1 |
+| 33 | 0.05 | 1 | 12/12 | 0.5544 [0.5455, 0.5666] | 0.007664 | 0.02087 [0.01314, 0.03311]/0.0333 [0.01952, 0.041] | 2.142 [2.134, 2.146] | 2.238 [2.234, 2.241] | 0.002544/0.003255 | 3.002 [2.996, 3.011]/2.601 [2.591, 2.604] | 386 [386, 386]/384 [384, 384] | 0.07177 [0.07166, 0.07202]/0.01916 [0.01915, 0.0192] | 1 |
+| 33 | 0.05 | 4 | 12/12 | 0.56 [0.5422, 0.5652] | 0.005892 | 0.01806 [0.01063, 0.02616]/0.0128 [0.01214, 0.01411] | 2.137 [2.134, 2.146] | 2.235 [2.231, 2.239] | 0.002369/0.002635 | 3.006 [2.99, 3.015]/1.485 [1.456, 1.506] | 386 [386, 386]/384 [384, 384] | 0.07179 [0.07141, 0.07207]/0.01923 [0.01919, 0.01935] | 1 |
+| 33 | 0.075 | 1 | 12/12 | 0.5554 [0.5416, 0.5716] | 0.007779 | 0.01889 [0.01601, 0.02721]/0.03237 [0.02742, 0.03858] | 2.136 [2.134, 2.146] | 2.232 [2.226, 2.244] | 0.002558/0.003899 | 3.028 [3.018, 3.063]/2.636 [2.629, 2.66] | 386 [386, 386]/384 [384, 384] | 0.07244 [0.0722, 0.07332]/0.01932 [0.01928, 0.0194] | 1 |
+| 33 | 0.075 | 4 | 12/12 | 0.5633 [0.5457, 0.5743] | 0.009243 | 0.02617 [0.01582, 0.03531]/0.02643 [0.02087, 0.04054] | 2.143 [2.133, 2.148] | 2.237 [2.23, 2.247] | 0.003249/0.004818 | 3.151 [3.038, 3.318]/1.631 [1.531, 1.699] | 386 [386, 386]/384 [384, 384] | 0.07543 [0.07267, 0.07945]/0.0202 [0.01938, 0.0212] | 1 |
+
+Static path energies agree to 9.322e-12 eV at the minimum and 1.023e-12 eV at the saddle. Per-cell rejection reasons and Mann-Whitney p-values are retained in `results.json`.
+
 ## Comparator and protocol
 
 - rgflux: `5949ac5e905a221acbc5cd3d9345e51db1bb3fcd`
@@ -152,10 +284,10 @@ The table reports the largest sample count. Values are medians with interquartil
 - rgmin: `eb8d3e4123183bd3f5ca82852332eeddb5d17f54`
 - LAMMPS: `stable_22Jul2025_update6` (`9c5ab448c78a14fd534619622162ba418d6a1fb1`)
 - PAFI driver: `v0.9` (`3a9070058bfaf86bcdeb4ec14023ee084376d291`), package 0.9.9.1
-- Potential: Morse D=1, rho=6, r_e=1, cutoff=4; rgpot-pair 3.7.0 and LAMMPS morse/omp
-- Build: release; rustc 1.100.0; GCC 13.3.0; CMake 3.28.3; Open MPI 4.1.6; MPI and OpenMP enabled
+- Potential: Dimer: Morse D=1, rho=6, r_e=1, cutoff=4. Vacancy: shifted Morse D_e=0.7102 eV, a=1.6047 1/Angstrom, r_e=2.897 Angstrom, cutoff=5.5 Angstrom; rgpot 3.7.0 and LAMMPS morse/omp
+- Build: release; rustc 1.100.0; cargo 1.100.0; GCC 13.3.0; CMake 3.28.3; Open MPI 4.1.6; MPI and OpenMP enabled; rgpot runtime ISA dispatch disabled
 
-The straight case stretches a symmetric Morse dimer from r=1.0 to r=1.4. The curved case rotates the equilibrium dimer through a quarter circle while preserving its centre of mass. Both are finite two-atom systems in a box wider than twice the cutoff, so no periodic image enters the interaction. The rgpot pair kernel and LAMMPS `morse/omp` use D=1, rho=6, r_e=1, and cutoff=4.
+The straight case stretches a symmetric Morse dimer from r=1.0 to r=1.4. The curved case rotates the equilibrium dimer through a quarter circle while preserving its centre of mass. No sampled configuration approaches the cutoff or a periodic image. The native dimer is unconfined, while the comparator uses a box wider than twice the cutoff; the common exact reference is therefore the explicitly declared interacting metastable basin. The rgpot pair kernel and LAMMPS `morse/omp` use D=1, rho=6, r_e=1, and cutoff=4.
 
 Plane counts are explicit in every cell: 9 and 17 for the straight path, 17 and 33 for the curved path. The zero-temperature tolerance remains 0.01. Rejections are retained in the hit-rate table and are never rerun.
 
