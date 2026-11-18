@@ -19,7 +19,7 @@
 //!   of Free Energy Barriers in Large Crystalline Systems*. Physical Review
 //!   Letters, 120, 135503. <https://doi.org/10.1103/PhysRevLett.120.135503>
 
-use std::f64::consts::TAU;
+use std::f64::consts::{PI, TAU};
 
 use ndarray::{Array1, ArrayView1, ArrayView2};
 use rgmin::vecops::{dot, nrm2};
@@ -30,6 +30,30 @@ use crate::engine::{
 };
 use crate::error::FluxError;
 use crate::stats::{StatsConfig, batch_means};
+
+/// Number of planes in the default [`PafiConfig`].
+const DEFAULT_PLANES: usize = 9;
+
+/// Coefficient `C` in the relative trapezoid error `C / (planes - 1)^2` of the
+/// zero-temperature path-force integral along a quarter-turn circular arc in
+/// mass-weighted coordinates through a harmonic well.
+///
+/// The leading Euler-Maclaurin term of the trapezoid rule on `dV/ds` gives
+/// `pi^2 / 12` for that arc, independent of the radius and of the two force
+/// constants. Measured on the curved analytic test path the product
+/// `error * (planes - 1)^2` stays between 0.82 and 0.86 for 3 to 129 planes
+/// and for 9 to 129 path images.
+const QUARTER_ARC_TRAPEZOID_COEFFICIENT: f64 = PI * PI / 12.0;
+
+/// Margin by which the default zero-temperature tolerance exceeds the
+/// quarter-arc trapezoid error at [`DEFAULT_PLANES`].
+const ZERO_TEMPERATURE_SAFETY_FACTOR: f64 = 2.0;
+
+/// Default [`PafiConfig::zero_temperature_tol`]: the quarter-arc trapezoid
+/// error at [`DEFAULT_PLANES`] (1.29%) times [`ZERO_TEMPERATURE_SAFETY_FACTOR`].
+const DEFAULT_ZERO_TEMPERATURE_TOL: f64 = ZERO_TEMPERATURE_SAFETY_FACTOR
+    * QUARTER_ARC_TRAPEZOID_COEFFICIENT
+    / (((DEFAULT_PLANES - 1) * (DEFAULT_PLANES - 1)) as f64);
 
 /// Configuration for Projected Average Force Integration (PAFI).
 #[derive(Clone, Debug, PartialEq)]
@@ -47,7 +71,17 @@ pub struct PafiConfig {
     pub target_error: Option<f64>,
     /// Maximum adaptive resampling rounds when `target_error` is set.
     pub max_rounds: usize,
-    /// Relative tolerance on the zero-temperature path-force integral vs `Delta E_0`.
+    /// Relative tolerance on the zero-temperature path-force integral versus
+    /// `Delta E_0`, in units of `max(1, |Delta E_0|)`.
+    ///
+    /// The check integrates `dV/ds` over the planes with the trapezoid rule,
+    /// so its error falls as `(planes - 1)^-2` and the default only suits the
+    /// default plane count. On a quarter-turn circular arc through a harmonic
+    /// well the relative error is `pi^2 / (12 (planes - 1)^2)`: 1.29% at 9
+    /// planes, 0.32% at 17 and 0.08% at 33. The default, about 2.6%, is twice
+    /// the 9-plane value. Paths that turn through more than a quarter circle,
+    /// or fewer planes, need a proportionally larger tolerance. Larger values
+    /// weaken the guard against inconsistent forces and tangents.
     pub zero_temperature_tol: f64,
     /// Deterministic PRNG seed.
     pub seed: u64,
@@ -58,13 +92,13 @@ pub struct PafiConfig {
 impl Default for PafiConfig {
     fn default() -> Self {
         Self {
-            planes: 9,
+            planes: DEFAULT_PLANES,
             burn_in_steps: 500,
             sample_steps: 4_000,
             time_step: 0.002,
             target_error: None,
             max_rounds: 4,
-            zero_temperature_tol: 0.01,
+            zero_temperature_tol: DEFAULT_ZERO_TEMPERATURE_TOL,
             seed: 1,
             stats: StatsConfig::default(),
         }
@@ -570,6 +604,19 @@ fn integrate_profile(
     })
 }
 
+/// Relative disagreement between the trapezoid integral of `dV/ds` over the
+/// planes and the end-to-end energy change, in units of `max(1, |Delta E_0|)`.
+fn path_force_relative_error(arcs: &[f64], energies: &[f64], gradients: &[f64]) -> f64 {
+    let mut integrated_energy = 0.0_f64;
+    for i in 1..arcs.len() {
+        let ds = arcs[i] - arcs[i - 1];
+        integrated_energy += 0.5 * ds * (gradients[i - 1] + gradients[i]);
+    }
+    let endpoint_energy = energies[energies.len() - 1] - energies[0];
+    let discrepancy = (integrated_energy - endpoint_energy).abs();
+    discrepancy / 1.0_f64.max(endpoint_energy.abs())
+}
+
 /// Integrate the PAFI free-energy profile and normalized rate along `path_images`.
 pub fn pafi_profile<E: DynamicsEngine + ?Sized>(
     engine: &mut E,
@@ -630,15 +677,8 @@ pub fn pafi_profile<E: DynamicsEngine + ?Sized>(
             path_energies.push(energy);
             path_gradients.push(-dot(geometry.tangent.view(), forces.view()));
         }
-        let mut integrated_energy = 0.0_f64;
-        for i in 1..geometries.len() {
-            let ds = arcs[i] - arcs[i - 1];
-            integrated_energy += 0.5 * ds * (path_gradients[i - 1] + path_gradients[i]);
-        }
-        let endpoint_energy = path_energies[path_energies.len() - 1] - path_energies[0];
-        let discrepancy = (integrated_energy - endpoint_energy).abs();
-        let scale = 1.0_f64.max(endpoint_energy.abs());
-        if discrepancy > config.zero_temperature_tol * scale {
+        let relative_error = path_force_relative_error(&arcs, &path_energies, &path_gradients);
+        if relative_error > config.zero_temperature_tol {
             return Err(FluxError::InvalidConfig(
                 "PAFI zero-temperature path-force quadrature exceeds tolerance",
             ));
@@ -827,6 +867,116 @@ mod tests {
         assert_eq!(profile.barrier, 1.0);
         assert_eq!(profile.barrier_error, 0.0);
         assert_eq!(profile.normalized_rate_error, 0.0);
+    }
+
+    struct AnisotropicHarmonic {
+        ax: f64,
+        ay: f64,
+    }
+
+    impl rgsaddle::PointSurface for AnisotropicHarmonic {
+        fn eval(
+            &self,
+            r: ArrayView1<'_, f64>,
+        ) -> Result<(f64, Array1<f64>), rgsaddle::SaddleError> {
+            let energy = 0.5 * (self.ax * r[0] * r[0] + 4.0 * self.ay * r[1] * r[1]);
+            let gradient = Array1::from_vec(vec![self.ax * r[0], 4.0 * self.ay * r[1]]);
+            Ok((energy, gradient))
+        }
+    }
+
+    const ARC_RADIUS: f64 = 1.2;
+    const ARC_FORCE_CONSTANTS: (f64, f64) = (3.0, 1.0);
+
+    fn quarter_arc_engine() -> (NativeEngine<AnisotropicHarmonic>, Array1<f64>) {
+        let masses = Array1::from_vec(vec![1.0, 4.0]);
+        let engine = NativeEngine::new(
+            AnisotropicHarmonic {
+                ax: ARC_FORCE_CONSTANTS.0,
+                ay: ARC_FORCE_CONSTANTS.1,
+            },
+            NativeConfig::default()
+                .with_masses(masses.clone())
+                .with_thermostat(ThermostatConfig::default().with_temperature(0.2)),
+        )
+        .expect("engine");
+        (engine, masses)
+    }
+
+    fn quarter_arc_path(images: usize) -> Array2<f64> {
+        let mut path = Array2::zeros((images, 2));
+        for i in 0..images {
+            let fraction = (i as f64) / ((images - 1) as f64);
+            let theta = std::f64::consts::FRAC_PI_2 * (1.0 - fraction);
+            path[[i, 0]] = ARC_RADIUS * theta.cos();
+            path[[i, 1]] = 0.5 * ARC_RADIUS * theta.sin();
+        }
+        path
+    }
+
+    fn quarter_arc_relative_error(images: usize, planes: usize) -> f64 {
+        let (mut engine, masses) = quarter_arc_engine();
+        let path = quarter_arc_path(images);
+        let geometry =
+            build_plane_geometries(path.view(), masses.view(), planes).expect("geometry");
+        let mut arcs = Vec::with_capacity(planes);
+        let mut energies = Vec::with_capacity(planes);
+        let mut gradients = Vec::with_capacity(planes);
+        for plane in &geometry {
+            engine.set_positions(plane.anchor.view()).expect("anchor");
+            let (energy, forces) = engine.energy_and_forces().expect("forces");
+            arcs.push(plane.arc);
+            energies.push(energy);
+            gradients.push(-dot(plane.tangent.view(), forces.view()));
+        }
+        path_force_relative_error(&arcs, &energies, &gradients)
+    }
+
+    #[test]
+    fn quarter_arc_trapezoid_error_follows_inverse_square_law() {
+        // The coefficient is a measured, converged quantity, so the scaled
+        // error may differ from the analytic limit only by the spline and
+        // higher-order Euler-Maclaurin terms, which stay below a few percent
+        // from 9 planes on.
+        let agreement = 0.05_f64;
+        let images = 33usize;
+        for planes in [9usize, 17, 33, 65] {
+            let intervals = (planes - 1) as f64;
+            let scaled = quarter_arc_relative_error(images, planes) * intervals * intervals;
+            assert!(
+                (scaled - QUARTER_ARC_TRAPEZOID_COEFFICIENT).abs()
+                    <= agreement * QUARTER_ARC_TRAPEZOID_COEFFICIENT,
+                "{planes} planes: scaled error {scaled} versus {QUARTER_ARC_TRAPEZOID_COEFFICIENT}"
+            );
+        }
+    }
+
+    #[test]
+    fn default_tolerance_accepts_quarter_arc_at_default_planes() {
+        let config = PafiConfig::default();
+        let error = quarter_arc_relative_error(33, config.planes);
+        assert!(
+            error < config.zero_temperature_tol,
+            "relative error {error} versus default tolerance {}",
+            config.zero_temperature_tol
+        );
+        assert!(
+            config.zero_temperature_tol < 2.0 * ZERO_TEMPERATURE_SAFETY_FACTOR * error,
+            "default tolerance {} is no longer calibrated to {error}",
+            config.zero_temperature_tol
+        );
+
+        let (mut engine, _) = quarter_arc_engine();
+        let path = quarter_arc_path(config.planes);
+        let result = pafi_profile(
+            &mut engine,
+            path.view(),
+            &config
+                .with_burn_in_steps(1)
+                .with_sample_steps(16)
+                .with_stats(StatsConfig::default().with_min_batches(2)),
+        );
+        assert!(result.is_ok(), "default configuration returned {result:?}");
     }
 
     #[test]
