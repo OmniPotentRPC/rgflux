@@ -115,7 +115,11 @@ struct ScriptedFfsEngine {
     fail_trial_after_steps: Option<usize>,
     fail_restore_position: bool,
     force_trial_success: bool,
+    flux_script: Option<Vec<f64>>,
+    trial_script: Option<TrialScript>,
 }
+
+type TrialScript = fn(f64, usize, u64) -> f64;
 
 impl ScriptedFfsEngine {
     fn new() -> Self {
@@ -137,7 +141,26 @@ impl ScriptedFfsEngine {
             fail_trial_after_steps: None,
             fail_restore_position: false,
             force_trial_success: false,
+            flux_script: None,
+            trial_script: None,
         }
+    }
+
+    fn with_start(mut self, lambda: f64) -> Self {
+        self.positions[0] = lambda;
+        self.initial_position = lambda;
+        self.trial_origin_lambda = lambda;
+        self
+    }
+
+    fn with_flux_script(mut self, script: &[f64]) -> Self {
+        self.flux_script = Some(script.to_vec());
+        self
+    }
+
+    fn with_trial_script(mut self, script: TrialScript) -> Self {
+        self.trial_script = Some(script);
+        self
     }
 
     fn with_trial_failure(mut self, step: usize) -> Self {
@@ -232,7 +255,9 @@ impl DynamicsEngine for ScriptedFfsEngine {
         self.velocities[0] += 0.125;
         match self.mode {
             ScriptMode::Flux => {
-                let lambda = if self.flux_seed & 1 == 0 {
+                let lambda = if let Some(script) = &self.flux_script {
+                    script[self.flux_step % script.len()]
+                } else if self.flux_seed & 1 == 0 {
                     // Excursion with multiple steps above lambda_a:
                     // step 0 crosses lambda_0, step 1 hits product, step 2 stays above.
                     match self.flux_step % 4 {
@@ -258,6 +283,11 @@ impl DynamicsEngine for ScriptedFfsEngine {
                     && self.trial_step >= limit
                 {
                     return Err(FluxError::Surface("scripted trial failure".to_string()));
+                }
+                if let Some(script) = self.trial_script {
+                    self.positions[0] =
+                        script(self.trial_origin_lambda, self.trial_step, self.trial_token);
+                    return Ok(StepReport::new(0.0, 0.0, None));
                 }
                 let in_stage_zero = self.trial_origin_lambda < 0.4;
                 let token_mod = self.trial_token % 4;
@@ -621,4 +651,211 @@ fn basin_start_must_be_inside_a() {
     let cfg = FfsConfig::default().with_interfaces(vec![-0.5, 0.0, 0.5]);
     let err = forward_flux_rate(&mut engine, |x| x[0], &cfg).expect_err("basin start");
     assert!(matches!(err, FluxError::InvalidConfig(msg) if msg.contains("begin in basin A")));
+}
+
+fn advance_by_one(origin: f64, _step: usize, _token: u64) -> f64 {
+    origin + 1.0
+}
+
+fn scripted_cfg(interfaces: Vec<f64>, max_flux_steps: usize) -> FfsConfig {
+    FfsConfig::default()
+        .with_interfaces(interfaces)
+        .with_points_per_interface(4)
+        .with_trials_per_interface(8)
+        .with_max_trial_steps(3)
+        .with_max_flux_steps(max_flux_steps)
+        .with_time_step(1.0)
+        .with_seed(5)
+        .with_stats(rgflux::stats::StatsConfig::default().with_batch_size(1))
+}
+
+fn assert_close(actual: f64, expected: f64) {
+    assert!(
+        (actual - expected).abs() <= 4.0 * f64::EPSILON,
+        "expected {expected:.17e}, got {actual:.17e}"
+    );
+}
+
+/// Four crossings with intervals `[1, 2, 2, 2]` give `Phi_{A,0} = 4 / 7`.
+const FLUX_FOUR_OVER_SEVEN: f64 = 4.0 / 7.0;
+
+#[test]
+fn landing_exactly_on_lambda_a_while_disarmed_rearms_the_crossing() {
+    // 0.5 crosses lambda_0 and disarms, 0.0 sits exactly on lambda_0 and must
+    // rearm, the second 0.5 is then a second crossing, 2.5 reaches the product.
+    let script = [0.5, 0.0, 0.5, 2.5];
+    let cfg = scripted_cfg(vec![0.0, 1.0, 2.0], 7);
+
+    let mut engine = ScriptedFfsEngine::new()
+        .with_flux_script(&script)
+        .with_trial_script(advance_by_one);
+    let estimate = forward_flux_rate(&mut engine, |x| x[0], &cfg).expect("seven steps suffice");
+    assert_close(estimate.initial_flux, FLUX_FOUR_OVER_SEVEN);
+    assert_close(estimate.rate, FLUX_FOUR_OVER_SEVEN);
+    assert_eq!(estimate.interface_probabilities, vec![1.0, 1.0]);
+
+    // Crossings land on steps 1, 3, 5 and 7.
+    let mut short = ScriptedFfsEngine::new()
+        .with_flux_script(&script)
+        .with_trial_script(advance_by_one);
+    let err = forward_flux_rate(&mut short, |x| x[0], &cfg.clone().with_max_flux_steps(6))
+        .expect_err("six steps hold only three crossings");
+    assert!(format!("{err}").contains("flux budget exceeded"));
+}
+
+#[test]
+fn flux_sample_exactly_at_product_level_resets_to_the_initial_state() {
+    // 2.0 equals the product level: it must reset the engine so the script
+    // restarts at 0.5 and every other step is a crossing.
+    let script = [0.5, 2.0, 0.5, -1.0];
+    let cfg = scripted_cfg(vec![0.0, 1.0, 2.0], 7);
+
+    let mut engine = ScriptedFfsEngine::new()
+        .with_flux_script(&script)
+        .with_trial_script(advance_by_one);
+    let estimate = forward_flux_rate(&mut engine, |x| x[0], &cfg).expect("seven steps suffice");
+    assert_close(estimate.initial_flux, FLUX_FOUR_OVER_SEVEN);
+    assert_close(estimate.rate, FLUX_FOUR_OVER_SEVEN);
+
+    let mut short = ScriptedFfsEngine::new()
+        .with_flux_script(&script)
+        .with_trial_script(advance_by_one);
+    let err = forward_flux_rate(&mut short, |x| x[0], &cfg.clone().with_max_flux_steps(6))
+        .expect_err("six steps hold only three crossings");
+    assert!(format!("{err}").contains("flux budget exceeded"));
+}
+
+#[test]
+fn start_exactly_on_lambda_0_is_inside_basin_a() {
+    let cfg = scripted_cfg(vec![0.0, 1.0, 2.0], 7);
+    let mut engine = ScriptedFfsEngine::new()
+        .with_start(0.0)
+        .with_flux_script(&[0.5, 2.0])
+        .with_trial_script(advance_by_one);
+    let estimate = forward_flux_rate(&mut engine, |x| x[0], &cfg).expect("start on lambda_0");
+    assert_close(estimate.initial_flux, FLUX_FOUR_OVER_SEVEN);
+    assert!(engine.positions()[0].abs() <= f64::EPSILON);
+}
+
+fn fail_even_tokens_on_lambda_a(origin: f64, step: usize, token: u64) -> f64 {
+    if token & 1 == 0 && step == 1 {
+        0.0
+    } else {
+        origin + 1.0
+    }
+}
+
+#[test]
+fn trial_landing_exactly_on_lambda_a_is_a_failure() {
+    // Even-token trials sit exactly on lambda_0 = 0.0 at step 1 and would reach
+    // the next interface at step 2 if they were allowed to continue.
+    let cfg = scripted_cfg(vec![0.0, 1.0, 2.0], 7);
+    let mut engine = ScriptedFfsEngine::new()
+        .with_flux_script(&[0.5, 2.0])
+        .with_trial_script(fail_even_tokens_on_lambda_a);
+    let estimate = forward_flux_rate(&mut engine, |x| x[0], &cfg).expect("estimate");
+    assert_eq!(estimate.interface_probabilities, vec![0.5, 0.5]);
+    assert_close(estimate.rate, FLUX_FOUR_OVER_SEVEN * 0.25);
+}
+
+#[test]
+fn burn_in_discards_exactly_the_configured_number_of_steps() {
+    // The script alternates a crossing (odd steps) with a product reset, so
+    // counting starts at step `burn_in + 1` and the fourth crossing lands on
+    // step `first_crossing + 6`.
+    let cases = [
+        (0_usize, 7_usize, 4.0 / 7.0),
+        (1, 9, 4.0 / 8.0),
+        (2, 9, 4.0 / 7.0),
+        (3, 11, 4.0 / 8.0),
+        (4, 11, 4.0 / 7.0),
+    ];
+    for (burn_in, steps, flux) in cases {
+        let cfg = scripted_cfg(vec![0.0, 1.0, 2.0], steps).with_burn_in_steps(burn_in);
+        let mut engine = ScriptedFfsEngine::new()
+            .with_flux_script(&[0.5, 2.0])
+            .with_trial_script(advance_by_one);
+        let estimate = forward_flux_rate(&mut engine, |x| x[0], &cfg)
+            .unwrap_or_else(|e| panic!("burn_in {burn_in} needs {steps} steps: {e}"));
+        assert_close(estimate.initial_flux, flux);
+
+        let mut short = ScriptedFfsEngine::new()
+            .with_flux_script(&[0.5, 2.0])
+            .with_trial_script(advance_by_one);
+        let err = forward_flux_rate(&mut short, |x| x[0], &cfg.with_max_flux_steps(steps - 1))
+            .expect_err("one step short");
+        assert!(format!("{err}").contains("flux budget exceeded"));
+    }
+}
+
+/// Stage 0: only the 0.5 starting points advance. Stage 1: odd tokens advance.
+fn stage_se_script(origin: f64, _step: usize, token: u64) -> f64 {
+    if origin < 1.0 {
+        if origin < 0.6 { origin + 1.0 } else { -1.0 }
+    } else if token % 2 == 1 {
+        origin + 1.0
+    } else {
+        -1.0
+    }
+}
+
+#[test]
+fn rate_standard_error_propagates_flux_and_every_stage_error() {
+    let cfg = scripted_cfg(vec![0.0, 1.0, 2.0], 7).with_seed(3);
+    let trials = cfg.trials_per_interface;
+    // Crossings alternate 0.5 / 0.7 and never reach the product level.
+    let mut engine = ScriptedFfsEngine::new()
+        .with_flux_script(&[0.5, -1.0, 0.7, -1.0])
+        .with_trial_script(stage_se_script);
+    let estimate = forward_flux_rate(&mut engine, |x| x[0], &cfg).expect("estimate");
+
+    // Replay the documented draw order: flux reseed, then (index, reseed) per trial.
+    let mut rng = StdRng::seed_from_u64(cfg.seed);
+    let _flux_seed: u64 = rng.random();
+    let mut stage0 = [(0_u64, 0_u64); 4];
+    for _ in 0..trials {
+        let index = rng.random_range(0..4_usize);
+        let _trial_seed: u64 = rng.random();
+        stage0[index].0 += 1;
+        stage0[index].1 += u64::from(index % 2 == 0);
+    }
+    let reached = stage0.iter().map(|c| c.1).sum::<u64>() as usize;
+    assert!(reached >= 2, "scenario needs two stage-1 start points");
+    let mut stage1 = vec![(0_u64, 0_u64); reached];
+    for trial in 0..trials {
+        let index = rng.random_range(0..reached);
+        let _trial_seed: u64 = rng.random();
+        stage1[index].0 += 1;
+        stage1[index].1 += (trials as u64 + trial as u64 + 1) % 2;
+    }
+
+    let stage = |clusters: &[(u64, u64)]| {
+        let k = clusters.iter().map(|c| c.0).sum::<u64>() as f64;
+        let p = clusters.iter().map(|c| c.1).sum::<u64>() as f64 / k;
+        let m = clusters.len() as f64;
+        let spread = clusters
+            .iter()
+            .map(|c| (c.1 as f64 - p * c.0 as f64).powi(2))
+            .sum::<f64>();
+        (p, (m / (m - 1.0) * spread).sqrt() / k)
+    };
+    let (p0, se0) = stage(&stage0);
+    let (p1, se1) = stage(&stage1);
+    assert!(
+        se0 > 0.0 && se1 > 0.0,
+        "scenario needs nonzero stage errors"
+    );
+    assert_close(estimate.interface_probabilities[0], p0);
+    assert_close(estimate.interface_probabilities[1], p1);
+
+    // Flux intervals [1, 2, 2, 2]: mean 7/4, sample sd 1/2, se of the mean 1/4.
+    let flux = 4.0 / 7.0;
+    let flux_se = 0.25 / (1.75 * 1.75);
+    let rate = flux * p0 * p1;
+    let relative_variance = (flux_se / flux).powi(2) + (se0 / p0).powi(2) + (se1 / p1).powi(2);
+    assert_close(estimate.initial_flux, flux);
+    assert_close(estimate.rate, rate);
+    assert_close(estimate.standard_error, rate * relative_variance.sqrt());
+    // Each omitted or substituted term would shift the result by far more.
+    assert!(estimate.standard_error > rate * (flux_se / flux).hypot(se0 / p0) * 1.01);
 }
