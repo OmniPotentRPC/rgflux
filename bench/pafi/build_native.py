@@ -10,6 +10,7 @@ def arguments():
     parser.add_argument("--cargo", type=pathlib.Path, required=True)
     parser.add_argument("--rgflux-source", type=pathlib.Path, required=True)
     parser.add_argument("--rgpot-source", type=pathlib.Path, required=True)
+    parser.add_argument("--rgsaddle-source", type=pathlib.Path, required=True)
     parser.add_argument("--source", type=pathlib.Path, required=True)
     parser.add_argument("--build-dir", type=pathlib.Path, required=True)
     return parser.parse_args()
@@ -33,8 +34,12 @@ publish = false
 
 [dependencies]
 ndarray = "0.17"
+pyo3 = {{ version = "0.27", features = ["auto-initialize"] }}
 rgflux = {{ path = "{toml_path(args.rgflux_source)}" }}
 rgpot-pair = {{ path = "{toml_path(args.rgpot_source / "rgpot-pair")}" }}
+rgsaddle = {{ path = "{toml_path(args.rgsaddle_source)}" }}
+serde = {{ version = "1", features = ["derive"] }}
+serde_json = "1"
 """
     (args.build_dir / "Cargo.toml").write_text(manifest)
     subprocess.run(
