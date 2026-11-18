@@ -307,6 +307,11 @@ impl DynamicsEngine for RgpotSessionEngine {
         Err(FluxError::BackendUnavailable(self.unavailable_reason()))
     }
 
+    fn reseed(&mut self, seed: u64) -> Result<(), FluxError> {
+        self.config.seed = seed;
+        Ok(())
+    }
+
     fn shoot_velocities(&mut self, seed: u64) -> Result<(), FluxError> {
         let kbt = self.config.thermostat.thermal_energy()?;
         self.velocities = draw_maxwell_boltzmann_velocities(self.masses(), kbt, seed)?;

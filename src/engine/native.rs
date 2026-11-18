@@ -192,7 +192,7 @@ impl<S: ForceSurface> NativeEngine<S> {
     }
 
     /// Reset the internal Langevin PRNG stream to `seed`.
-    pub fn reseed(&mut self, seed: u64) {
+    pub fn reseed_rng(&mut self, seed: u64) {
         self.rng = StdRng::seed_from_u64(seed);
     }
 
@@ -484,6 +484,11 @@ impl<S: ForceSurface> DynamicsEngine for NativeEngine<S> {
             kinetic_energy,
             constraint_force,
         })
+    }
+
+    fn reseed(&mut self, seed: u64) -> Result<(), FluxError> {
+        self.reseed_rng(seed);
+        Ok(())
     }
 
     fn shoot_velocities(&mut self, seed: u64) -> Result<(), FluxError> {

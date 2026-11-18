@@ -389,6 +389,12 @@ pub trait DynamicsEngine {
     /// Advance the engine by one integrator step of duration `dt > 0`.
     fn step(&mut self, dt: f64) -> Result<StepReport, FluxError>;
 
+    /// Reset the engine's stochastic stream to `seed`.
+    ///
+    /// Engines with deterministic dynamics and no stochastic terms may accept the
+    /// call as a no-op.
+    fn reseed(&mut self, seed: u64) -> Result<(), FluxError>;
+
     /// Reseed velocities from the Maxwell-Boltzmann distribution at [`Self::thermostat`]
     /// using a deterministic stream initialized from `seed`.
     fn shoot_velocities(&mut self, seed: u64) -> Result<(), FluxError>;

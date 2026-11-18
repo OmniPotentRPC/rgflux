@@ -277,3 +277,50 @@ fn seeded_runs_replay_deterministically_bit_for_bit() {
     assert_eq!(first, replay);
     assert_ne!(first, other);
 }
+
+#[test]
+fn reseed_reproduces_trajectory_and_distinguishes_streams() {
+    let mk_engine = || {
+        let surface = DoubleWell2D {
+            barrier: 1.0,
+            transverse_k: 1.6,
+            coupling: 0.2,
+        };
+        let cfg = NativeConfig::default()
+            .with_masses(Array1::from_vec(vec![1.0, 1.3]))
+            .with_thermostat(
+                ThermostatConfig::default()
+                    .with_gamma(1.4)
+                    .with_temperature(0.4),
+            )
+            .with_seed(5);
+        let mut engine = NativeEngine::new(surface, cfg).expect("engine");
+        engine
+            .set_positions(Array1::from_vec(vec![0.15, -0.22]).view())
+            .expect("set positions");
+        engine
+    };
+
+    let sample_bits = |engine: &mut NativeEngine<_>, reseed: u64| -> Vec<u64> {
+        engine.reseed(reseed).expect("reseed");
+        let mut bits = Vec::with_capacity(3 * 128);
+        for _ in 0..128 {
+            let rep = engine.step(0.01).expect("step");
+            bits.push(rep.potential_energy.to_bits());
+            bits.push(rep.kinetic_energy.to_bits());
+            bits.extend(engine.positions().iter().map(|v| v.to_bits()));
+        }
+        bits
+    };
+
+    let mut a = mk_engine();
+    let mut b = mk_engine();
+    let mut c = mk_engine();
+
+    let seq_a = sample_bits(&mut a, 123_456_789);
+    let seq_b = sample_bits(&mut b, 123_456_789);
+    let seq_c = sample_bits(&mut c, 123_456_790);
+
+    assert_eq!(seq_a, seq_b);
+    assert_ne!(seq_a, seq_c);
+}
