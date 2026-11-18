@@ -150,7 +150,7 @@ def main():
         "potential_seconds": None,
         "overhead_seconds": None,
         "force_calls": args.planes * (args.burn_in + args.samples),
-        "force_calls_kind": "production_and_thermalization_steps",
+        "force_calls_kind": "derived_from_configured_integration_steps",
         "minimum_energy": min(energies),
         "saddle_energy": max(energies),
         "reaction_coordinate": coordinate,

@@ -26,6 +26,8 @@ def main():
             "1036330",
             "--threads",
             "1",
+            "--effective-threads",
+            "1",
             "--time-step",
             "0.002",
             "--friction",

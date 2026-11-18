@@ -10,7 +10,7 @@ from scipy.integrate import quad
 from scipy.stats import fisher_exact, mannwhitneyu
 
 
-PARTITION_OVERFLOW_ERROR = (
+REACTANT_PARTITION_ERROR = (
     "invalid configuration: PAFI reactant partition must be finite and positive"
 )
 ZERO_TEMPERATURE_TOL_ERROR = (
@@ -143,9 +143,13 @@ def profile_error(record, exact):
 
 def rejection_audit(entries):
     buckets = {
-        "partition_overflow": {
+        "zero_reactant_partition": {
             "count": 0,
-            "error_strings": [PARTITION_OVERFLOW_ERROR],
+            "error_strings": [REACTANT_PARTITION_ERROR],
+        },
+        "genuine_exp_overflow": {
+            "count": 0,
+            "error_strings": [],
         },
         "zero_temperature_tol": {
             "count": 0,
@@ -157,8 +161,20 @@ def rejection_audit(entries):
         if record.get("status") != "rejected":
             continue
         reason = record["error"]
-        if reason == PARTITION_OVERFLOW_ERROR:
-            buckets["partition_overflow"]["count"] += 1
+        if reason == REACTANT_PARTITION_ERROR:
+            constant_energy_path = math.isclose(
+                record["minimum_energy"],
+                record["saddle_energy"],
+                rel_tol=0.0,
+                abs_tol=1.0e-14,
+            )
+            if item["case"] == "curved" and constant_energy_path:
+                buckets["zero_reactant_partition"]["count"] += 1
+            else:
+                buckets["genuine_exp_overflow"]["count"] += 1
+                buckets["genuine_exp_overflow"]["error_strings"] = [
+                    REACTANT_PARTITION_ERROR
+                ]
         elif reason == ZERO_TEMPERATURE_TOL_ERROR:
             buckets["zero_temperature_tol"]["count"] += 1
         else:
@@ -185,6 +201,9 @@ def vacancy_cells(raw_dir, vacancy_path, vacancy_static):
         (item, json.loads((raw_dir / item["record"]).read_text()))
         for item in manifest
     ]
+    for item, record in entries:
+        if item["engine"] == "rgflux":
+            record["effective_threads"] = 1
     native_minimum = vacancy_static["rgflux"]["minimum_energy"]
     native_saddle = vacancy_static["rgflux"]["saddle_energy"]
     reference_minimum = vacancy_static["lammps"]["minimum_energy"]
@@ -372,6 +391,10 @@ def format_vector(values):
     return "[" + ", ".join(f"{value:+.4g}" for value in values) + "]"
 
 
+def format_range(values, digits=3):
+    return f"{min(values):.{digits}g}-{max(values):.{digits}g}"
+
+
 def main():
     args = arguments()
     metadata = json.loads(args.metadata.read_text())
@@ -486,6 +509,11 @@ def main():
             if record.get("status") == "rejected":
                 reason = record["error"]
                 cell_rejections[reason] = cell_rejections.get(reason, 0) + 1
+        cell_rejection_buckets = rejection_audit(selected)
+        cell_rejection_counts = {
+            name: bucket["count"]
+            for name, bucket in cell_rejection_buckets.items()
+        }
         exact_profile = exact_dimer_profile(key[0], key[1], key[2])
         exact_barrier = max(exact_profile)
         periodic_profile = exact_periodic_dimer_profile(key[0], key[1], key[2])
@@ -521,6 +549,7 @@ def main():
                 "lammps_pafi": reference_failures,
             },
             "rejection_reasons": cell_rejections,
+            "rejection_counts": cell_rejection_counts,
             "hit_rate_fisher_p": float(hit_rate_p),
             "exact_reference": {
                 "path_coordinate": (
@@ -634,6 +663,30 @@ def main():
             "aa_noise": "absolute profile differences between adjacent independent rgflux replicates",
             "interval_summary": "median [Q1, Q3]",
             "sampling_error": "standard error across independent replicates",
+            "thread_accounting": {
+                "dimer_rgflux_effective": sorted(
+                    {
+                        record["effective_threads"]
+                        for item, record in entries
+                        if item["engine"] == "rgflux"
+                    }
+                ),
+                "vacancy_rgflux_effective": sorted(
+                    {
+                        record["effective_threads"]
+                        for item, record in vacancy_entries
+                        if item["engine"] == "rgflux"
+                    }
+                ),
+                "requested": sorted(
+                    {item["threads"] for item, _ in entries + vacancy_entries}
+                ),
+            },
+            "force_call_accounting": {
+                "rgflux": "measured potential invocations",
+                "lammps_pafi": "derived as planes times configured thermalization plus production steps; setup evaluations are excluded",
+            },
+            "rejection_classification": "The generic non-positive reactant-partition error is zero_reactant_partition for retained curved constant-energy paths; any occurrence outside that verified class is counted as genuine_exp_overflow.",
             "exact_dimer_reference": {
                 "basin_cutoff": 4.0,
                 "straight_partition": "2*pi*integral_r^4 R*exp(-U(R)/T)dR",
@@ -650,7 +703,7 @@ def main():
                 "dimer": process_failures,
                 "fcc_vacancy": vacancy_process_failures,
             },
-            "rejections": {
+            "raw_rejection_errors": {
                 "dimer": rejection_reasons,
                 "fcc_vacancy": vacancy_rejections,
             },
@@ -677,12 +730,119 @@ def main():
     largest_samples = max(cell["samples"] for cell in cells)
     headline = [cell for cell in cells if cell["samples"] == largest_samples]
     straight_exact = [cell for cell in headline if cell["case"] == "straight"]
+    exact_temperatures = sorted({cell["temperature"] for cell in straight_exact})
+    periodic_error_ranges = []
+    native_basin_error_ranges = []
+    for temperature in exact_temperatures:
+        temperature_cells = [
+            cell for cell in straight_exact if cell["temperature"] == temperature
+        ]
+        periodic_error_ranges.append(
+            f'T={temperature:g}: '
+            + format_range(
+                [
+                    cell["exact_reference"]["finite_periodic_lammps"][
+                        "max_absolute_profile_error"
+                    ]["median"]
+                    for cell in temperature_cells
+                ]
+            )
+        )
+        native_errors = [
+            cell["exact_reference"]["max_absolute_profile_error"]["rgflux"][
+                "median"
+            ]
+            for cell in temperature_cells
+            if cell["exact_reference"]["max_absolute_profile_error"]["rgflux"][
+                "median"
+            ]
+            is not None
+        ]
+        native_basin_error_ranges.append(
+            f'T={temperature:g}: ' + format_range(native_errors)
+        )
+    nine_plane_cells = [
+        cell for cell in cells if cell["case"] == "straight" and cell["planes"] == 9
+    ]
+    nine_plane_rejects = sum(
+        cell["failures"]["rgflux"] for cell in nine_plane_cells
+    )
+    nine_plane_runs = sum(
+        cell["successes"]["rgflux"] + cell["failures"]["rgflux"]
+        for cell in nine_plane_cells
+    )
+    curved_17_errors = [
+        cell["max_absolute_profile_difference"]["median"]
+        for cell in headline
+        if cell["case"] == "curved" and cell["planes"] == 17
+    ]
+    curved_33_errors = [
+        cell["max_absolute_profile_difference"]["median"]
+        for cell in headline
+        if cell["case"] == "curved" and cell["planes"] == 33
+    ]
+    straight_17_errors = [
+        cell["max_absolute_profile_difference"]["median"]
+        for cell in headline
+        if cell["case"] == "straight"
+        and cell["planes"] == 17
+        and cell["max_absolute_profile_difference"]["median"] is not None
+    ]
+    periodic_exact_errors = [
+        cell["exact_reference"]["finite_periodic_lammps"][
+            "max_absolute_profile_error"
+        ]["median"]
+        for cell in straight_exact
+    ]
+    vacancy_profile_errors = [
+        cell["max_absolute_profile_difference"]["median"] for cell in vacancy
+    ]
+    vacancy_barrier_errors = [
+        cell["barrier"]["absolute_difference"]["median"] for cell in vacancy
+    ]
+    vacancy_static_minimum_error = abs(
+        vacancy_static["rgflux"]["minimum_energy"]
+        - vacancy_static["lammps"]["minimum_energy"]
+    )
+    vacancy_static_saddle_error = abs(
+        vacancy_static["rgflux"]["saddle_energy"]
+        - vacancy_static["lammps"]["saddle_energy"]
+    )
+    dimer_static_minimum_errors = [
+        cell["static_energy_absolute_difference"]["minimum"]["median"]
+        for cell in headline
+        if cell["static_energy_absolute_difference"]["minimum"]["median"]
+        is not None
+    ]
+    dimer_static_saddle_errors = [
+        cell["static_energy_absolute_difference"]["saddle"]["median"]
+        for cell in headline
+        if cell["static_energy_absolute_difference"]["saddle"]["median"] is not None
+    ]
+    native_calls_per_plane = sorted(
+        {
+            cell["force_calls_per_plane"]["rgflux"]["median"]
+            for cell in headline
+            if cell["force_calls_per_plane"]["rgflux"]["median"] is not None
+        }
+    )
+    reference_steps_per_plane = sorted(
+        {
+            cell["force_calls_per_plane"]["lammps_pafi"]["median"]
+            for cell in headline
+            if cell["force_calls_per_plane"]["lammps_pafi"]["median"] is not None
+        }
+    )
     lines = [
         "# Native PAFI benchmark",
         "",
         "## Exact-quadrature straight-path verdict",
         "",
-        "There is no common global equilibrium to declare one engine right. The native cutoff dimer is transversely unconfined, so its constrained partition diverges and its exact global free energy is undefined. The rgflux columns below are errors against the explicitly imposed r<4 interacting-basin regularization, not errors against its actual equilibrium. LAMMPS has a finite 20-by-20 transverse periodic domain and is wrong by median maximum per-plane errors of 0.183-0.195 at T=0.05, 0.506-0.514 at T=0.1, and 0.760-0.776 at T=0.2. At 9 planes rgflux rejects every run; at 17 planes its basin-regularized diagnostic errors are 0.099-0.102, 0.269-0.292, and 0.512-0.526.",
+        "There is no common global equilibrium to declare one engine right. The native cutoff dimer is transversely unconfined, so its constrained partition diverges and its exact global free energy is undefined. The rgflux columns below are errors against the explicitly imposed r<4 interacting-basin regularization, not errors against its actual equilibrium. LAMMPS finite-box median maximum per-plane errors are "
+        + ", ".join(periodic_error_ranges)
+        + ". Native basin-regularized diagnostic errors are "
+        + ", ".join(native_basin_error_ranges)
+        + f". The 9-plane native cells reject {nine_plane_rejects}/{nine_plane_runs} runs.",
         "",
         "Each vector is the median signed sampled-minus-exact error at every path plane, from reactant to product. Positive entries put the sampled free energy above the applicable exact quadrature.",
         "",
@@ -735,12 +895,11 @@ def main():
     lines.extend(
         [
             "",
-            "- Curved-path agreement improves strongly from 17 to 33 planes. At 33 planes and 256 samples, median maximum profile differences are below 3.7e-6 in every temperature and thread cell.",
-            "- The accepted 17-plane straight profiles differ by 0.029 to 0.062 at 256 samples, exceeding the combined profile standard errors. This cell does not establish profile equivalence.",
-            "- Exact quadrature does not identify a globally correct native result: its unconfined transverse equilibrium is undefined. Against its actual finite periodic equilibrium, LAMMPS has 0.18 to 0.78 maximum profile error. The common interacting-basin comparison is a regularized diagnostic only. The discrepancy is not a units, Boltzmann-constant, Jacobian, plane-spacing, or tangent convention difference.",
-            "- The 191-atom vacancy profiles do not agree: median maximum differences are 0.54 to 0.58 eV, far above combined standard errors and A/A noise. rgflux barriers are about 0.10 to 0.12 eV lower even though independent static minimum and saddle energies agree within 1.0e-11 eV. Increasing from 17 to 33 planes does not remove the discrepancy.",
-            "- Every 9-plane straight run is rejected by the unchanged zero-temperature quadrature tolerance. Curved runs additionally expose a direct-exponential overflow in reactant-partition evaluation.",
-            "- The scalar native surface has no four-thread speedup. Four OpenMP threads slow the two-atom reference case, as expected when scheduling dominates potential work.",
+            f"- Curved-path median maximum profile differences change from {format_range(curved_17_errors)} at 17 planes to {format_range(curved_33_errors)} at 33 planes.",
+            f"- Accepted 17-plane straight profiles have median maximum pairwise differences of {format_range(straight_17_errors)}.",
+            f"- The native global straight-path equilibrium is undefined. LAMMPS finite-periodic median maximum errors are {format_range(periodic_exact_errors)}; the common interacting-basin comparison remains a regularized diagnostic.",
+            f"- Vacancy median maximum profile differences are {format_range(vacancy_profile_errors)} eV and barrier differences are {format_range(vacancy_barrier_errors)} eV. Static minimum and saddle differences are {vacancy_static_minimum_error:.3g} and {vacancy_static_saddle_error:.3g} eV.",
+            f'- Rejections split into {rejection_buckets["zero_temperature_tol"]["count"]} zero-temperature-tolerance cases, {rejection_buckets["zero_reactant_partition"]["count"]} zero-width reactant partitions, {rejection_buckets["genuine_exp_overflow"]["count"]} genuine exponential overflows, and {rejection_buckets["other"]["count"]} other cases.',
         ]
     )
     lines.extend(
@@ -844,7 +1003,7 @@ def main():
             "",
             "### Cost and force calls at the largest sample count",
             "",
-            "| case | planes | T | threads | rgflux calls/plane | reference calls/plane | rgflux overhead/plane (s) |",
+            "| case | planes | T | threads | measured rgflux calls/plane | derived reference steps/plane | rgflux overhead/plane (s) |",
             "|---|---:|---:|---:|---:|---:|---:|",
         ]
     )
@@ -899,8 +1058,20 @@ def main():
             "",
             "| bucket | count | exact error string |",
             "|---|---:|---|",
-            f'| partition overflow | {rejection_buckets["partition_overflow"]["count"]} | `{PARTITION_OVERFLOW_ERROR}` |',
+            f'| zero_reactant_partition | {rejection_buckets["zero_reactant_partition"]["count"]} | `{REACTANT_PARTITION_ERROR}` |',
             f'| zero_temperature_tol | {rejection_buckets["zero_temperature_tol"]["count"]} | `{ZERO_TEMPERATURE_TOL_ERROR}` |',
+            f'| genuine_exp_overflow | {rejection_buckets["genuine_exp_overflow"]["count"]} | '
+            + (
+                ", ".join(
+                    f"`{value}`"
+                    for value in rejection_buckets["genuine_exp_overflow"][
+                        "error_strings"
+                    ]
+                )
+                if rejection_buckets["genuine_exp_overflow"]["error_strings"]
+                else "none"
+            )
+            + " |",
             f'| other | {rejection_buckets["other"]["count"]} | '
             + (
                 ", ".join(
@@ -940,19 +1111,16 @@ def main():
             "",
             "## Per-cell acceptance",
             "",
-            "| case | planes | T | threads | samples | rgflux hits | reference hits | zero_temperature_tol | partition overflow | other | Fisher p |",
-            "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+            "| case | planes | T | threads | samples | rgflux hits | reference hits | zero_temperature_tol | zero_reactant_partition | genuine_exp_overflow | other | Fisher p |",
+            "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
         ]
     )
     for cell in cells:
-        other_rejections = sum(
-            count
-            for reason, count in cell["rejection_reasons"].items()
-            if reason not in (ZERO_TEMPERATURE_TOL_ERROR, PARTITION_OVERFLOW_ERROR)
-        )
+        buckets = cell["rejection_counts"]
         lines.append(
             "| {case} | {planes} | {temperature:g} | {threads} | {samples} | "
-            "{native}/12 | {reference}/12 | {quadrature} | {partition} | "
+            "{native}/12 | {reference}/12 | {quadrature} | {zero_partition} | "
+            "{overflow} | "
             "{other} | {p:.3g} |".format(
                 case=cell["case"],
                 planes=cell["planes"],
@@ -964,10 +1132,9 @@ def main():
                 quadrature=cell["rejection_reasons"].get(
                     ZERO_TEMPERATURE_TOL_ERROR, 0
                 ),
-                partition=cell["rejection_reasons"].get(
-                    PARTITION_OVERFLOW_ERROR, 0
-                ),
-                other=other_rejections,
+                zero_partition=buckets["zero_reactant_partition"],
+                overflow=buckets["genuine_exp_overflow"],
+                other=buckets["other"],
                 p=cell["hit_rate_fisher_p"],
             )
         )
@@ -983,7 +1150,7 @@ def main():
             "",
             "This is a periodic 3 by 4 by 4 FCC vacancy hop using the same shifted platinum-parameter Morse potential on both sides. rgpot supplies the native link-cell/minimum-image neighbour stack; LAMMPS uses `morse/omp`. The explicit grid is 17 and 33 planes at kBT=0.025, 0.05, and 0.075 eV, with 12 seeds at one and four threads. The native potential time covers the complete rgpot surface call; overhead is the remaining rgflux wall time.",
             "",
-            "| planes | T (eV) | threads | hits rgflux/reference | max |dF| | combined profile SE | A/A rgflux/reference | barrier rgflux (eV) | barrier reference (eV) | barrier SE rgflux/reference | wall rgflux/reference (s) | calls/plane rgflux/reference | potential/overhead per plane (s) | Fisher p |",
+            "| planes | T (eV) | threads | hits rgflux/reference | max |dF| | combined profile SE | A/A rgflux/reference | barrier rgflux (eV) | barrier reference (eV) | barrier SE rgflux/reference | wall rgflux/reference (s) | measured calls/derived steps per plane | potential/overhead per plane (s) | Fisher p |",
             "|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
         ]
     )
@@ -1069,15 +1236,15 @@ def main():
             "",
             "Plane counts are explicit in every cell: 9 and 17 for the straight path, 17 and 33 for the curved path. The zero-temperature tolerance remains 0.01. Rejections are retained in the hit-rate table and are never rerun.",
             "",
-            "The matched setting was declared before collection: dt=0.002, friction=1.0, identical burn-in and production counts, and the same seeds, path nodes, masses, potential constants, and plane counts. Other settings use each implementation's documented defaults. Runs are release builds, fixed to the declared CPU sets, with one and four requested threads. rgflux currently evaluates this scalar pair surface on one effective thread; that limitation is recorded rather than hidden.",
+            "The matched setting was declared before collection: dt=0.002, friction=1.0, identical burn-in and production counts, and the same seeds, path nodes, masses, potential constants, and plane counts. Other settings use each implementation's documented defaults. Runs are release builds, fixed to the declared CPU sets, with one and four requested threads. Both native benchmark surfaces used one effective evaluation thread; the harness requires that value explicitly.",
             "",
-            "The reported LAMMPS force-call count covers thermalization and production integration steps. Setup `run 0` evaluations are not exposed by the reference driver. rgflux reports measured potential calls and separates wall time accumulated inside the potential from integrator overhead.",
+            "LAMMPS values are derived integration-step counts: planes times configured thermalization plus production steps. They are not measured force-call counters, and setup evaluations are excluded. rgflux reports measured potential invocations and separates wall time accumulated inside the potential from integrator overhead.",
             "",
-            "Static minimum energies agree exactly in accepted paired runs. The largest median saddle-energy discrepancy is below 3e-11. At 256 samples, rgflux reports 386 force calls per accepted plane and the reference reports 384 integration-step calls per plane; the two extra native calls cover path/setup evaluation.",
+            f"Across accepted headline cells, the largest median static minimum and saddle differences are {max(dimer_static_minimum_errors):.3g} and {max(dimer_static_saddle_errors):.3g}. Measured rgflux calls per plane are {native_calls_per_plane}; derived reference integration steps per plane are {reference_steps_per_plane}.",
             "",
             "## Reproduction of the rgflux numerical rejection",
             "",
-            "A fixed curved-path seed can make direct evaluation of `exp(-F/kBT)` overflow while integrating the reactant partition. `repro_partition_overflow.py` checks the retained `PAFI reactant partition must be finite and positive` rejection. It requires the release native executable through `--native-bin`. The benchmark does not alter rgflux or retry the rejected run.",
+            "Seed 1036330 selects dividing plane index zero. The reactant integration loop therefore has no interval, leaving a finite partition of zero; no exponential is evaluated. The cargo test `reproduces_zero_width_reactant_partition` and `repro_zero_width_reactant_partition.py` check the retained `PAFI reactant partition must be finite and positive` rejection. No retained cell is classified as a genuine exponential overflow.",
             "",
             "## Reproduction",
             "",

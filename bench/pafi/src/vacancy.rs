@@ -292,6 +292,9 @@ fn run_profile(arguments: &BTreeMap<String, String>) -> Result<(), String> {
     let threads: usize = required(arguments, "--threads")?
         .parse()
         .map_err(|_| "--threads must be an integer")?;
+    let effective_threads: usize = required(arguments, "--effective-threads")?
+        .parse()
+        .map_err(|_| "--effective-threads must be an integer")?;
     let time_step: f64 = required(arguments, "--time-step")?
         .parse()
         .map_err(|_| "--time-step must be a number")?;
@@ -349,7 +352,7 @@ fn run_profile(arguments: &BTreeMap<String, String>) -> Result<(), String> {
     let potential = Duration::from_nanos(potential_nanoseconds);
     let overhead = wall.saturating_sub(potential);
     let common = format!(
-        "\"engine\":\"rgflux\",\"system\":\"fcc-vacancy\",\"planes\":{planes},\"temperature\":{temperature:.17e},\"samples\":{samples},\"burn_in\":{burn_in},\"seed\":{seed},\"requested_threads\":{threads},\"effective_threads\":{threads},\"time_step\":{time_step:.17e},\"friction\":{friction:.17e},\"zero_temperature_tolerance\":{tolerance:.17e},\"wall_seconds\":{:.17e},\"potential_seconds\":{:.17e},\"overhead_seconds\":{:.17e},\"force_calls\":{},\"atom_count\":{}",
+        "\"engine\":\"rgflux\",\"system\":\"fcc-vacancy\",\"planes\":{planes},\"temperature\":{temperature:.17e},\"samples\":{samples},\"burn_in\":{burn_in},\"seed\":{seed},\"requested_threads\":{threads},\"effective_threads\":{effective_threads},\"time_step\":{time_step:.17e},\"friction\":{friction:.17e},\"zero_temperature_tolerance\":{tolerance:.17e},\"wall_seconds\":{:.17e},\"potential_seconds\":{:.17e},\"overhead_seconds\":{:.17e},\"force_calls\":{},\"atom_count\":{}",
         wall.as_secs_f64(),
         potential.as_secs_f64(),
         overhead.as_secs_f64(),

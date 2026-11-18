@@ -49,6 +49,7 @@ struct Arguments {
     burn_in: usize,
     seed: u64,
     threads: usize,
+    effective_threads: usize,
     time_step: f64,
     friction: f64,
     zero_temperature_tolerance: f64,
@@ -95,6 +96,7 @@ fn parse_arguments() -> Result<Arguments, String> {
         "--burn-in",
         "--seed",
         "--threads",
+        "--effective-threads",
         "--time-step",
         "--friction",
         "--zero-temperature-tolerance",
@@ -121,6 +123,7 @@ fn parse_arguments() -> Result<Arguments, String> {
         burn_in: parse_usize("--burn-in")?,
         seed: parse_u64("--seed")?,
         threads: parse_usize("--threads")?,
+        effective_threads: parse_usize("--effective-threads")?,
         time_step: parse("--time-step")?,
         friction: parse("--friction")?,
         zero_temperature_tolerance: parse("--zero-temperature-tolerance")?,
@@ -213,7 +216,7 @@ fn run(arguments: &Arguments) -> String {
     let potential = Duration::from_nanos(potential_nanoseconds);
     let overhead = wall.saturating_sub(potential);
     let common = format!(
-        "\"engine\":\"rgflux\",\"case\":\"{}\",\"planes\":{},\"temperature\":{:.17e},\"samples\":{},\"burn_in\":{},\"seed\":{},\"requested_threads\":{},\"effective_threads\":1,\"time_step\":{:.17e},\"friction\":{:.17e},\"zero_temperature_tolerance\":{:.17e},\"wall_seconds\":{:.17e},\"potential_seconds\":{:.17e},\"overhead_seconds\":{:.17e},\"force_calls\":{},\"minimum_energy\":{:.17e},\"saddle_energy\":{:.17e}",
+        "\"engine\":\"rgflux\",\"case\":\"{}\",\"planes\":{},\"temperature\":{:.17e},\"samples\":{},\"burn_in\":{},\"seed\":{},\"requested_threads\":{},\"effective_threads\":{},\"time_step\":{:.17e},\"friction\":{:.17e},\"zero_temperature_tolerance\":{:.17e},\"wall_seconds\":{:.17e},\"potential_seconds\":{:.17e},\"overhead_seconds\":{:.17e},\"force_calls\":{},\"minimum_energy\":{:.17e},\"saddle_energy\":{:.17e}",
         arguments.case_name,
         arguments.planes,
         arguments.temperature,
@@ -221,6 +224,7 @@ fn run(arguments: &Arguments) -> String {
         arguments.burn_in,
         arguments.seed,
         arguments.threads,
+        arguments.effective_threads,
         arguments.time_step,
         arguments.friction,
         arguments.zero_temperature_tolerance,
@@ -274,6 +278,7 @@ mod tests {
             burn_in: 128,
             seed: 1_036_330,
             threads: 1,
+            effective_threads: 1,
             time_step: 0.002,
             friction: 1.0,
             zero_temperature_tolerance: 0.01,
