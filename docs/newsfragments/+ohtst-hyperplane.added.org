@@ -1,0 +1,1 @@
+=hyperplane::sample_hyperplane= samples the mean holonomic constraint force and retained configurations of a plane, and =ohtst::optimize_hyperplane= places the offset of a fixed-normal plane on its stationary surface and returns the harmonic hyperplanar TST rate with a delta-method standard error.

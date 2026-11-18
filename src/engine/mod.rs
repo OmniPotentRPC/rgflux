@@ -428,6 +428,45 @@ pub trait DynamicsEngine {
     ) -> Result<f64, FluxError>;
 }
 
+pub(crate) struct EngineSnapshot {
+    constraint: Option<HyperplaneConstraint>,
+    thermostat: ThermostatConfig,
+    positions: Array1<f64>,
+    velocities: Array1<f64>,
+}
+
+impl EngineSnapshot {
+    pub(crate) fn capture<E: DynamicsEngine + ?Sized>(engine: &E) -> Self {
+        Self {
+            constraint: engine.constraint().cloned(),
+            thermostat: *engine.thermostat(),
+            positions: engine.positions().to_owned(),
+            velocities: engine.velocities().to_owned(),
+        }
+    }
+
+    fn restore<E: DynamicsEngine + ?Sized>(self, engine: &mut E) -> Result<(), FluxError> {
+        engine.set_constraint(self.constraint)?;
+        engine.set_thermostat(self.thermostat)?;
+        engine.set_positions(self.positions.view())?;
+        engine.set_velocities(self.velocities.view())?;
+        Ok(())
+    }
+
+    pub(crate) fn restore_result<T, E: DynamicsEngine + ?Sized>(
+        self,
+        engine: &mut E,
+        result: Result<T, FluxError>,
+    ) -> Result<T, FluxError> {
+        let restore = self.restore(engine);
+        match (result, restore) {
+            (Ok(value), Ok(())) => Ok(value),
+            (Ok(_), Err(restore_err)) => Err(restore_err),
+            (Err(operation_err), _) => Err(operation_err),
+        }
+    }
+}
+
 /// Draw Maxwell-Boltzmann velocities `v_i ~ N(0, k_B * T / m_i)` using `seed`.
 pub fn draw_maxwell_boltzmann_velocities(
     masses: ArrayView1<'_, f64>,

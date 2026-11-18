@@ -1,0 +1,1 @@
+=stats::batch_means= returns the first sample as the mean of a series that is constant up to rounding, so identical non-dyadic samples are no longer averaged to a neighbouring float.

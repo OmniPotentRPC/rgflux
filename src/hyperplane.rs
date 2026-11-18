@@ -5,7 +5,9 @@
 //! derivatives `dA/dc` and `dA/dn` along with in-plane virial and zero-variance
 //! harmonic control variates.
 //!
-//! Note: implementation moves from rgsaddle.
+//! Note: the mean constraint force and retained configurations are implemented
+//! here; the in-plane virial, torque `dA/dn` and control variates move from
+//! rgsaddle.
 //!
 //! ## References
 //!
@@ -29,9 +31,9 @@ pub use crate::engine::HyperplaneConstraint;
 
 use ndarray::Array2;
 
-use crate::engine::DynamicsEngine;
+use crate::engine::{DynamicsEngine, EngineSnapshot};
 use crate::error::FluxError;
-use crate::stats::StatsConfig;
+use crate::stats::{StatsConfig, batch_means};
 
 /// Configuration for sampling free-energy gradients and configurations on a hyperplane.
 #[derive(Clone, Debug, PartialEq)]
@@ -87,13 +89,291 @@ pub struct HyperplaneSample {
     pub configurations: Array2<f64>,
 }
 
-/// Sample a hyperplane through `engine` (implementation moves from rgsaddle).
+/// Sample a hyperplane through `engine`.
 pub fn sample_hyperplane<E: DynamicsEngine + ?Sized>(
-    _engine: &mut E,
-    _plane: &HyperplaneConstraint,
-    _config: &HyperplaneConfig,
+    engine: &mut E,
+    plane: &HyperplaneConstraint,
+    config: &HyperplaneConfig,
 ) -> Result<HyperplaneSample, FluxError> {
-    Err(FluxError::Unimplemented(
-        "hyperplane: implementation moves from rgsaddle",
-    ))
+    if config.retention_stride == 0 {
+        return Err(FluxError::InvalidConfig(
+            "HyperplaneConfig::retention_stride must be at least 1",
+        ));
+    }
+    if config.sample_steps < 2 {
+        return Err(FluxError::InvalidConfig(
+            "HyperplaneConfig::sample_steps must be at least 2",
+        ));
+    }
+    if !config.time_step.is_finite() || config.time_step <= 0.0 {
+        return Err(FluxError::InvalidConfig(
+            "HyperplaneConfig::time_step must be finite and positive",
+        ));
+    }
+    if plane.normal.len() != engine.dof() {
+        return Err(FluxError::Shape {
+            expected: engine.dof(),
+            got: plane.normal.len(),
+            context: "hyperplane dimension",
+        });
+    }
+
+    let snapshot = EngineSnapshot::capture(engine);
+
+    let result = (|| -> Result<HyperplaneSample, FluxError> {
+        engine.reseed(config.seed)?;
+        engine.set_constraint(Some(plane.clone()))?;
+        engine.shoot_velocities(config.seed)?;
+
+        for _ in 0..config.burn_in_steps {
+            engine.step(config.time_step)?;
+        }
+
+        let mut force_series = Vec::with_capacity(config.sample_steps);
+        let mut retained_flat = Vec::new();
+        let mut retained_count = 0_usize;
+        for step_idx in 0..config.sample_steps {
+            let report = engine.step(config.time_step)?;
+            let lambda = report.constraint_force.ok_or(FluxError::InvalidConfig(
+                "DynamicsEngine::step must report constraint_force when constrained",
+            ))?;
+            if !lambda.is_finite() {
+                return Err(FluxError::NonFinite("hyperplane constraint force"));
+            }
+            force_series.push(lambda);
+
+            if step_idx % config.retention_stride == 0 {
+                retained_flat.extend(engine.positions().iter().copied());
+                retained_count += 1;
+            }
+        }
+
+        let estimate = batch_means(&force_series, &config.stats)?;
+        let configurations = Array2::from_shape_vec((retained_count, engine.dof()), retained_flat)
+            .map_err(|_| FluxError::InvalidConfig("failed to reshape retained configurations"))?;
+        Ok(HyperplaneSample {
+            plane: plane.clone(),
+            mean_force: estimate.mean,
+            standard_error: estimate.standard_error,
+            configurations,
+        })
+    })();
+
+    snapshot.restore_result(engine, result)
+}
+
+#[cfg(test)]
+mod restore_tests {
+    use ndarray::{Array1, ArrayView1};
+
+    use super::{HyperplaneConfig, sample_hyperplane};
+    use crate::engine::{
+        DynamicsEngine, HyperplaneConstraint, StepReport, SurfaceVelocityPolicy, ThermostatConfig,
+    };
+    use crate::error::FluxError;
+
+    struct ScriptedEngine {
+        positions: Array1<f64>,
+        velocities: Array1<f64>,
+        masses: Array1<f64>,
+        thermostat: ThermostatConfig,
+        constraint: Option<HyperplaneConstraint>,
+        fail_step: bool,
+        reject_position_writes: bool,
+    }
+
+    impl ScriptedEngine {
+        fn new(fail_step: bool, reject_position_writes: bool) -> Self {
+            Self {
+                positions: Array1::from_vec(vec![0.2]),
+                velocities: Array1::zeros(1),
+                masses: Array1::from_vec(vec![1.0]),
+                thermostat: ThermostatConfig::default(),
+                constraint: None,
+                fail_step,
+                reject_position_writes,
+            }
+        }
+    }
+
+    impl DynamicsEngine for ScriptedEngine {
+        fn dof(&self) -> usize {
+            self.positions.len()
+        }
+
+        fn masses(&self) -> ArrayView1<'_, f64> {
+            self.masses.view()
+        }
+
+        fn positions(&self) -> ArrayView1<'_, f64> {
+            self.positions.view()
+        }
+
+        fn set_positions(&mut self, positions: ArrayView1<'_, f64>) -> Result<(), FluxError> {
+            if self.reject_position_writes {
+                return Err(FluxError::InvalidConfig("position restore rejected"));
+            }
+            if positions.len() != self.positions.len() {
+                return Err(FluxError::Shape {
+                    expected: self.positions.len(),
+                    got: positions.len(),
+                    context: "ScriptedEngine positions",
+                });
+            }
+            self.positions.assign(&positions);
+            Ok(())
+        }
+
+        fn velocities(&self) -> ArrayView1<'_, f64> {
+            self.velocities.view()
+        }
+
+        fn set_velocities(&mut self, velocities: ArrayView1<'_, f64>) -> Result<(), FluxError> {
+            if velocities.len() != self.velocities.len() {
+                return Err(FluxError::Shape {
+                    expected: self.velocities.len(),
+                    got: velocities.len(),
+                    context: "ScriptedEngine velocities",
+                });
+            }
+            self.velocities.assign(&velocities);
+            Ok(())
+        }
+
+        fn cell(&self) -> Option<&[f64; 9]> {
+            None
+        }
+
+        fn set_cell(&mut self, _cell: Option<[f64; 9]>) -> Result<(), FluxError> {
+            Ok(())
+        }
+
+        fn thermostat(&self) -> &ThermostatConfig {
+            &self.thermostat
+        }
+
+        fn set_thermostat(&mut self, thermostat: ThermostatConfig) -> Result<(), FluxError> {
+            self.thermostat = thermostat;
+            Ok(())
+        }
+
+        fn constraint(&self) -> Option<&HyperplaneConstraint> {
+            self.constraint.as_ref()
+        }
+
+        fn set_constraint(
+            &mut self,
+            constraint: Option<HyperplaneConstraint>,
+        ) -> Result<(), FluxError> {
+            self.constraint = constraint;
+            Ok(())
+        }
+
+        fn energy_and_forces(&mut self) -> Result<(f64, Array1<f64>), FluxError> {
+            Ok((0.0, Array1::zeros(self.dof())))
+        }
+
+        fn step(&mut self, _dt: f64) -> Result<StepReport, FluxError> {
+            self.positions[0] += 1.0;
+            if self.fail_step {
+                return Err(FluxError::InvalidConfig("scripted step failed"));
+            }
+            Ok(StepReport {
+                potential_energy: 0.0,
+                kinetic_energy: 0.0,
+                constraint_force: Some(0.0),
+            })
+        }
+
+        fn reseed(&mut self, _seed: u64) -> Result<(), FluxError> {
+            Ok(())
+        }
+
+        fn shoot_velocities(&mut self, _seed: u64) -> Result<(), FluxError> {
+            self.velocities[0] = 1.0;
+            Ok(())
+        }
+
+        fn reflect_velocity(&mut self, _normal: ArrayView1<'_, f64>) -> Result<f64, FluxError> {
+            Ok(0.0)
+        }
+
+        fn apply_dividing_surface(
+            &mut self,
+            _normal: ArrayView1<'_, f64>,
+            _policy: SurfaceVelocityPolicy,
+        ) -> Result<f64, FluxError> {
+            Ok(0.0)
+        }
+    }
+
+    fn state(
+        engine: &ScriptedEngine,
+    ) -> (
+        Array1<f64>,
+        Array1<f64>,
+        Option<HyperplaneConstraint>,
+        ThermostatConfig,
+    ) {
+        (
+            engine.positions.clone(),
+            engine.velocities.clone(),
+            engine.constraint.clone(),
+            engine.thermostat,
+        )
+    }
+
+    #[test]
+    fn sample_restores_on_success_and_on_step_failure() {
+        let plane =
+            HyperplaneConstraint::from_direction(Array1::from_vec(vec![1.0]).view(), 0.2).unwrap();
+        let config = HyperplaneConfig::default()
+            .with_burn_in_steps(0)
+            .with_sample_steps(2)
+            .with_retention_stride(1)
+            .with_time_step(0.01)
+            .with_seed(9);
+
+        let mut ok_engine = ScriptedEngine::new(false, false);
+        let before_ok = state(&ok_engine);
+        let sampled = sample_hyperplane(&mut ok_engine, &plane, &config).unwrap();
+        assert!(sampled.mean_force.is_finite());
+        assert_eq!(state(&ok_engine), before_ok);
+
+        let mut err_engine = ScriptedEngine::new(true, false);
+        let before_err = state(&err_engine);
+        let err = sample_hyperplane(&mut err_engine, &plane, &config).unwrap_err();
+        assert_eq!(err, FluxError::InvalidConfig("scripted step failed"));
+        assert_eq!(state(&err_engine), before_err);
+    }
+
+    #[test]
+    fn sample_returns_restore_error_when_sampling_succeeds() {
+        let plane =
+            HyperplaneConstraint::from_direction(Array1::from_vec(vec![1.0]).view(), 0.2).unwrap();
+        let config = HyperplaneConfig::default()
+            .with_burn_in_steps(0)
+            .with_sample_steps(2)
+            .with_retention_stride(1)
+            .with_time_step(0.01)
+            .with_seed(9);
+        let mut engine = ScriptedEngine::new(false, true);
+        let err = sample_hyperplane(&mut engine, &plane, &config).unwrap_err();
+        assert_eq!(err, FluxError::InvalidConfig("position restore rejected"));
+    }
+
+    #[test]
+    fn sample_preserves_sampling_error_when_restore_also_fails() {
+        let plane =
+            HyperplaneConstraint::from_direction(Array1::from_vec(vec![1.0]).view(), 0.2).unwrap();
+        let config = HyperplaneConfig::default()
+            .with_burn_in_steps(0)
+            .with_sample_steps(2)
+            .with_retention_stride(1)
+            .with_time_step(0.01)
+            .with_seed(9);
+        let mut engine = ScriptedEngine::new(true, true);
+        let err = sample_hyperplane(&mut engine, &plane, &config).unwrap_err();
+        assert_eq!(err, FluxError::InvalidConfig("scripted step failed"));
+    }
 }
