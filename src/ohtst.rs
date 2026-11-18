@@ -508,6 +508,8 @@ fn probe_sampling(config: &OhtstConfig) -> HyperplaneConfig {
 
 #[cfg(test)]
 mod tests {
+    use std::f64::consts::TAU;
+
     use ndarray::{Array1, ArrayView1};
 
     use super::{
@@ -704,6 +706,16 @@ mod tests {
             let mut engine = engine_at(start, 1.0)?;
             let estimate = optimize_hyperplane(&mut engine, &seed, &config)?;
             rates.push(estimate.rate);
+        }
+        let probe_position = 1.0 - TEST_STEP;
+        let probe_slope = probe_position * (1.0 - probe_position * probe_position);
+        let expected_kappa = probe_slope / TEST_STEP;
+        let expected_rate = expected_kappa.sqrt() / TAU * (-0.25_f64 / TEST_TEMPERATURE).exp();
+        for rate in &rates {
+            assert!(
+                (*rate - expected_rate).abs() <= 64.0 * f64::EPSILON * expected_rate,
+                "OH-TST rate {rate} differs from analytic {expected_rate}"
+            );
         }
         assert!((rates[0] - rates[1]).abs() <= 64.0 * f64::EPSILON * rates[0]);
 
