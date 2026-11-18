@@ -9,6 +9,10 @@ use rgflux::pafi::{PafiConfig, pafi_profile};
 use rgflux::stats::StatsConfig;
 
 struct WideningDoubleWell;
+struct AnisotropicHarmonic {
+    ax: f64,
+    ay: f64,
+}
 
 impl rgsaddle::PointSurface for WideningDoubleWell {
     fn eval(&self, r: ArrayView1<'_, f64>) -> Result<(f64, Array1<f64>), rgsaddle::SaddleError> {
@@ -20,6 +24,16 @@ impl rgsaddle::PointSurface for WideningDoubleWell {
         let gx = -4.0 * x * (1.0 - x * x) + 0.25 * y * y;
         let gy = k * y;
         Ok((energy, Array1::from_vec(vec![gx, gy])))
+    }
+}
+
+impl rgsaddle::PointSurface for AnisotropicHarmonic {
+    fn eval(&self, r: ArrayView1<'_, f64>) -> Result<(f64, Array1<f64>), rgsaddle::SaddleError> {
+        let x = r[0];
+        let y = r[1];
+        let energy = 0.5 * (self.ax * x * x + 4.0 * self.ay * y * y);
+        let gradient = Array1::from_vec(vec![self.ax * x, 4.0 * self.ay * y]);
+        Ok((energy, gradient))
     }
 }
 
@@ -40,6 +54,22 @@ fn tilted_path(start: f64, end: f64, planes: usize, slope: f64) -> Array2<f64> {
         let x = start + (end - start) * t;
         path[[i, 0]] = x;
         path[[i, 1]] = slope * x;
+    }
+    path
+}
+
+fn mass_weighted_circular_path(
+    radius: f64,
+    theta_start: f64,
+    theta_end: f64,
+    images: usize,
+) -> Array2<f64> {
+    let mut path = Array2::zeros((images, 2));
+    for i in 0..images {
+        let fraction = (i as f64) / ((images - 1) as f64);
+        let theta = theta_start + fraction * (theta_end - theta_start);
+        path[[i, 0]] = radius * theta.cos();
+        path[[i, 1]] = 0.5 * radius * theta.sin();
     }
     path
 }
@@ -129,6 +159,56 @@ fn pafi_widening_barrier_mass_anisotropic_matches_analytic_within_reported_se() 
         "barrier {:.8} ± {:.8} gives z={:.4}",
         barrier,
         se,
+        z
+    );
+}
+
+#[test]
+fn curved_mass_weighted_harmonic_profile_requires_jacobian() {
+    let thermal = 0.2_f64;
+    let radius = 1.2_f64;
+    let ax = 3.0_f64;
+    let ay = 1.0_f64;
+    let theta_start = PI * 0.5;
+    let theta_end = 0.0_f64;
+    let planes = 49usize;
+    let path = mass_weighted_circular_path(radius, theta_start, theta_end, planes);
+    let config = PafiConfig::default()
+        .with_planes(planes)
+        .with_burn_in_steps(10_000)
+        .with_sample_steps(20_000)
+        .with_time_step(0.0005)
+        .with_stats(StatsConfig::default().with_min_batches(4))
+        .with_seed(1_234);
+    let mut engine = NativeEngine::new(
+        AnisotropicHarmonic { ax, ay },
+        NativeConfig::default()
+            .with_masses(Array1::from_vec(vec![1.0, 4.0]))
+            .with_seed(1_234)
+            .with_thermostat(
+                ThermostatConfig::default()
+                    .with_gamma(1.5)
+                    .with_temperature(thermal)
+                    .with_boltzmann(1.0),
+            ),
+    )
+    .expect("native engine");
+    engine.shoot_velocities(1_234).expect("initial velocities");
+
+    let profile = pafi_profile(&mut engine, path.view(), &config).expect("curved profile");
+    let analytic_barrier = 0.5 * thermal * (ax / ay).ln();
+    let z = (profile.barrier - analytic_barrier).abs() / profile.barrier_error;
+    eprintln!(
+        "curved harmonic barrier={:.8} se={:.8} analytic={:.8} z={:.4}",
+        profile.barrier, profile.barrier_error, analytic_barrier, z
+    );
+    assert_eq!(profile.dividing_index, planes - 1);
+    assert!(
+        z <= 4.0,
+        "curved barrier {:.8} ± {:.8} versus analytic {:.8} gives z={:.4}",
+        profile.barrier,
+        profile.barrier_error,
+        analytic_barrier,
         z
     );
 }

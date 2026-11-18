@@ -162,7 +162,19 @@ impl NaturalSpline {
             .map(|row| row.to_owned())
             .collect();
         let mut second = vec![Array1::zeros(dof); rows];
-        if rows > 2 {
+        if rows == 3 {
+            let left = knots[1] - knots[0];
+            let right = knots[2] - knots[1];
+            for j in 0..dof {
+                let curvature = 2.0
+                    * ((values[2][j] - values[1][j]) / right
+                        - (values[1][j] - values[0][j]) / left)
+                    / (left + right);
+                for endpoint in &mut second {
+                    endpoint[j] = curvature;
+                }
+            }
+        } else if rows > 3 {
             let interior = rows - 2;
             let mut lower = vec![0.0_f64; interior];
             let mut diagonal = vec![0.0_f64; interior];
@@ -181,6 +193,16 @@ impl NaturalSpline {
                             - (values[i][j] - values[i - 1][j]) / left);
                 }
             }
+            let first = knots[1] - knots[0];
+            let second_width = knots[2] - knots[1];
+            diagonal[0] += first * (first + second_width) / second_width;
+            upper[0] -= first * first / second_width;
+
+            let penultimate = knots[rows - 2] - knots[rows - 3];
+            let last = knots[rows - 1] - knots[rows - 2];
+            lower[interior - 1] -= last * last / penultimate;
+            diagonal[interior - 1] += last * (penultimate + last) / penultimate;
+
             for k in 1..interior {
                 let factor = lower[k] / diagonal[k - 1];
                 diagonal[k] -= factor * upper[k - 1];
@@ -198,6 +220,13 @@ impl NaturalSpline {
                     };
                     second[i][j] = (rhs[k][j] - next) / diagonal[k];
                 }
+            }
+            for j in 0..dof {
+                second[0][j] =
+                    ((first + second_width) * second[1][j] - first * second[2][j]) / second_width;
+                second[rows - 1][j] = ((penultimate + last) * second[rows - 2][j]
+                    - last * second[rows - 3][j])
+                    / penultimate;
             }
         }
         Ok(Self {
@@ -601,26 +630,11 @@ pub fn pafi_profile<E: DynamicsEngine + ?Sized>(
             path_energies.push(energy);
             path_gradients.push(-dot(geometry.tangent.view(), forces.view()));
         }
-        let integrated_energy = if geometries.len() >= 3 && geometries.len() % 2 == 1 {
-            let spacing = arcs[1] - arcs[0];
-            let mut weighted = path_gradients[0] + path_gradients[path_gradients.len() - 1];
-            for (index, gradient) in path_gradients[1..path_gradients.len() - 1]
-                .iter()
-                .copied()
-                .enumerate()
-            {
-                let weight = if index % 2 == 0 { 4.0 } else { 2.0 };
-                weighted += weight * gradient;
-            }
-            spacing * weighted / 3.0
-        } else {
-            let mut integral = 0.0_f64;
-            for i in 1..geometries.len() {
-                let ds = arcs[i] - arcs[i - 1];
-                integral += 0.5 * ds * (path_gradients[i - 1] + path_gradients[i]);
-            }
-            integral
-        };
+        let mut integrated_energy = 0.0_f64;
+        for i in 1..geometries.len() {
+            let ds = arcs[i] - arcs[i - 1];
+            integrated_energy += 0.5 * ds * (path_gradients[i - 1] + path_gradients[i]);
+        }
         let endpoint_energy = path_energies[path_energies.len() - 1] - path_energies[0];
         let discrepancy = (integrated_energy - endpoint_energy).abs();
         let scale = 1.0_f64.max(endpoint_energy.abs());
@@ -739,6 +753,70 @@ mod tests {
         assert!(difference > f64::EPSILON.sqrt());
     }
 
+    fn circular_path_in_mass_coordinates(
+        images: usize,
+        radius: f64,
+        theta_start: f64,
+        theta_end: f64,
+        masses: &Array1<f64>,
+    ) -> Array2<f64> {
+        let mut path = Array2::zeros((images, 2));
+        for i in 0..images {
+            let fraction = (i as f64) / ((images - 1) as f64);
+            let theta = theta_start + fraction * (theta_end - theta_start);
+            path[[i, 0]] = radius * theta.cos() / masses[0].sqrt();
+            path[[i, 1]] = radius * theta.sin() / masses[1].sqrt();
+        }
+        path
+    }
+
+    fn circular_normal_derivative(
+        radius: f64,
+        theta: f64,
+        direction: f64,
+        masses: &Array1<f64>,
+    ) -> Array1<f64> {
+        let tangent_mass =
+            Array1::from_vec(vec![direction * -theta.sin(), direction * theta.cos()]);
+        let curvature_mass = Array1::from_vec(vec![-theta.cos() / radius, -theta.sin() / radius]);
+        let mut raw_normal = Array1::zeros(2);
+        let mut raw_derivative = Array1::zeros(2);
+        for i in 0..2 {
+            raw_normal[i] = masses[i].sqrt() * tangent_mass[i];
+            raw_derivative[i] = masses[i].sqrt() * curvature_mass[i];
+        }
+        let norm = nrm2(raw_normal.view());
+        let normal = raw_normal.mapv(|value| value / norm);
+        let projection = dot(normal.view(), raw_derivative.view());
+        raw_derivative.mapv(|value| value / norm) - normal.mapv(|value| value * projection / norm)
+    }
+
+    #[test]
+    fn circular_spline_preserves_endpoint_normal_curvature() {
+        let images = 33usize;
+        let radius = 1.3_f64;
+        let theta_start = std::f64::consts::FRAC_PI_2;
+        let theta_end = 0.0_f64;
+        let masses = Array1::from_vec(vec![1.0, 4.0]);
+        let path =
+            circular_path_in_mass_coordinates(images, radius, theta_start, theta_end, &masses);
+        let geometry =
+            build_plane_geometries(path.view(), masses.view(), images).expect("geometry");
+        let direction = (theta_end - theta_start).signum();
+        let tolerance = 2.0 / (images as f64);
+        for (index, theta) in [(0, theta_start), (images - 1, theta_end)] {
+            let expected = circular_normal_derivative(radius, theta, direction, &masses);
+            let error = (&geometry[index].dn_ds - &expected)
+                .mapv(|value| value * value)
+                .sum()
+                .sqrt();
+            assert!(
+                error < tolerance,
+                "endpoint {index} normal-curvature error {error} exceeds {tolerance}"
+            );
+        }
+    }
+
     #[test]
     fn profile_uses_interior_maximum_and_accepts_exact_errors() {
         let arcs = [0.0, 1.0, 2.0, 3.0];
@@ -777,11 +855,14 @@ mod tests {
         let original_velocities = engine.velocities().to_owned();
 
         let path = Array2::from_shape_vec((2, 1), vec![0.0, 1.0]).expect("shape");
+        let spacing = 0.5_f64;
+        let maximum_gradient_curvature = 24.0_f64;
+        let trapezoid_error_bound = spacing * spacing * maximum_gradient_curvature / 12.0;
         let config = PafiConfig::default()
-            .with_planes(2)
+            .with_planes(3)
             .with_burn_in_steps(1)
             .with_sample_steps(2)
-            .with_zero_temperature_tol(0.0);
+            .with_zero_temperature_tol(trapezoid_error_bound / 4.0);
         let result = pafi_profile_dyn(&mut engine, path.view(), &config);
         assert_eq!(
             result,
