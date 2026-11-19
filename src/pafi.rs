@@ -1077,6 +1077,9 @@ fn quadratic_integral(x0: f64, x1: f64, x2: f64, g0: f64, g1: f64, g2: f64, end:
 impl MeanForceIntegral for HermiteIntegral {
     fn cumulative(&self, arcs: &[f64], gradients: &[f64]) -> Result<IntegralEstimate, FluxError> {
         same_length(arcs, gradients)?;
+        if gradients.iter().any(|gradient| !gradient.is_finite()) {
+            return Err(FluxError::NonFinite("PAFI Hermite mean force"));
+        }
         let quadrature = Quadrature::new(arcs)?;
         let values = quadrature.integrate(gradients);
         let lower = trapezoid_cumulative(arcs, gradients);
@@ -2014,10 +2017,7 @@ mod tests {
         let gradients = [0.0, f64::NAN, 1.0];
         let errors = [0.0, 0.0, 0.0];
         let result = profile_from(&arcs, &gradients, &errors, 1.0, 1.0);
-        assert_eq!(
-            result,
-            Err(FluxError::NonFinite("PAFI integrated free energy"))
-        );
+        assert_eq!(result, Err(FluxError::NonFinite("PAFI Hermite mean force")));
     }
 
     #[test]
