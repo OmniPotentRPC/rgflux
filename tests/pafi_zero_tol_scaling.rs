@@ -5,11 +5,18 @@ use rgflux::engine::native::{NativeConfig, NativeEngine};
 use rgflux::pafi::{PafiConfig, pafi_profile};
 use rgflux::stats::StatsConfig;
 
+// The quadratic term keeps the reactant Hessian positive definite along the
+// path normal, which the projected-frequency normalization requires; the 0.02
+// offset between the force and the energy slope is the inconsistency the
+// zero-temperature check measures.
 struct InconsistentLinearGradient;
 
 impl rgsaddle::PointSurface for InconsistentLinearGradient {
     fn eval(&self, x: ArrayView1<'_, f64>) -> Result<(f64, Array1<f64>), rgsaddle::SaddleError> {
-        Ok((x[0], Array1::from_vec(vec![0.98])))
+        Ok((
+            x[0] + x[0] * x[0],
+            Array1::from_vec(vec![0.98 + 2.0 * x[0]]),
+        ))
     }
 }
 
