@@ -256,6 +256,72 @@ The value stored by =PafiConfig::default()= is the 9-plane value shown in the ta
 | =pafi::FreeEnergyProfile= | =arc_lengths=, =free_energy=, =standard_error=, =barrier=, =barrier_error=, =dividing_index=, =reactant_partition=, =reactant_log_partition=, =normalized_rate=, =normalized_log_rate=, =normalized_rate_error= | Output of =pafi::pafi_profile(engine, path_images, config)= and =pafi::pafi_profile_dyn(engine, path_images, config)=; see the field table in the configuration section |
 | =network::RateEdge= | =from=, =to=, =rate= (=RateEdge::new(from, to, rate)=) | Directed elementary transition edge in =network::build_rate_table= |
 
+** Estimator and sampling entry points
+
+| Item | Inputs | Result and reference |
+|---+---+---|
+| =stats::batch_means= | Sample slice and =StatsConfig= | =BatchEstimate=; equations and runnable example in =howto.org= |
+| =stats::effective_sample_size= | Sample slice | Geyer \(n_{\mathrm{eff}}\); equations and runnable example in =howto.org= |
+| =stats::check_stationarity= | Sample slice and =StatsConfig= | =StationarityReport=; Geweke equation and runnable example in =howto.org= |
+| =hyperplane::sample_hyperplane= | Mutable engine, plane, and =HyperplaneConfig= | =HyperplaneSample=; constrained mean-force guide in =howto.org= |
+| =ohtst::optimize_hyperplane= | Mutable engine, seed plane, and =OhtstConfig= | =OhtstEstimate=; harmonic rate guide in =howto.org= |
+| =ffs::forward_flux_rate= | Mutable engine, order parameter, and =FfsConfig= | =FfsEstimate=; direct FFS guide in =howto.org= |
+| =pafi::pafi_profile= | Mutable engine, path image matrix, and =PafiConfig= | =FreeEnergyProfile=; PAFI guide in =howto.org= |
+| =pafi::pafi_profile_dyn= | Mutable =dyn DynamicsEngine=, path image matrix, and =PafiConfig= | Trait-object form of =pafi_profile= with identical estimator and restoration semantics |
+| =kappa::estimate_bennett_chandler= | Recorded =ReactiveTrajectory= slice and =BennettChandlerConfig= | =BennettChandlerEstimate=; reactive-flux equation in =howto.org= |
+| =kappa::shoot_reactive_trajectories= | Mutable engine, dividing surface, initial positions, and =ShootingConfig= | Validated trajectory records used by the Bennett-Chandler estimator |
+| =kappa::shoot_bennett_chandler= | Mutable engine, dividing surface, initial positions, and =ShootingConfig= | Shoots trajectories and returns =BennettChandlerEstimate=; runnable guide in =howto.org= |
+| =kappa::kramers_transmission_coefficient= | Friction \(\gamma\) and barrier frequency \(\omega_b\) | Analytical Kramers factor; equation and comparison in =howto.org= |
+| =network::build_rate_table= | State count, =RateEdge= slice, and =NetworkConfig= | Typed =FluxError::Unimplemented= migration boundary; master-equation and kMC guide in =howto.org= |
+
+** Engine trait and concrete methods
+
+Every concrete engine implements the same =DynamicsEngine= contract. The
+method paths for each implementation are retained in the generated inventory,
+while this table defines their shared semantics.
+
+| Method | Contract |
+|---+---|
+| =dof= | Return the scalar coordinate count |
+| =masses= | Borrow one strictly positive mass per coordinate |
+| =positions=, =velocities= | Borrow current unwrapped coordinates or Cartesian velocities |
+| =set_positions=, =set_velocities= | Validate shape and finiteness, overwrite state, and project onto an active constraint |
+| =cell=, =set_cell= | Read, install, or clear the row-major \(3 \times 3\) periodic cell |
+| =thermostat=, =set_thermostat= | Read or validate and install =ThermostatConfig= |
+| =constraint=, =set_constraint= | Read, install, or clear =HyperplaneConstraint= |
+| =energy_and_forces= | Return \(V(\mathbf{x})\) and physical force \(-\nabla V(\mathbf{x})\) |
+| =kinetic_energy= | Return \(\tfrac12\sum_i m_i v_i^2\) |
+| =step= | Advance by a finite positive timestep and return =StepReport= |
+| =reseed= | Replace the engine stochastic stream |
+| =shoot_velocities= | Draw Maxwell-Boltzmann velocities from a deterministic seed |
+| =reflect_velocity= | Apply the mass-metric Householder reflection and return \(\mathbf{n}\cdot\mathbf{v}\) |
+| =apply_dividing_surface= | Enforce positive normal velocity with =SurfaceVelocityPolicy= |
+
+=ForceSurface::energy_and_forces= is the static-surface counterpart. The
+blanket =PointSurface= implementation negates the supplied gradient.
+=EindirSurface::new= wraps a differentiable objective and =inner= borrows it.
+=StepReport::new= constructs the three end-of-step diagnostics.
+
+| Concrete inherent API | Meaning |
+|---+---|
+| =NativeEngine::new= | Build the pure Rust engine at the projected origin with zero velocity |
+| =NativeEngine::surface= | Borrow its =ForceSurface= |
+| =NativeEngine::projection= | Read the active =Rattle= or =Shake= algorithm |
+| =NativeEngine::reseed_rng=, =NativeEngine::reseed= | Reset its Langevin stream |
+| =RgpotSurface::new=, =RgpotSurface::n_atoms= | Build the optional static callback surface and read its atom count |
+| =SessionEngineKind::engine_name= | Return =openmm=, =nblib=, or =lammps= |
+| =RgpotSessionEngine::new=, =engine_kind=, =rgpot_version_major= | Build and inspect the optional session adapter |
+| =LammpcEngine::new= | Build the direct optional =liblammpc= session engine |
+
+** Bennett-Chandler support types
+
+=Side::from_signed_distance= maps a positive signed coordinate to =Product=
+and all other values to =Reactant=. =Side::indicator= returns one or zero for
+those states. =ReactiveTrajectory::new= validates finite initial normal
+velocity and a non-empty side history. Its public fields are
+=initial_normal_velocity= and =sides=. The complete =BennettChandlerEstimate=
+field set is listed above.
+
 * Error variants (=FluxError=)
 
 | Variant | Payload | Trigger condition |
@@ -292,6 +358,14 @@ The optional =lammpc= engine consumes, but does not re-export, the following
 All declarations are private implementation details in
 =src/engine/lammpc.rs=. The public Rust boundary is =LammpcConfig=,
 =LammpcEngine=, and the =DynamicsEngine= implementation listed below.
+
+The =rgpot= feature consumes =rgpot_core::potential::PotentialImpl= through
+the external =rgpot_force_input_t= and =rgpot_force_out_t= callback contract.
+The =rgpot-session= feature targets the external =rgpot_md_session_*= session
+contract for creation, state transfer, force evaluation, reseeding, and
+Langevin stepping. These symbols are not declared or exported by =rgflux=.
+Unavailable session calls return =FluxError::BackendUnavailable=, while direct
+=liblammpc= failures return =FluxError::Lammpc=.
 
 ** Python
 
