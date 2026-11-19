@@ -8,9 +8,9 @@ on:
       - "feat/**"
       - "fix/**"
       - "ci/**"
-    paths: ["docs/**", "src/**", "ci/**", "scripts/**", "AGENTS.md", "llms.txt", "llms-full.txt", "README.md", "CHANGELOG.md", "Cargo.toml", "Cargo.lock", ".github/workflows/docs.yml"]
+    paths: ["docs/**", "src/**", "ci/**", "scripts/**", "tests/doc_examples.rs", "AGENTS.md", "llms.txt", "llms-full.txt", "README.md", "CHANGELOG.md", "Cargo.toml", "Cargo.lock", "towncrier.toml", ".github/workflows/docs.yml"]
   pull_request:
-    paths: ["docs/**", "src/**", "ci/**", "scripts/**", "AGENTS.md", "llms.txt", "llms-full.txt", "README.md", "CHANGELOG.md", "Cargo.toml", "Cargo.lock", ".github/workflows/docs.yml"]
+    paths: ["docs/**", "src/**", "ci/**", "scripts/**", "tests/doc_examples.rs", "AGENTS.md", "llms.txt", "llms-full.txt", "README.md", "CHANGELOG.md", "Cargo.toml", "Cargo.lock", "towncrier.toml", ".github/workflows/docs.yml"]
   workflow_dispatch:
 
 permissions:
