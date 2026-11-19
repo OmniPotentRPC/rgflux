@@ -466,7 +466,12 @@ fn howto_pafi_widening_well_example_runs() -> Result<(), FluxError> {
     let analytic = 1.0 + 0.5 * temperature * 1.5_f64.ln();
     assert!(profile.barrier_error > 0.0);
     assert!((profile.barrier - analytic).abs() < 5.0 * profile.barrier_error);
-    assert!(profile.normalized_rate > 0.0 && profile.normalized_rate_error > 0.0);
+    assert!(
+        profile.normalized_rate.is_some_and(|rate| rate > 0.0)
+            && profile
+                .normalized_rate_error
+                .is_some_and(|error| error > 0.0)
+    );
     Ok(())
 }
 
