@@ -238,6 +238,10 @@ The value stored by =PafiConfig::default()= is the 9-plane value shown in the ta
 | =ohtst::OhtstEstimate= | =plane=, =rate=, =standard_error= | Output of =ohtst::optimize_hyperplane(engine, seed_plane, config)= |
 | =ffs::FfsEstimate= | =initial_flux=, =interface_probabilities=, =rate=, =standard_error= | Output of =ffs::forward_flux_rate(engine, order_param, config)= |
 | =pafi::FreeEnergyProfile= | =arc_lengths=, =free_energy=, =standard_error=, =barrier=, =barrier_error=, =dividing_index=, =reactant_partition=, =reactant_log_partition=, =normalized_rate=, =normalized_log_rate=, =normalized_rate_error= | Output of =pafi::pafi_profile(engine, path_images, config)= and =pafi::pafi_profile_dyn(engine, path_images, config)=; see the field table in the configuration section |
+| =pafi::EquidistributionMap= | =new(arc_lengths, raw_monitor)=, =from_inputs(inputs, kind)=, =sigma(s)=, =inverse(sigma)=, =place_planes(planes)=, =floor()=, =min_spacing_bound(planes)= | Monotone reparametrization \(s \mapsto \sigma(s) \in [0, 1]\) with path-average floor \(\bar{w}\) preventing plane collapse |
+| =pafi::SpectralTailReport= | =force_coefficients=, =profile_coefficients=, =tail_bound=, =interval_errors=, =flagged_intervals= | Output of =pafi::estimate_spectral_tail(arc_lengths, gradients, target_se)= |
+| =pafi::AdaptiveFreeEnergyProfile= | =profile=, =tail=, =equidistribution=, =refinement_rounds=, =force_calls= | Output of =pafi::pafi_profile_adaptive(engine, path_images, config)= and =pafi::pafi_profile_adaptive_dyn(engine, path_images, config)= |
+| =pafi::size_window_from_tau_int= | =(tau_int, min_burn_in_steps, min_sample_steps, stats) -> Result<(usize, usize), FluxError>= | Sizes per-plane burn-in and sample steps from measured \(\tau_{\mathrm{int}}\) and =StatsConfig::min_batches= |
 | =network::RateEdge= | =from=, =to=, =rate= (=RateEdge::new(from, to, rate)=) | Directed elementary transition edge in =network::build_rate_table= |
 
 * Error variants (=FluxError=)

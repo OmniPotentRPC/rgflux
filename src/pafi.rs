@@ -537,11 +537,11 @@ impl NaturalSpline {
     }
 }
 
-fn build_plane_geometries(
+fn validate_path_and_build_spline(
     path_images: ArrayView2<'_, f64>,
     masses: ArrayView1<'_, f64>,
     planes: usize,
-) -> Result<Vec<PlaneGeometry>, FluxError> {
+) -> Result<NaturalSpline, FluxError> {
     if path_images.nrows() < 2 {
         return Err(FluxError::InvalidConfig(
             "PAFI path requires at least two images",
@@ -574,49 +574,90 @@ fn build_plane_geometries(
             "PAFI path total arc length must be positive",
         ));
     }
+    Ok(spline)
+}
 
-    let mut geometries = Vec::with_capacity(planes);
-    for k in 0..planes {
-        let arc = total_arc * (k as f64) / ((planes - 1) as f64);
-        let (anchor, tangent, curvature) = spline.evaluate(arc);
-        let mut normal_raw = Array1::zeros(path_images.ncols());
-        let mut normal_derivative_raw = Array1::zeros(path_images.ncols());
-        for j in 0..path_images.ncols() {
-            normal_raw[j] = masses[j] * tangent[j];
-            normal_derivative_raw[j] = masses[j] * curvature[j];
+fn evaluate_plane_geometry_at(
+    spline: &NaturalSpline,
+    masses: ArrayView1<'_, f64>,
+    arc: f64,
+) -> Result<PlaneGeometry, FluxError> {
+    let dof = masses.len();
+    let (anchor, tangent, curvature) = spline.evaluate(arc);
+    let mut normal_raw = Array1::zeros(dof);
+    let mut normal_derivative_raw = Array1::zeros(dof);
+    for j in 0..dof {
+        normal_raw[j] = masses[j] * tangent[j];
+        normal_derivative_raw[j] = masses[j] * curvature[j];
+    }
+    let normal_norm = nrm2(normal_raw.view());
+    if !normal_norm.is_finite() || normal_norm <= f64::MIN_POSITIVE.sqrt() {
+        return Err(FluxError::InvalidConfig("PAFI normal norm underflowed"));
+    }
+    let normal = normal_raw.mapv(|v| v / normal_norm);
+    if (nrm2(normal.view()) - 1.0).abs() > UNIT_NORMAL_TOL {
+        return Err(FluxError::InvalidConfig(
+            "PAFI unit normal construction failed",
+        ));
+    }
+    let projection = dot(normal.view(), normal_derivative_raw.view());
+    let mut dn_ds = Array1::zeros(dof);
+    for j in 0..dof {
+        dn_ds[j] = (normal_derivative_raw[j] - normal[j] * projection) / normal_norm;
+    }
+    let dc_ds = dot(normal.view(), tangent.view());
+    if !dc_ds.is_finite() || dc_ds <= f64::MIN_POSITIVE.sqrt() {
+        return Err(FluxError::InvalidConfig(
+            "PAFI tangent projection to hyperplane normal is non-positive",
+        ));
+    }
+
+    Ok(PlaneGeometry {
+        anchor,
+        normal,
+        dn_ds,
+        dc_ds,
+        tangent,
+        arc,
+    })
+}
+
+fn build_plane_geometries_at(
+    spline: &NaturalSpline,
+    masses: ArrayView1<'_, f64>,
+    arcs: &[f64],
+) -> Result<Vec<PlaneGeometry>, FluxError> {
+    if arcs.len() < 2 {
+        return Err(FluxError::InvalidConfig(
+            "PafiConfig::planes must be at least 2",
+        ));
+    }
+    let mut geometries = Vec::with_capacity(arcs.len());
+    for (index, &arc) in arcs.iter().enumerate() {
+        if !arc.is_finite() {
+            return Err(FluxError::NonFinite("PAFI plane arc length"));
         }
-        let normal_norm = nrm2(normal_raw.view());
-        if !normal_norm.is_finite() || normal_norm <= f64::MIN_POSITIVE.sqrt() {
-            return Err(FluxError::InvalidConfig("PAFI normal norm underflowed"));
-        }
-        let normal = normal_raw.mapv(|v| v / normal_norm);
-        if (nrm2(normal.view()) - 1.0).abs() > UNIT_NORMAL_TOL {
+        if index > 0 && arc <= arcs[index - 1] {
             return Err(FluxError::InvalidConfig(
-                "PAFI unit normal construction failed",
+                "PAFI arc lengths must strictly increase",
             ));
         }
-        let projection = dot(normal.view(), normal_derivative_raw.view());
-        let mut dn_ds = Array1::zeros(path_images.ncols());
-        for j in 0..path_images.ncols() {
-            dn_ds[j] = (normal_derivative_raw[j] - normal[j] * projection) / normal_norm;
-        }
-        let dc_ds = dot(normal.view(), tangent.view());
-        if !dc_ds.is_finite() || dc_ds <= f64::MIN_POSITIVE.sqrt() {
-            return Err(FluxError::InvalidConfig(
-                "PAFI tangent projection to hyperplane normal is non-positive",
-            ));
-        }
-
-        geometries.push(PlaneGeometry {
-            anchor,
-            normal,
-            dn_ds,
-            dc_ds,
-            tangent,
-            arc,
-        });
+        geometries.push(evaluate_plane_geometry_at(spline, masses, arc)?);
     }
     Ok(geometries)
+}
+
+fn build_plane_geometries(
+    path_images: ArrayView2<'_, f64>,
+    masses: ArrayView1<'_, f64>,
+    planes: usize,
+) -> Result<Vec<PlaneGeometry>, FluxError> {
+    let spline = validate_path_and_build_spline(path_images, masses, planes)?;
+    let total_arc = spline.end();
+    let arcs: Vec<f64> = (0..planes)
+        .map(|k| total_arc * (k as f64) / ((planes - 1) as f64))
+        .collect();
+    build_plane_geometries_at(&spline, masses, &arcs)
 }
 
 fn sample_plane<E: DynamicsEngine + ?Sized>(
@@ -1085,13 +1126,154 @@ impl<'a> MonitorInputs<'a> {
     }
 
     /// Evaluate the non-negative monitor values for `kind` at each knot.
-    pub fn evaluate(&self, _kind: MonitorKind) -> Result<Vec<f64>, FluxError> {
-        if self.arc_lengths.len() < 2 {
+    pub fn evaluate(&self, kind: MonitorKind) -> Result<Vec<f64>, FluxError> {
+        let m = self.arc_lengths.len();
+        if m < 2 {
             return Err(FluxError::InvalidConfig(
                 "MonitorInputs::arc_lengths requires at least two knots",
             ));
         }
-        Ok(vec![0.0; self.arc_lengths.len()])
+        for (i, &s) in self.arc_lengths.iter().enumerate() {
+            if !s.is_finite() {
+                return Err(FluxError::NonFinite("MonitorInputs::arc_lengths"));
+            }
+            if i > 0 && s <= self.arc_lengths[i - 1] {
+                return Err(FluxError::InvalidConfig(
+                    "MonitorInputs::arc_lengths must strictly increase",
+                ));
+            }
+        }
+        let total = self.arc_lengths[m - 1] - self.arc_lengths[0];
+        if !total.is_finite() || total <= f64::MIN_POSITIVE {
+            return Err(FluxError::InvalidConfig(
+                "MonitorInputs::arc_lengths total span must be positive",
+            ));
+        }
+
+        let compute_force = |grads: &[f64]| -> Result<Vec<f64>, FluxError> {
+            if grads.len() != m {
+                return Err(FluxError::Shape {
+                    expected: m,
+                    got: grads.len(),
+                    context: "MonitorInputs::force_gradients",
+                });
+            }
+            for &g in grads {
+                if !g.is_finite() {
+                    return Err(FluxError::NonFinite("MonitorInputs::force_gradients"));
+                }
+            }
+            let mut out = Vec::with_capacity(m);
+            for k in 0..m {
+                let slope = if k == 0 {
+                    (grads[1] - grads[0]).abs() / (self.arc_lengths[1] - self.arc_lengths[0])
+                } else if k == m - 1 {
+                    (grads[m - 1] - grads[m - 2]).abs()
+                        / (self.arc_lengths[m - 1] - self.arc_lengths[m - 2])
+                } else {
+                    let left = (grads[k] - grads[k - 1]).abs()
+                        / (self.arc_lengths[k] - self.arc_lengths[k - 1]);
+                    let right = (grads[k + 1] - grads[k]).abs()
+                        / (self.arc_lengths[k + 1] - self.arc_lengths[k]);
+                    0.5 * (left + right)
+                };
+                let local_ds = if k == 0 {
+                    self.arc_lengths[1] - self.arc_lengths[0]
+                } else if k == m - 1 {
+                    self.arc_lengths[m - 1] - self.arc_lengths[m - 2]
+                } else {
+                    0.5 * (self.arc_lengths[k + 1] - self.arc_lengths[k - 1])
+                };
+                out.push(grads[k].abs() + 0.5 * local_ds * slope);
+            }
+            Ok(out)
+        };
+
+        let compute_nonneg =
+            |slice: &[f64], context: &'static str| -> Result<Vec<f64>, FluxError> {
+                if slice.len() != m {
+                    return Err(FluxError::Shape {
+                        expected: m,
+                        got: slice.len(),
+                        context,
+                    });
+                }
+                for &v in slice {
+                    if !v.is_finite() {
+                        return Err(FluxError::NonFinite(context));
+                    }
+                    if v < 0.0 {
+                        return Err(FluxError::InvalidConfig(
+                            "MonitorInputs values must be non-negative",
+                        ));
+                    }
+                }
+                Ok(slice.to_vec())
+            };
+
+        match kind {
+            MonitorKind::ForceGradient => {
+                let grads = self.force_gradients.ok_or(FluxError::InvalidConfig(
+                    "MonitorKind::ForceGradient requires force_gradients",
+                ))?;
+                compute_force(grads)
+            }
+            MonitorKind::PathCurvature => {
+                let curv = self.path_curvatures.ok_or(FluxError::InvalidConfig(
+                    "MonitorKind::PathCurvature requires path_curvatures",
+                ))?;
+                compute_nonneg(curv, "MonitorInputs::path_curvatures")
+            }
+            MonitorKind::AutocorrelatedVariance => {
+                let var = self.tau_weighted_variances.ok_or(FluxError::InvalidConfig(
+                    "MonitorKind::AutocorrelatedVariance requires tau_weighted_variances",
+                ))?;
+                compute_nonneg(var, "MonitorInputs::tau_weighted_variances")
+            }
+            MonitorKind::Combined => {
+                let mut channels: Vec<Vec<f64>> = Vec::new();
+                if let Some(grads) = self.force_gradients {
+                    channels.push(compute_force(grads)?);
+                }
+                if let Some(curv) = self.path_curvatures {
+                    channels.push(compute_nonneg(curv, "MonitorInputs::path_curvatures")?);
+                }
+                if let Some(var) = self.tau_weighted_variances {
+                    channels.push(compute_nonneg(
+                        var,
+                        "MonitorInputs::tau_weighted_variances",
+                    )?);
+                }
+                if channels.is_empty() {
+                    return Err(FluxError::InvalidConfig(
+                        "MonitorKind::Combined requires at least one monitor channel",
+                    ));
+                }
+                let mut combined = vec![0.0_f64; m];
+                let mut active = 0usize;
+                for ch in &channels {
+                    let mut integral = 0.0_f64;
+                    for j in 0..(m - 1) {
+                        let ds = self.arc_lengths[j + 1] - self.arc_lengths[j];
+                        integral += 0.5 * (ch[j] + ch[j + 1]) * ds;
+                    }
+                    let mean = integral / total;
+                    if mean > f64::MIN_POSITIVE {
+                        active += 1;
+                        for k in 0..m {
+                            combined[k] += ch[k] / mean;
+                        }
+                    }
+                }
+                if active > 0 {
+                    let scale = 1.0 / (active as f64);
+                    for v in &mut combined {
+                        *v *= scale;
+                    }
+                }
+                Ok(combined)
+            }
+        }
     }
 }
 
@@ -1117,27 +1299,90 @@ impl EquidistributionMap {
     /// Construct an equidistribution map from strictly increasing `arc_lengths`
     /// and non-negative `raw_monitor` values at those knots.
     pub fn new(arc_lengths: &[f64], raw_monitor: &[f64]) -> Result<Self, FluxError> {
-        if arc_lengths.len() < 2 {
+        let m = arc_lengths.len();
+        if m < 2 {
             return Err(FluxError::InvalidConfig(
                 "EquidistributionMap requires at least two knots",
             ));
         }
-        if raw_monitor.len() != arc_lengths.len() {
+        if raw_monitor.len() != m {
             return Err(FluxError::Shape {
-                expected: arc_lengths.len(),
+                expected: m,
                 got: raw_monitor.len(),
                 context: "EquidistributionMap monitor versus arc_lengths",
             });
         }
+        for i in 0..m {
+            if !arc_lengths[i].is_finite() {
+                return Err(FluxError::NonFinite("EquidistributionMap arc_lengths"));
+            }
+            if i > 0 && arc_lengths[i] <= arc_lengths[i - 1] {
+                return Err(FluxError::InvalidConfig(
+                    "EquidistributionMap arc_lengths must strictly increase",
+                ));
+            }
+            if !raw_monitor[i].is_finite() {
+                return Err(FluxError::NonFinite("EquidistributionMap raw_monitor"));
+            }
+            if raw_monitor[i] < 0.0 {
+                return Err(FluxError::InvalidConfig(
+                    "EquidistributionMap monitor values must be non-negative",
+                ));
+            }
+        }
         let s0 = arc_lengths[0];
-        let total = arc_lengths[arc_lengths.len() - 1] - s0;
-        let sigmas = arc_lengths.iter().map(|&s| (s - s0) / total).collect();
+        let total = arc_lengths[m - 1] - s0;
+        if !total.is_finite() || total <= f64::MIN_POSITIVE {
+            return Err(FluxError::InvalidConfig(
+                "EquidistributionMap total arc length must be positive",
+            ));
+        }
+
+        let mut integral = 0.0_f64;
+        let mut max_monitor = 0.0_f64;
+        for i in 0..m {
+            if raw_monitor[i] > max_monitor {
+                max_monitor = raw_monitor[i];
+            }
+            if i + 1 < m {
+                let ds = arc_lengths[i + 1] - arc_lengths[i];
+                integral += 0.5 * (raw_monitor[i] + raw_monitor[i + 1]) * ds;
+            }
+        }
+        let mean_monitor = integral / total;
+        let floor = if mean_monitor > f64::MIN_POSITIVE {
+            mean_monitor
+        } else {
+            1.0
+        };
+
+        let mut sigmas = vec![0.0_f64; m];
+        if mean_monitor <= f64::MIN_POSITIVE {
+            for i in 1..(m - 1) {
+                sigmas[i] = (arc_lengths[i] - s0) / total;
+            }
+            sigmas[m - 1] = 1.0;
+        } else {
+            let mut cum = 0.0_f64;
+            for i in 0..(m - 1) {
+                let ds = arc_lengths[i + 1] - arc_lengths[i];
+                let w_mid = 0.5 * (raw_monitor[i] + raw_monitor[i + 1]);
+                cum += 0.5 * (ds / total) + 0.5 * (w_mid * ds / integral);
+                sigmas[i + 1] = cum;
+            }
+            let norm = sigmas[m - 1];
+            for val in &mut sigmas[1..(m - 1)] {
+                *val /= norm;
+            }
+            sigmas[m - 1] = 1.0;
+        }
+
         Ok(Self {
             knots: arc_lengths.to_vec(),
             sigmas,
             raw_monitor: raw_monitor.to_vec(),
-            floor: 0.0,
-            max_monitor: 0.0,
+            floor,
+            max_monitor,
         })
     }
 
@@ -1149,16 +1394,88 @@ impl EquidistributionMap {
 
     /// Evaluate the normalized coordinate `sigma(s)` in `[0, 1]`.
     pub fn sigma(&self, s: f64) -> Result<f64, FluxError> {
+        if !s.is_finite() {
+            return Err(FluxError::NonFinite("EquidistributionMap::sigma input"));
+        }
+        let m = self.knots.len();
         let s0 = self.knots[0];
-        let s_end = self.knots[self.knots.len() - 1];
-        Ok((s - s0) / (s_end - s0))
+        let s_end = self.knots[m - 1];
+        let tol = 64.0 * f64::EPSILON * (1.0 + s0.abs() + s_end.abs());
+        if s < s0 - tol || s > s_end + tol {
+            return Err(FluxError::InvalidConfig(
+                "EquidistributionMap::sigma argument is outside knot range",
+            ));
+        }
+        if s <= s0 {
+            return Ok(0.0);
+        }
+        if s >= s_end {
+            return Ok(1.0);
+        }
+        let mut seg = m - 2;
+        for i in 0..(m - 1) {
+            if s <= self.knots[i + 1] {
+                seg = i;
+                break;
+            }
+        }
+        let ds = self.knots[seg + 1] - self.knots[seg];
+        let frac = (s - self.knots[seg]) / ds;
+        Ok(self.sigmas[seg] + frac * (self.sigmas[seg + 1] - self.sigmas[seg]))
     }
 
     /// Invert `sigma` in `[0, 1]` back to the mass-weighted arc length `s(sigma)`.
     pub fn inverse(&self, sigma: f64) -> Result<f64, FluxError> {
+        if !sigma.is_finite() {
+            return Err(FluxError::NonFinite("EquidistributionMap::inverse input"));
+        }
+        let tol = 64.0 * f64::EPSILON;
+        if sigma < -tol || sigma > 1.0 + tol {
+            return Err(FluxError::InvalidConfig(
+                "EquidistributionMap::inverse argument must lie in [0, 1]",
+            ));
+        }
+        let m = self.knots.len();
+        if sigma <= 0.0 {
+            return Ok(self.knots[0]);
+        }
+        if sigma >= 1.0 {
+            return Ok(self.knots[m - 1]);
+        }
+        let mut seg = m - 2;
+        for i in 0..(m - 1) {
+            if sigma <= self.sigmas[i + 1] {
+                seg = i;
+                break;
+            }
+        }
+        let dsig = self.sigmas[seg + 1] - self.sigmas[seg];
+        let frac = if dsig > 0.0 {
+            (sigma - self.sigmas[seg]) / dsig
+        } else {
+            0.0
+        };
+        Ok(self.knots[seg] + frac * (self.knots[seg + 1] - self.knots[seg]))
+    }
+
+    fn is_reflection_symmetric(&self) -> bool {
+        let m = self.knots.len();
         let s0 = self.knots[0];
-        let s_end = self.knots[self.knots.len() - 1];
-        Ok(s0 + sigma * (s_end - s0))
+        let s_end = self.knots[m - 1];
+        let span = s_end - s0;
+        let knot_tol = 64.0 * f64::EPSILON * (1.0 + span);
+        let mon_tol = 64.0 * f64::EPSILON * (1.0 + self.max_monitor);
+        for i in 0..(m / 2) {
+            let left_s = self.knots[i] - s0;
+            let right_s = s_end - self.knots[m - 1 - i];
+            if (left_s - right_s).abs() > knot_tol {
+                return false;
+            }
+            if (self.raw_monitor[i] - self.raw_monitor[m - 1 - i]).abs() > mon_tol {
+                return false;
+            }
+        }
+        true
     }
 
     /// Place `planes` (`>= 2`) hyperplanes at equal increments of `sigma` in `[0, 1]`.
@@ -1168,11 +1485,31 @@ impl EquidistributionMap {
                 "EquidistributionMap::place_planes requires at least 2 planes",
             ));
         }
+        let m = self.knots.len();
         let s0 = self.knots[0];
-        let s_end = self.knots[self.knots.len() - 1];
-        Ok((0..planes)
-            .map(|k| s0 + (s_end - s0) * (k as f64) / ((planes - 1) as f64))
-            .collect())
+        let s_end = self.knots[m - 1];
+        let mut out = vec![0.0_f64; planes];
+        out[0] = s0;
+        out[planes - 1] = s_end;
+        for (k, slot) in out.iter_mut().enumerate().take(planes - 1).skip(1) {
+            let u = (k as f64) / ((planes - 1) as f64);
+            *slot = self.inverse(u)?;
+        }
+        if self.is_reflection_symmetric() {
+            for k in 1..=(planes / 2) {
+                let mirror = planes - 1 - k;
+                if k == mirror {
+                    out[k] = 0.5 * (s0 + s_end);
+                } else {
+                    let left = out[k] - s0;
+                    let right = s_end - out[mirror];
+                    let avg = 0.5 * (left + right);
+                    out[k] = s0 + avg;
+                    out[mirror] = s_end - avg;
+                }
+            }
+        }
+        Ok(out)
     }
 
     /// Principled monitor floor `w_bar = (1 / L) \int_0^L w(s) ds` (or `1.0` when `w_bar == 0`).
@@ -1188,7 +1525,12 @@ impl EquidistributionMap {
                 "EquidistributionMap::min_spacing_bound requires at least 2 planes",
             ));
         }
-        Ok(0.0)
+        let total = self.knots[self.knots.len() - 1] - self.knots[0];
+        let uniform_step = total / ((planes - 1) as f64);
+        if self.max_monitor <= f64::MIN_POSITIVE {
+            return Ok(uniform_step);
+        }
+        Ok(uniform_step * (2.0 * self.floor) / (self.floor + self.max_monitor))
     }
 
     /// Input arc-length knots `s_j`.
@@ -1221,27 +1563,448 @@ pub struct SpectralTailReport {
     pub flagged_intervals: Vec<usize>,
 }
 
+fn chebyshev_eval(coeffs: &[f64], x: f64) -> f64 {
+    if coeffs.is_empty() {
+        return 0.0;
+    }
+    if coeffs.len() == 1 {
+        return coeffs[0];
+    }
+    let x_clamped = x.clamp(-1.0, 1.0);
+    let mut b_k1 = 0.0_f64;
+    let mut b_k2 = 0.0_f64;
+    for &c in coeffs[1..].iter().rev() {
+        let next = 2.0 * x_clamped * b_k1 - b_k2 + c;
+        b_k2 = b_k1;
+        b_k1 = next;
+    }
+    x_clamped * b_k1 - b_k2 + coeffs[0]
+}
+
+fn scalar_spline_1d(arc_lengths: &[f64], values: &[f64]) -> Result<NaturalSpline, FluxError> {
+    let n = arc_lengths.len();
+    let mut second = vec![Array1::zeros(1); n];
+    if n == 3 {
+        let left = arc_lengths[1] - arc_lengths[0];
+        let right = arc_lengths[2] - arc_lengths[1];
+        let curvature = 2.0 * ((values[2] - values[1]) / right - (values[1] - values[0]) / left)
+            / (left + right);
+        for endpoint in &mut second {
+            endpoint[0] = curvature;
+        }
+    } else if n > 3 {
+        let interior = n - 2;
+        let mut lower = vec![0.0_f64; interior];
+        let mut diagonal = vec![0.0_f64; interior];
+        let mut upper = vec![0.0_f64; interior];
+        let mut rhs = vec![0.0_f64; interior];
+        for k in 0..interior {
+            let i = k + 1;
+            let left = arc_lengths[i] - arc_lengths[i - 1];
+            let right = arc_lengths[i + 1] - arc_lengths[i];
+            lower[k] = left;
+            diagonal[k] = 2.0 * (left + right);
+            upper[k] = right;
+            rhs[k] =
+                6.0 * ((values[i + 1] - values[i]) / right - (values[i] - values[i - 1]) / left);
+        }
+        let first = arc_lengths[1] - arc_lengths[0];
+        let second_width = arc_lengths[2] - arc_lengths[1];
+        diagonal[0] += first * (first + second_width) / second_width;
+        upper[0] -= first * first / second_width;
+
+        let penultimate = arc_lengths[n - 2] - arc_lengths[n - 3];
+        let last = arc_lengths[n - 1] - arc_lengths[n - 2];
+        lower[interior - 1] -= last * last / penultimate;
+        diagonal[interior - 1] += last * (penultimate + last) / penultimate;
+
+        for k in 1..interior {
+            let factor = lower[k] / diagonal[k - 1];
+            diagonal[k] -= factor * upper[k - 1];
+            rhs[k] -= factor * rhs[k - 1];
+        }
+        for k in (0..interior).rev() {
+            let i = k + 1;
+            let next = if k + 1 < interior {
+                upper[k] * second[i + 1][0]
+            } else {
+                0.0
+            };
+            second[i][0] = (rhs[k] - next) / diagonal[k];
+        }
+        second[0][0] =
+            ((first + second_width) * second[1][0] - first * second[2][0]) / second_width;
+        second[n - 1][0] =
+            ((penultimate + last) * second[n - 2][0] - last * second[n - 3][0]) / penultimate;
+    }
+    Ok(NaturalSpline {
+        knots: arc_lengths.to_vec(),
+        values: values.iter().map(|&v| Array1::from_vec(vec![v])).collect(),
+        second,
+    })
+}
+
+fn spline_second_derivative_basis(arc_lengths: &[f64]) -> Vec<Vec<f64>> {
+    let n = arc_lengths.len();
+    let mut second = vec![vec![0.0_f64; n]; n];
+    if n == 3 {
+        let left = arc_lengths[1] - arc_lengths[0];
+        let right = arc_lengths[2] - arc_lengths[1];
+        let scale = 2.0 / (left + right);
+        let c0 = scale / left;
+        let c1 = -scale * (1.0 / left + 1.0 / right);
+        let c2 = scale / right;
+        for row in &mut second {
+            row[0] = c0;
+            row[1] = c1;
+            row[2] = c2;
+        }
+    } else if n > 3 {
+        let interior = n - 2;
+        let mut lower = vec![0.0_f64; interior];
+        let mut diagonal = vec![0.0_f64; interior];
+        let mut upper = vec![0.0_f64; interior];
+        let mut rhs = vec![vec![0.0_f64; n]; interior];
+        for k in 0..interior {
+            let i = k + 1;
+            let left = arc_lengths[i] - arc_lengths[i - 1];
+            let right = arc_lengths[i + 1] - arc_lengths[i];
+            lower[k] = left;
+            diagonal[k] = 2.0 * (left + right);
+            upper[k] = right;
+            rhs[k][i - 1] = 6.0 / left;
+            rhs[k][i] = -6.0 * (1.0 / left + 1.0 / right);
+            rhs[k][i + 1] = 6.0 / right;
+        }
+        let first = arc_lengths[1] - arc_lengths[0];
+        let second_width = arc_lengths[2] - arc_lengths[1];
+        diagonal[0] += first * (first + second_width) / second_width;
+        upper[0] -= first * first / second_width;
+
+        let penultimate = arc_lengths[n - 2] - arc_lengths[n - 3];
+        let last = arc_lengths[n - 1] - arc_lengths[n - 2];
+        lower[interior - 1] -= last * last / penultimate;
+        diagonal[interior - 1] += last * (penultimate + last) / penultimate;
+
+        for k in 1..interior {
+            let factor = lower[k] / diagonal[k - 1];
+            diagonal[k] -= factor * upper[k - 1];
+            for j in 0..n {
+                rhs[k][j] -= factor * rhs[k - 1][j];
+            }
+        }
+        for k in (0..interior).rev() {
+            let i = k + 1;
+            for j in 0..n {
+                let next = if k + 1 < interior {
+                    upper[k] * second[i + 1][j]
+                } else {
+                    0.0
+                };
+                second[i][j] = (rhs[k][j] - next) / diagonal[k];
+            }
+        }
+        for j in 0..n {
+            second[0][j] =
+                ((first + second_width) * second[1][j] - first * second[2][j]) / second_width;
+            second[n - 1][j] =
+                ((penultimate + last) * second[n - 2][j] - last * second[n - 3][j]) / penultimate;
+        }
+    }
+    second
+}
+
+fn integrate_spectral_profile(
+    arc_lengths: &[f64],
+    gradients: &[f64],
+    gradient_errors: &[f64],
+    kbt: f64,
+) -> Result<FreeEnergyProfile, FluxError> {
+    let n = arc_lengths.len();
+    if n < 2 || gradients.len() != n || gradient_errors.len() != n {
+        return Err(FluxError::Shape {
+            expected: n,
+            got: gradients.len().max(gradient_errors.len()),
+            context: "PAFI spectral profile integration vectors",
+        });
+    }
+    for &sigma in gradient_errors {
+        if !sigma.is_finite() || sigma < 0.0 {
+            return Err(FluxError::InvalidConfig(
+                "PAFI gradient standard errors must be finite and non-negative",
+            ));
+        }
+    }
+    let m_basis = spline_second_derivative_basis(arc_lengths);
+    let mut integration_weights = vec![vec![0.0_f64; n]; n];
+    let mut free_energy = vec![0.0_f64; n];
+    for i in 1..n {
+        let ds = arc_lengths[i] - arc_lengths[i - 1];
+        if !ds.is_finite() || ds <= 0.0 {
+            return Err(FluxError::InvalidConfig(
+                "PAFI arc lengths must strictly increase",
+            ));
+        }
+        let prev = integration_weights[i - 1].clone();
+        integration_weights[i] = prev;
+        integration_weights[i][i - 1] += 0.5 * ds;
+        integration_weights[i][i] += 0.5 * ds;
+        let cubic_scale = ds * ds * ds / 24.0;
+        for j in 0..n {
+            integration_weights[i][j] -= cubic_scale * (m_basis[i - 1][j] + m_basis[i][j]);
+        }
+        let mut fi = 0.0_f64;
+        for j in 0..n {
+            fi += integration_weights[i][j] * gradients[j];
+        }
+        if !fi.is_finite() {
+            return Err(FluxError::NonFinite("PAFI integrated free energy"));
+        }
+        free_energy[i] = fi;
+    }
+
+    let mut dividing = 0usize;
+    for i in 1..n {
+        if free_energy[i] > free_energy[dividing] {
+            dividing = i;
+        }
+    }
+    let barrier = free_energy[dividing];
+
+    let mut standard_error = vec![0.0_f64; n];
+    for i in 1..n {
+        let mut variance = 0.0_f64;
+        for (weight, sigma) in integration_weights[i].iter().zip(gradient_errors) {
+            variance += weight * weight * sigma * sigma;
+        }
+        standard_error[i] = variance.sqrt();
+    }
+
+    let (reactant_log_partition, d_ln_zr_d_f) =
+        reactant_log_partition_and_sensitivity(arc_lengths, &free_energy, dividing, kbt)?;
+    let reactant_partition = reactant_log_partition.exp();
+    let barrier_error = standard_error[dividing];
+    let normalized_log_rate = 0.5 * (kbt / TAU).ln() - barrier / kbt - reactant_log_partition;
+    if !normalized_log_rate.is_finite() {
+        return Err(FluxError::InvalidConfig(
+            "PAFI normalized log rate must be finite",
+        ));
+    }
+    let normalized_rate = normalized_log_rate.exp();
+    if !normalized_rate.is_finite() || normalized_rate < 0.0 {
+        return Err(FluxError::InvalidConfig(
+            "PAFI normalized rate must be finite",
+        ));
+    }
+    let mut variance_ln_rate = 0.0_f64;
+    for (gradient_index, sigma) in gradient_errors.iter().copied().enumerate() {
+        let barrier_sensitivity = integration_weights[dividing][gradient_index];
+        let mut partition_log_sensitivity = 0.0_f64;
+        for profile_index in 0..=dividing {
+            partition_log_sensitivity +=
+                d_ln_zr_d_f[profile_index] * integration_weights[profile_index][gradient_index];
+        }
+        let log_rate_sensitivity = -barrier_sensitivity / kbt - partition_log_sensitivity;
+        variance_ln_rate += log_rate_sensitivity * log_rate_sensitivity * sigma * sigma;
+    }
+    let sigma_ln_k = variance_ln_rate.sqrt();
+    let normalized_rate_error = normalized_rate * sigma_ln_k;
+
+    Ok(FreeEnergyProfile {
+        arc_lengths: arc_lengths.to_vec(),
+        free_energy,
+        standard_error,
+        barrier,
+        barrier_error,
+        dividing_index: dividing,
+        reactant_partition,
+        reactant_log_partition,
+        normalized_rate,
+        normalized_log_rate,
+        normalized_rate_error,
+    })
+}
+/// on `arc_lengths`, compute the certified tail bound on `F*`, and flag intervals
+/// whose local error exceeds the uniform share when `tail_bound > target_se`.
 /// Fit the mean constraint force and free energy with a Chebyshev / cosine expansion
 /// on `arc_lengths`, compute the certified tail bound on `F*`, and flag intervals
 /// whose local error exceeds the uniform share when `tail_bound > target_se`.
 pub fn estimate_spectral_tail(
     arc_lengths: &[f64],
     gradients: &[f64],
-    _target_se: f64,
+    target_se: f64,
 ) -> Result<SpectralTailReport, FluxError> {
-    if arc_lengths.len() < 2 || gradients.len() != arc_lengths.len() {
+    let n = arc_lengths.len();
+    if n < 2 {
+        return Err(FluxError::InvalidConfig(
+            "estimate_spectral_tail requires at least 2 planes",
+        ));
+    }
+    if gradients.len() != n {
         return Err(FluxError::Shape {
-            expected: arc_lengths.len(),
+            expected: n,
             got: gradients.len(),
             context: "PAFI spectral-tail inputs",
         });
     }
+    if !target_se.is_finite() || target_se < 0.0 {
+        return Err(FluxError::InvalidConfig(
+            "estimate_spectral_tail target_se must be finite and non-negative",
+        ));
+    }
+    for i in 0..n {
+        if !arc_lengths[i].is_finite() {
+            return Err(FluxError::NonFinite("estimate_spectral_tail arc_lengths"));
+        }
+        if i > 0 && arc_lengths[i] <= arc_lengths[i - 1] {
+            return Err(FluxError::InvalidConfig(
+                "estimate_spectral_tail arc_lengths must strictly increase",
+            ));
+        }
+        if !gradients[i].is_finite() {
+            return Err(FluxError::NonFinite("estimate_spectral_tail gradients"));
+        }
+    }
+
+    let s0 = arc_lengths[0];
+    let s_end = arc_lengths[n - 1];
+    let total_length = s_end - s0;
+    if !total_length.is_finite() || total_length <= f64::MIN_POSITIVE {
+        return Err(FluxError::InvalidConfig(
+            "estimate_spectral_tail total arc length must be positive",
+        ));
+    }
+
+    let force_spline = scalar_spline_1d(arc_lengths, gradients)?;
+    let p = n - 1;
+    let p_f64 = p as f64;
+    let mut lobatto_forces = vec![0.0_f64; p + 1];
+    for (j, slot) in lobatto_forces.iter_mut().enumerate() {
+        let theta_j = ((p - j) as f64) * PI / p_f64;
+        let x_j = theta_j.cos();
+        let s_j = (s0 + 0.5 * total_length * (1.0 + x_j)).clamp(s0, s_end);
+        *slot = force_spline.evaluate(s_j).0[0];
+    }
+
+    let mut force_coefficients = vec![0.0_f64; p + 1];
+    for (m, coeff) in force_coefficients.iter_mut().enumerate() {
+        let gamma_m = if m == 0 || m == p { 2.0 } else { 1.0 };
+        let mut sum = 0.0_f64;
+        for (j, &f_val) in lobatto_forces.iter().enumerate() {
+            let gamma_j = if j == 0 || j == p { 2.0 } else { 1.0 };
+            let theta_j = ((p - j) as f64) * PI / p_f64;
+            sum += (f_val / gamma_j) * ((m as f64) * theta_j).cos();
+        }
+        *coeff = (2.0 / (p_f64 * gamma_m)) * sum;
+    }
+
+    let mut profile_coefficients = vec![0.0_f64; p + 2];
+    for m in 1..=(p + 1) {
+        let gamma_prev = if m == 1 { 2.0 } else { 1.0 };
+        let a_prev = force_coefficients[m - 1];
+        let a_next = if m < p {
+            force_coefficients[m + 1]
+        } else {
+            0.0
+        };
+        profile_coefficients[m] =
+            (total_length / (4.0 * (m as f64))) * (gamma_prev * a_prev - a_next);
+    }
+    let mut c0 = 0.0_f64;
+    for (m, &cm) in profile_coefficients.iter().enumerate().skip(1) {
+        let sign = if m % 2 == 0 { 1.0 } else { -1.0 };
+        c0 -= sign * cm;
+    }
+    profile_coefficients[0] = c0;
+
+    let to_x = |s: f64| -> f64 { 2.0 * (s - s0) / total_length - 1.0 };
+
+    let tail_start = 3.max(p);
+    let mut spectral_tail_sum = 0.0_f64;
+    for &cm in &profile_coefficients[tail_start..=(p + 1)] {
+        spectral_tail_sum += cm.abs();
+    }
+
+    let (_, trap_barrier, _) = integrate_means(arc_lengths, gradients)?;
+    let mut spec_barrier = 0.0_f64;
+    for &s in arc_lengths {
+        spec_barrier = spec_barrier.max(chebyshev_eval(&profile_coefficients, to_x(s)));
+    }
+
+    let mut interval_errors = vec![0.0_f64; p];
+    let mut max_peak_gap = 0.0_f64;
+    let mut total_quad_diff = 0.0_f64;
+    for k in 0..p {
+        let sa = arc_lengths[k];
+        let sb = arc_lengths[k + 1];
+        let ds = sb - sa;
+        // Exact difference between the cubic-spline integral and the trapezoid rule on [sa, sb]:
+        // \int_sa^sb g_spline(s) ds - 0.5 * (g_k + g_{k+1}) * ds = -(ds^3 / 24) * (m_k + m_{k+1}).
+        let m_left = force_spline.second[k][0];
+        let m_right = force_spline.second[k + 1][0];
+        let spline_quad_diff = (ds * ds * ds / 24.0) * (m_left + m_right).abs();
+        let trap_inc = 0.5 * (gradients[k] + gradients[k + 1]) * ds;
+        let fa = chebyshev_eval(&profile_coefficients, to_x(sa));
+        let fb = chebyshev_eval(&profile_coefficients, to_x(sb));
+        let spec_inc = fb - fa;
+        let quad_diff = spline_quad_diff.max((spec_inc - trap_inc).abs());
+        total_quad_diff += quad_diff;
+
+        let endpoint_max = fa.max(fb);
+        let mut peak_gap = 0.0_f64;
+        for sub in 1..4 {
+            let s_sub = sa + 0.25 * (sub as f64) * ds;
+            let x_sub = to_x(s_sub);
+            let f_sub = chebyshev_eval(&profile_coefficients, x_sub);
+            spec_barrier = spec_barrier.max(f_sub);
+            if f_sub > endpoint_max {
+                peak_gap = peak_gap.max(f_sub - endpoint_max);
+            }
+        }
+        // Weight the global Chebyshev tail across intervals by local force variation |dg| * ds.
+        let local_variation = (gradients[k + 1] - gradients[k]).abs() * ds / total_length;
+        let local_tail_var = spectral_tail_sum * local_variation;
+        max_peak_gap = max_peak_gap.max(peak_gap);
+        interval_errors[k] = quad_diff + peak_gap + local_tail_var;
+    }
+
+    let raw_tail_bound =
+        (spec_barrier - trap_barrier).abs().max(total_quad_diff) + spectral_tail_sum + max_peak_gap;
+    let scale = 1.0 + trap_barrier.abs().max(spec_barrier.abs());
+    let rounding_floor = 64.0 * f64::EPSILON * scale;
+    let tail_bound = if raw_tail_bound <= rounding_floor {
+        0.0
+    } else {
+        raw_tail_bound
+    };
+
+    let mut flagged_intervals = Vec::new();
+    if tail_bound > target_se.max(rounding_floor) {
+        let mean_err = interval_errors.iter().copied().sum::<f64>() / (p as f64);
+        let max_err = interval_errors.iter().copied().fold(0.0_f64, f64::max);
+        let per_interval_target = target_se / (p as f64);
+        let threshold = mean_err.max(per_interval_target);
+        let sym_tol = 64.0 * f64::EPSILON * (1.0 + max_err);
+        for (k, &err) in interval_errors.iter().enumerate() {
+            if err + sym_tol >= threshold && err > rounding_floor {
+                flagged_intervals.push(k);
+            }
+        }
+        if flagged_intervals.is_empty() && max_err > rounding_floor {
+            for (k, &err) in interval_errors.iter().enumerate() {
+                if err + sym_tol >= mean_err {
+                    flagged_intervals.push(k);
+                }
+            }
+        }
+    }
+
     Ok(SpectralTailReport {
-        force_coefficients: vec![0.0; arc_lengths.len()],
-        profile_coefficients: vec![0.0; arc_lengths.len() + 1],
-        tail_bound: 0.0,
-        interval_errors: vec![0.0; arc_lengths.len() - 1],
-        flagged_intervals: Vec::new(),
+        force_coefficients,
+        profile_coefficients,
+        tail_bound,
+        interval_errors,
+        flagged_intervals,
     })
 }
 
@@ -1251,14 +2014,23 @@ pub fn size_window_from_tau_int(
     tau_int: f64,
     min_burn_in_steps: usize,
     min_sample_steps: usize,
-    _stats: &StatsConfig,
+    stats: &StatsConfig,
 ) -> Result<(usize, usize), FluxError> {
     if !tau_int.is_finite() || tau_int <= 0.0 {
         return Err(FluxError::InvalidConfig(
             "tau_int must be finite and positive",
         ));
     }
-    Ok((min_burn_in_steps, min_sample_steps))
+    if stats.min_batches < 2 {
+        return Err(FluxError::InvalidConfig(
+            "StatsConfig::min_batches must be at least 2",
+        ));
+    }
+    let corr_block = (2.0 * tau_int).ceil().max(1.0) as usize;
+    let burn_blocks = (stats.min_batches / 2).max(2);
+    let burn_in = min_burn_in_steps.max(burn_blocks.saturating_mul(corr_block));
+    let sample_steps = min_sample_steps.max(stats.min_batches.saturating_mul(corr_block));
+    Ok((burn_in, sample_steps))
 }
 
 /// Configuration for adaptive Projected Average Force Integration with
@@ -1319,6 +2091,14 @@ pub struct AdaptiveFreeEnergyProfile {
     pub force_calls: usize,
 }
 
+#[derive(Clone, Debug)]
+struct SampledPlaneRecord {
+    geometry: PlaneGeometry,
+    samples: Vec<f64>,
+    uid: usize,
+    rounds_completed: usize,
+}
+
 /// Integrate the PAFI free-energy profile with monitor equidistribution and
 /// iterative spectral-tail plane refinement.
 pub fn pafi_profile_adaptive<E: DynamicsEngine + ?Sized>(
@@ -1326,18 +2106,377 @@ pub fn pafi_profile_adaptive<E: DynamicsEngine + ?Sized>(
     path_images: ArrayView2<'_, f64>,
     config: &AdaptivePafiConfig,
 ) -> Result<AdaptiveFreeEnergyProfile, FluxError> {
-    let profile = pafi_profile(engine, path_images, &config.base)?;
-    let n = profile.arc_lengths.len();
-    let equidistribution = EquidistributionMap::new(&profile.arc_lengths, &vec![1.0; n])?;
-    let tail = estimate_spectral_tail(&profile.arc_lengths, &vec![0.0; n], profile.barrier_error)?;
-    let force_calls = n * (2 + config.base.burn_in_steps + config.base.sample_steps);
-    Ok(AdaptiveFreeEnergyProfile {
-        profile,
-        tail,
-        equidistribution,
-        refinement_rounds: 0,
-        force_calls,
-    })
+    if !config.base.time_step.is_finite() || config.base.time_step <= 0.0 {
+        return Err(FluxError::InvalidConfig(
+            "PafiConfig::time_step must be finite and positive",
+        ));
+    }
+    if config.base.burn_in_steps == 0 {
+        return Err(FluxError::InvalidConfig(
+            "PafiConfig::burn_in_steps must be at least 1",
+        ));
+    }
+    if config.base.sample_steps < 2 {
+        return Err(FluxError::InvalidConfig(
+            "PafiConfig::sample_steps must be at least 2",
+        ));
+    }
+    if config.base.max_rounds == 0 {
+        return Err(FluxError::InvalidConfig(
+            "PafiConfig::max_rounds must be at least 1",
+        ));
+    }
+    if config.base.planes < 3 {
+        return Err(FluxError::InvalidConfig(
+            "AdaptivePafiConfig requires base.planes >= 3",
+        ));
+    }
+    if config.max_planes < config.base.planes {
+        return Err(FluxError::InvalidConfig(
+            "AdaptivePafiConfig::max_planes must be at least base.planes",
+        ));
+    }
+    if config.max_refinements == 0 {
+        return Err(FluxError::InvalidConfig(
+            "AdaptivePafiConfig::max_refinements must be at least 1",
+        ));
+    }
+    if !config.base.zero_temperature_tol.is_finite() || config.base.zero_temperature_tol < 0.0 {
+        return Err(FluxError::InvalidConfig(
+            "PafiConfig::zero_temperature_tol must be finite and non-negative",
+        ));
+    }
+    if let Some(target) = config.base.target_error
+        && (!target.is_finite() || target < 0.0)
+    {
+        return Err(FluxError::InvalidConfig(
+            "PafiConfig::target_error must be finite and non-negative",
+        ));
+    }
+
+    let snapshot = EngineSnapshot::capture(engine);
+    let result = (|| {
+        let kbt = engine.thermostat().thermal_energy()?;
+        if kbt <= 0.0 {
+            return Err(FluxError::InvalidConfig(
+                "PAFI requires positive thermal energy",
+            ));
+        }
+        let masses = engine.masses().to_owned();
+        let spline =
+            validate_path_and_build_spline(path_images, masses.view(), config.base.planes)?;
+        let total_arc = spline.end();
+
+        // Evaluate zero-temperature path force on config.base.planes uniform anchors
+        // for the zero-temperature check and initial monitor construction.
+        let ref_count = config.base.planes;
+        let ref_arcs: Vec<f64> = (0..ref_count)
+            .map(|k| total_arc * (k as f64) / ((ref_count - 1) as f64))
+            .collect();
+        let ref_geometries = build_plane_geometries_at(&spline, masses.view(), &ref_arcs)?;
+
+        engine.set_constraint(None)?;
+        let mut ref_gradients = Vec::with_capacity(ref_geometries.len());
+        let mut ref_energies = Vec::with_capacity(ref_geometries.len());
+        let mut ref_curvatures = Vec::with_capacity(ref_geometries.len());
+        let mut force_calls = 0usize;
+        for geometry in &ref_geometries {
+            engine.set_positions(geometry.anchor.view())?;
+            let (energy, forces) = engine.energy_and_forces()?;
+            force_calls += 1;
+            ref_energies.push(energy);
+            ref_gradients.push(-dot(geometry.tangent.view(), forces.view()));
+            ref_curvatures.push(nrm2(geometry.dn_ds.view()));
+        }
+        let relative_error = path_force_relative_error(&ref_arcs, &ref_energies, &ref_gradients);
+        if relative_error > effective_zero_temperature_tol(&config.base) {
+            return Err(FluxError::InvalidConfig(
+                "PAFI zero-temperature path-force quadrature exceeds tolerance",
+            ));
+        }
+
+        let initial_map = match config.monitor {
+            MonitorKind::ForceGradient => EquidistributionMap::from_inputs(
+                &MonitorInputs::new(&ref_arcs).with_force_gradients(&ref_gradients),
+                MonitorKind::ForceGradient,
+            )?,
+            MonitorKind::PathCurvature => EquidistributionMap::from_inputs(
+                &MonitorInputs::new(&ref_arcs).with_path_curvatures(&ref_curvatures),
+                MonitorKind::PathCurvature,
+            )?,
+            MonitorKind::AutocorrelatedVariance => {
+                EquidistributionMap::new(&ref_arcs, &vec![0.0; ref_count])?
+            }
+            MonitorKind::Combined => EquidistributionMap::from_inputs(
+                &MonitorInputs::new(&ref_arcs)
+                    .with_force_gradients(&ref_gradients)
+                    .with_path_curvatures(&ref_curvatures),
+                MonitorKind::Combined,
+            )?,
+        };
+
+        let initial_arcs = initial_map.place_planes(config.base.planes)?;
+        let initial_geoms = build_plane_geometries_at(&spline, masses.view(), &initial_arcs)?;
+        let mut next_uid = 0usize;
+        let mut records: Vec<SampledPlaneRecord> = initial_geoms
+            .into_iter()
+            .map(|geometry| {
+                let uid = next_uid;
+                next_uid += 1;
+                SampledPlaneRecord {
+                    geometry,
+                    samples: Vec::new(),
+                    uid,
+                    rounds_completed: 0,
+                }
+            })
+            .collect();
+
+        let mut refinement_rounds = 0usize;
+        loop {
+            // Sample any plane that has not yet completed at least one round.
+            for record in &mut records {
+                while record.rounds_completed == 0 {
+                    let samples = sample_plane(
+                        engine,
+                        &record.geometry,
+                        &config.base,
+                        record.uid,
+                        record.rounds_completed,
+                    )?;
+                    force_calls += 1 + config.base.burn_in_steps + config.base.sample_steps;
+                    record.samples.extend(samples);
+                    record.rounds_completed += 1;
+                }
+            }
+
+            // If target_error is set on a stochastic system, add rounds up to max_rounds
+            // when statistical SE exceeds target_error.
+            loop {
+                let mut gradients = Vec::with_capacity(records.len());
+                let mut errors = Vec::with_capacity(records.len());
+                let mut variances = Vec::with_capacity(records.len());
+                let mut curvatures = Vec::with_capacity(records.len());
+                let mut arcs = Vec::with_capacity(records.len());
+                for record in &records {
+                    let est = batch_means(&record.samples, &config.base.stats)?;
+                    gradients.push(est.mean);
+                    errors.push(est.standard_error);
+                    variances.push(est.variance);
+                    curvatures.push(nrm2(record.geometry.dn_ds.view()));
+                    arcs.push(record.geometry.arc);
+                }
+                let profile = integrate_spectral_profile(&arcs, &gradients, &errors, kbt)?;
+                let need_more_stat_rounds = match config.base.target_error {
+                    Some(target) => {
+                        profile.barrier_error > target
+                            && records
+                                .iter()
+                                .any(|r| r.rounds_completed < config.base.max_rounds)
+                    }
+                    None => false,
+                };
+                if need_more_stat_rounds {
+                    for record in &mut records {
+                        if record.rounds_completed < config.base.max_rounds {
+                            let samples = sample_plane(
+                                engine,
+                                &record.geometry,
+                                &config.base,
+                                record.uid,
+                                record.rounds_completed,
+                            )?;
+                            force_calls += 1 + config.base.burn_in_steps + config.base.sample_steps;
+                            record.samples.extend(samples);
+                            record.rounds_completed += 1;
+                        }
+                    }
+                    continue;
+                }
+
+                let stop_threshold = if profile.barrier_error > 0.0 {
+                    match config.base.target_error {
+                        Some(target) => profile.barrier_error.min(target),
+                        None => profile.barrier_error,
+                    }
+                } else {
+                    config
+                        .base
+                        .target_error
+                        .unwrap_or(64.0 * f64::EPSILON * (1.0 + profile.barrier.abs()))
+                };
+
+                let tail = estimate_spectral_tail(&arcs, &gradients, stop_threshold)?;
+                let monitor_inputs = MonitorInputs::new(&arcs)
+                    .with_force_gradients(&gradients)
+                    .with_path_curvatures(&curvatures)
+                    .with_tau_weighted_variances(&variances);
+                let current_map =
+                    EquidistributionMap::from_inputs(&monitor_inputs, config.monitor)?;
+
+                if tail.tail_bound <= stop_threshold
+                    || refinement_rounds >= config.max_refinements
+                    || records.len() >= config.max_planes
+                    || tail.flagged_intervals.is_empty()
+                {
+                    return Ok(AdaptiveFreeEnergyProfile {
+                        profile,
+                        tail,
+                        equidistribution: current_map,
+                        refinement_rounds,
+                        force_calls,
+                    });
+                }
+
+                let remaining_budget = config.max_planes - records.len();
+                let n_intervals = arcs.len() - 1;
+                let symmetric = current_map.is_reflection_symmetric();
+                let force_spline = scalar_spline_1d(&arcs, &gradients)?;
+
+                // Rank flagged intervals by error while keeping mirror pairs together when symmetric.
+                let mut ordered_flagged = tail.flagged_intervals.clone();
+                ordered_flagged.sort_by(|&a, &b| {
+                    let ea = if symmetric {
+                        tail.interval_errors[a].max(tail.interval_errors[n_intervals - 1 - a])
+                    } else {
+                        tail.interval_errors[a]
+                    };
+                    let eb = if symmetric {
+                        tail.interval_errors[b].max(tail.interval_errors[n_intervals - 1 - b])
+                    } else {
+                        tail.interval_errors[b]
+                    };
+                    eb.total_cmp(&ea).then_with(|| a.cmp(&b))
+                });
+
+                let mut chosen_intervals = Vec::new();
+                let mut used = vec![false; n_intervals];
+                // Refine the highest-error interval (or symmetric mirror pair) per iteration
+                // so the spectral fit updates before the next plane placement.
+                let step_budget = remaining_budget.min(2);
+                for k in ordered_flagged {
+                    if used[k] {
+                        continue;
+                    }
+                    if symmetric {
+                        let mirror = n_intervals - 1 - k;
+                        if k == mirror {
+                            if chosen_intervals.len() < step_budget {
+                                used[k] = true;
+                                chosen_intervals.push(k);
+                                break;
+                            }
+                        } else if chosen_intervals.len() + 2 <= step_budget {
+                            used[k] = true;
+                            used[mirror] = true;
+                            chosen_intervals.push(k.min(mirror));
+                            chosen_intervals.push(k.max(mirror));
+                            break;
+                        }
+                    } else if chosen_intervals.len() < step_budget {
+                        used[k] = true;
+                        chosen_intervals.push(k);
+                        if chosen_intervals.len() >= 2 {
+                            break;
+                        }
+                    }
+                }
+
+                if chosen_intervals.is_empty() {
+                    return Ok(AdaptiveFreeEnergyProfile {
+                        profile,
+                        tail,
+                        equidistribution: current_map,
+                        refinement_rounds,
+                        force_calls,
+                    });
+                }
+
+                let mut new_arcs = Vec::with_capacity(chosen_intervals.len());
+                for &k in &chosen_intervals {
+                    if symmetric && k > n_intervals - 1 - k && used[n_intervals - 1 - k] {
+                        continue;
+                    }
+                    let sa = arcs[k];
+                    let sb = arcs[k + 1];
+                    let sig_a = current_map.sigma(sa)?;
+                    let sig_b = current_map.sigma(sb)?;
+                    let sig_mid = 0.5 * (sig_a + sig_b);
+                    let dsig = sig_b - sig_a;
+
+                    // If the interval brackets a downward zero-crossing of the force (a barrier peak),
+                    // bisect the spline root and clamp inside the middle half of the sigma interval.
+                    let s_candidate = if gradients[k] > 0.0 && gradients[k + 1] < 0.0 {
+                        let mut left = sa;
+                        let mut right = sb;
+                        for _ in 0..40 {
+                            let mid = 0.5 * (left + right);
+                            if force_spline.evaluate(mid).0[0] > 0.0 {
+                                left = mid;
+                            } else {
+                                right = mid;
+                            }
+                        }
+                        let s_root = 0.5 * (left + right);
+                        let sig_root = current_map
+                            .sigma(s_root)?
+                            .clamp(sig_a + 0.25 * dsig, sig_b - 0.25 * dsig);
+                        current_map.inverse(sig_root)?
+                    } else {
+                        current_map.inverse(sig_mid)?
+                    };
+
+                    if symmetric {
+                        let mirror = n_intervals - 1 - k;
+                        if k == mirror {
+                            new_arcs.push(0.5 * (arcs[0] + total_arc));
+                        } else if used[mirror] {
+                            let offset = s_candidate - arcs[0];
+                            new_arcs.push(arcs[0] + offset);
+                            new_arcs.push(total_arc - offset);
+                        } else {
+                            new_arcs.push(s_candidate);
+                        }
+                    } else {
+                        new_arcs.push(s_candidate);
+                    }
+                }
+
+                let min_gap = 64.0 * f64::EPSILON * (1.0 + total_arc);
+                let mut added_any = false;
+                for s_new in new_arcs {
+                    if records
+                        .iter()
+                        .all(|r| (r.geometry.arc - s_new).abs() > min_gap)
+                    {
+                        let geometry = evaluate_plane_geometry_at(&spline, masses.view(), s_new)?;
+                        let uid = next_uid;
+                        next_uid += 1;
+                        records.push(SampledPlaneRecord {
+                            geometry,
+                            samples: Vec::new(),
+                            uid,
+                            rounds_completed: 0,
+                        });
+                        added_any = true;
+                    }
+                }
+                if !added_any {
+                    return Ok(AdaptiveFreeEnergyProfile {
+                        profile,
+                        tail,
+                        equidistribution: current_map,
+                        refinement_rounds,
+                        force_calls,
+                    });
+                }
+                records.sort_by(|a, b| a.geometry.arc.total_cmp(&b.geometry.arc));
+                refinement_rounds += 1;
+                break;
+            }
+        }
+    })();
+    snapshot.restore_result(engine, result)
 }
 
 /// Trait-object entry point for [`pafi_profile_adaptive`] over [`DynamicsEngine`].
