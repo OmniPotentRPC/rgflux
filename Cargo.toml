@@ -10,6 +10,21 @@ readme = "README.md"
 authors = ["Rohit Goswami <rgoswami@ieee.org>"]
 keywords = ["kinetics", "transition-state", "rare-events", "molecular-dynamics"]
 categories = ["science"]
+# Ship the library, its build script, the tests, and the three Org files the
+# tests include with `include_str!`. CI, the Sphinx sources, and tool
+# configuration stay out of the crate.
+include = [
+    "/src/**",
+    "/tests/**",
+    "/build.rs",
+    "/Cargo.toml",
+    "/README.md",
+    "/CHANGELOG.md",
+    "/LICENSE",
+    "/docs/orgmode/getting-started.org",
+    "/docs/orgmode/howto.org",
+    "/docs/orgmode/reference.org",
+]
 
 [lib]
 crate-type = ["lib"]
