@@ -1,5 +1,0 @@
-Compute the PAFI reactant partition in log space with shifted
-log-sum-exp trapezoid quadrature so deep free-energy wells no longer
-overflow the partition integral. Propagate `ln Z_R` through normalized
-rate evaluation and uncertainty propagation while retaining legacy
-linear-rate and partition fields for compatibility.

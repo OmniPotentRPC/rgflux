@@ -1,1 +1,0 @@
-=ffs::forward_flux_rate= computes direct Forward Flux Sampling transition rates across ordered reaction-coordinate interfaces over any =DynamicsEngine=, with batch-means initial escape flux uncertainty, cluster-variance conditional stage probabilities, and engine state restoration.
