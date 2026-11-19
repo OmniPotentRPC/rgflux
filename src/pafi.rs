@@ -44,12 +44,32 @@ use crate::engine::{
 use crate::error::FluxError;
 use crate::stats::{StatsConfig, batch_means};
 
+/// Plane placement and integration rule for the PAFI mean force.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[non_exhaustive]
+pub enum PafiIntegration {
+    /// Evenly spaced planes with fourth-order Hermite integration.
+    #[default]
+    Hermite,
+    /// Gauss--Legendre nodes on the path interval.
+    GaussLegendre,
+    /// Gauss--Jacobi nodes with the endpoint-linear weight
+    /// `(s - s_0) (s_1 - s)`.
+    GaussJacobi,
+    /// Nested Clenshaw--Curtis planes, including both endpoints.
+    ClenshawCurtis,
+    /// Noisy Gaussian-process quadrature with active plane placement.
+    Bayesian,
+}
+
 /// Configuration for Projected Average Force Integration (PAFI).
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct PafiConfig {
     /// Number of hyperplanes discretized along the reaction path (`>= 2`).
     pub planes: usize,
+    /// Plane placement and integration rule.
+    pub integration: PafiIntegration,
     /// Equilibration steps discarded on each hyperplane.
     pub burn_in_steps: usize,
     /// Production steps added per hyperplane and adaptive round (`>= 2`).
@@ -73,6 +93,7 @@ impl Default for PafiConfig {
     fn default() -> Self {
         Self {
             planes: 9,
+            integration: PafiIntegration::default(),
             burn_in_steps: 500,
             sample_steps: 4_000,
             time_step: 0.002,
@@ -87,6 +108,7 @@ impl Default for PafiConfig {
 
 with_setters!(PafiConfig {
     with_planes => planes: val usize,
+    with_integration => integration: val PafiIntegration,
     with_burn_in_steps => burn_in_steps: val usize,
     with_sample_steps => sample_steps: val usize,
     with_time_step => time_step: val f64,
