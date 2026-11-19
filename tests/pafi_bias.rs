@@ -487,7 +487,10 @@ fn zero_noise_quartic_rate_is_the_projected_frequency_formula() {
             profile.barrier
         );
         let vineyard = vineyard_rate(QUARTIC_1D, kt);
-        let ratio = profile.normalized_rate / vineyard;
+        let rate = profile
+            .normalized_rate
+            .expect("representable normalized rate");
+        let ratio = rate / vineyard;
         eprintln!("quartic kT={kt}: k/k_vineyard={ratio:.8}");
         assert!(
             (ratio - 1.0).abs() <= 1.0e-6,
