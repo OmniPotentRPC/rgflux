@@ -50,7 +50,8 @@
 //!    trapezoid rule. It divides the absolute disagreement with the end-to-end
 //!    energy change `Delta E_0` by `max(E_unit, |Delta E_0|)`, where `E_unit`
 //!    is one energy unit of the engine, and compares that dimensionless value
-//!    with [`PafiConfig::zero_temperature_tol`]. A mismatch returns
+//!    with the effective tolerance from [`PafiConfig::zero_temperature_tol`].
+//!    A mismatch returns
 //!    [`FluxError::InvalidConfig`] before any sampling.
 //! 4. On each plane the engine is constrained, placed at the anchor, given
 //!    Maxwell-Boltzmann velocities, run for `burn_in_steps`, and then run for
@@ -230,17 +231,10 @@ const fn default_zero_temperature_tol(planes: usize) -> f64 {
     leading_term * (1.0 + ZERO_TEMPERATURE_SAFETY_MARGIN)
 }
 
-/// Default [`PafiConfig::zero_temperature_tol`]: the quarter-arc trapezoid
-/// error at [`DEFAULT_PLANES`] (1.29%) plus the safety margin.
-const DEFAULT_ZERO_TEMPERATURE_TOL: f64 = default_zero_temperature_tol(DEFAULT_PLANES);
-
 fn effective_zero_temperature_tol(config: &PafiConfig) -> f64 {
-    let tol = config.zero_temperature_tol;
-    if tol.to_bits() == DEFAULT_ZERO_TEMPERATURE_TOL.to_bits() {
-        default_zero_temperature_tol(config.planes)
-    } else {
-        tol
-    }
+    config
+        .zero_temperature_tol
+        .unwrap_or_else(|| default_zero_temperature_tol(config.planes))
 }
 
 /// Configuration for Projected Average Force Integration (PAFI).
@@ -285,19 +279,20 @@ pub struct PafiConfig {
     /// check is relative when `|Delta E_0| >= E_unit` and otherwise bounds the
     /// absolute discrepancy in engine energy units.
     ///
-    /// The stored default is `2 * (pi^2 / 12) / 8^2`, about `0.0257`, for the
-    /// default 9 planes. If this field retains that default value, changing
-    /// `planes` changes the effective tolerance to
-    /// `2 * (pi^2 / 12) / (planes - 1)^2`. An explicitly different value is
-    /// used unchanged and does not scale with `planes`.
+    /// `None`, the default, sets the effective tolerance to
+    /// `2 * (pi^2 / 12) / (planes - 1)^2`. At the default 9 planes that value
+    /// is about `0.0257`, and changing `planes` scales it with the trapezoid
+    /// error. `Some(value)` uses `value` at every plane count, including when
+    /// `value` equals the 9-plane tolerance.
     ///
     /// The scaling follows the trapezoid error on a quarter-turn circular arc
     /// through a harmonic well. Paths that turn through more than a quarter
     /// circle can need a larger tolerance. Larger values weaken the guard
-    /// against inconsistent forces and tangents. Must be finite and `>= 0`.
+    /// against inconsistent forces and tangents. An explicit value must be
+    /// finite and `>= 0`.
     ///
-    /// Default: `2 * (pi^2 / 12) / 8^2`, about `0.0257`.
-    pub zero_temperature_tol: f64,
+    /// Default: `None`.
+    pub zero_temperature_tol: Option<f64>,
     /// Base of the deterministic per-plane seeds `seed + 4099 * plane + 1000003 * round`
     /// (wrapping).
     ///
@@ -318,7 +313,7 @@ impl Default for PafiConfig {
             time_step: 0.002,
             target_error: None,
             max_rounds: 4,
-            zero_temperature_tol: DEFAULT_ZERO_TEMPERATURE_TOL,
+            zero_temperature_tol: None,
             seed: 1,
             stats: StatsConfig::default(),
         }
@@ -332,7 +327,7 @@ with_setters!(PafiConfig {
     with_time_step => time_step: val f64,
     with_target_error => target_error: opt f64,
     with_max_rounds => max_rounds: val usize,
-    with_zero_temperature_tol => zero_temperature_tol: val f64,
+    with_zero_temperature_tol => zero_temperature_tol: opt f64,
     with_seed => seed: val u64,
     with_stats => stats: val StatsConfig,
 });
@@ -998,8 +993,8 @@ fn path_force_relative_error(arcs: &[f64], energies: &[f64], gradients: &[f64]) 
 ///
 /// - `time_step` is not finite and positive, `burn_in_steps` is `0`,
 ///   `sample_steps` is below `2`, `max_rounds` is `0`, `planes` is below `2`,
-///   `zero_temperature_tol` is negative or not finite, or `target_error` is
-///   negative or not finite,
+///   `zero_temperature_tol` is `Some` of a negative or non-finite value, or
+///   `target_error` is negative or not finite,
 /// - `path_images` has fewer than two rows, or two neighbouring images
 ///   coincide in the mass-weighted metric,
 /// - the thermal energy `k_B T` of the engine is not positive,
@@ -1048,7 +1043,9 @@ pub fn pafi_profile<E: DynamicsEngine + ?Sized>(
             "PafiConfig::max_rounds must be at least 1",
         ));
     }
-    if !config.zero_temperature_tol.is_finite() || config.zero_temperature_tol < 0.0 {
+    if let Some(tol) = config.zero_temperature_tol
+        && (!tol.is_finite() || tol < 0.0)
+    {
         return Err(FluxError::InvalidConfig(
             "PafiConfig::zero_temperature_tol must be finite and non-negative",
         ));
@@ -1377,16 +1374,15 @@ mod tests {
     #[test]
     fn default_tolerance_accepts_quarter_arc_at_default_planes() {
         let config = PafiConfig::default();
+        let tolerance = effective_zero_temperature_tol(&config);
         let error = quarter_arc_relative_error(33, config.planes);
         assert!(
-            error < config.zero_temperature_tol,
-            "relative error {error} versus default tolerance {}",
-            config.zero_temperature_tol
+            error < tolerance,
+            "relative error {error} versus default tolerance {tolerance}"
         );
         assert!(
-            config.zero_temperature_tol < 2.0 * (1.0 + ZERO_TEMPERATURE_SAFETY_MARGIN) * error,
-            "default tolerance {} is no longer calibrated to {error}",
-            config.zero_temperature_tol
+            tolerance < 2.0 * (1.0 + ZERO_TEMPERATURE_SAFETY_MARGIN) * error,
+            "default tolerance {tolerance} is no longer calibrated to {error}"
         );
 
         let (mut engine, _) = quarter_arc_engine();
@@ -1836,20 +1832,51 @@ mod tests {
     }
 
     #[test]
-    fn only_the_exact_default_tolerance_scales_with_planes() {
-        let exact = PafiConfig::default().with_planes(33);
+    fn documented_nine_plane_tolerance_matches_the_effective_default() {
+        let reference = include_str!("../docs/orgmode/reference.org");
+        let row = reference
+            .lines()
+            .find(|line| line.contains("| =zero_temperature_tol= |"))
+            .expect("zero_temperature_tol row");
+        let marker = "\\approx ";
+        let rest = row.split_once(marker).expect("approximate value").1;
+        let numeric: String = rest
+            .chars()
+            .take_while(|ch| ch.is_ascii_digit() || *ch == '.')
+            .collect();
+        let documented: f64 = numeric.parse().expect("documented tolerance");
+        let decimals = numeric.split('.').nth(1).map(str::len).unwrap_or(0);
+        let unit = 10_f64.powi(-(decimals as i32));
+        let effective = effective_zero_temperature_tol(&PafiConfig::default());
+        let difference = (effective - documented).abs();
+        assert!(
+            difference <= 0.5 * unit,
+            "effective {effective} documented {documented} difference {difference}"
+        );
+    }
+
+    #[test]
+    fn explicit_tolerance_equal_to_the_nine_plane_value_stays_fixed() {
+        let planes = 33usize;
+        let nine_plane = default_zero_temperature_tol(DEFAULT_PLANES);
+        let explicit = PafiConfig::default()
+            .with_planes(planes)
+            .with_zero_temperature_tol(nine_plane);
+        assert_eq!(explicit.zero_temperature_tol, Some(nine_plane));
         assert_eq!(
-            effective_zero_temperature_tol(&exact).to_bits(),
-            default_zero_temperature_tol(33).to_bits()
+            effective_zero_temperature_tol(&explicit).to_bits(),
+            nine_plane.to_bits()
+        );
+        assert_ne!(
+            nine_plane.to_bits(),
+            default_zero_temperature_tol(planes).to_bits()
         );
 
-        let next_up = f64::from_bits(DEFAULT_ZERO_TEMPERATURE_TOL.to_bits() + 1);
-        let near = PafiConfig::default()
-            .with_planes(33)
-            .with_zero_temperature_tol(next_up);
+        let unset = PafiConfig::default().with_planes(planes);
+        assert!(unset.zero_temperature_tol.is_none());
         assert_eq!(
-            effective_zero_temperature_tol(&near).to_bits(),
-            next_up.to_bits()
+            effective_zero_temperature_tol(&unset).to_bits(),
+            default_zero_temperature_tol(planes).to_bits()
         );
     }
 
