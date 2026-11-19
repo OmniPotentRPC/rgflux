@@ -148,7 +148,7 @@ fn zero_width_reactant_partition_repro_passes() {
             "--native-bin",
             native,
         ]),
-        "zero-width reactant partition repro",
+        "reactant partition rejection guard",
     );
     let record: Value = serde_json::from_str(&stdout).expect("repro must print the record");
     assert_eq!(record["status"], "rejected", "{record}");

@@ -356,9 +356,9 @@
       "max_combined_profile_sem": 3.418964751922861e-06,
       "planes": 17,
       "rejection_counts": {
-        "genuine_exp_overflow": 0,
         "other": 0,
-        "zero_reactant_partition": 4,
+        "reproduced_reactant_partition": 1,
+        "unclassified_reactant_partition": 3,
         "zero_temperature_tol": 0
       },
       "rejection_reasons": {
@@ -768,9 +768,9 @@
       "max_combined_profile_sem": 5.0507852012050014e-06,
       "planes": 17,
       "rejection_counts": {
-        "genuine_exp_overflow": 0,
         "other": 0,
-        "zero_reactant_partition": 5,
+        "reproduced_reactant_partition": 0,
+        "unclassified_reactant_partition": 5,
         "zero_temperature_tol": 0
       },
       "rejection_reasons": {
@@ -1180,9 +1180,9 @@
       "max_combined_profile_sem": 2.4516650159040345e-06,
       "planes": 17,
       "rejection_counts": {
-        "genuine_exp_overflow": 0,
         "other": 0,
-        "zero_reactant_partition": 3,
+        "reproduced_reactant_partition": 0,
+        "unclassified_reactant_partition": 3,
         "zero_temperature_tol": 0
       },
       "rejection_reasons": {
@@ -1592,9 +1592,9 @@
       "max_combined_profile_sem": 3.435940648165848e-06,
       "planes": 17,
       "rejection_counts": {
-        "genuine_exp_overflow": 0,
         "other": 0,
-        "zero_reactant_partition": 7,
+        "reproduced_reactant_partition": 0,
+        "unclassified_reactant_partition": 7,
         "zero_temperature_tol": 0
       },
       "rejection_reasons": {
@@ -2004,9 +2004,9 @@
       "max_combined_profile_sem": 7.903159341291136e-07,
       "planes": 17,
       "rejection_counts": {
-        "genuine_exp_overflow": 0,
         "other": 0,
-        "zero_reactant_partition": 5,
+        "reproduced_reactant_partition": 0,
+        "unclassified_reactant_partition": 5,
         "zero_temperature_tol": 0
       },
       "rejection_reasons": {
@@ -2416,9 +2416,9 @@
       "max_combined_profile_sem": 1.7653526289224294e-06,
       "planes": 17,
       "rejection_counts": {
-        "genuine_exp_overflow": 0,
         "other": 0,
-        "zero_reactant_partition": 6,
+        "reproduced_reactant_partition": 0,
+        "unclassified_reactant_partition": 6,
         "zero_temperature_tol": 0
       },
       "rejection_reasons": {
@@ -2828,9 +2828,9 @@
       "max_combined_profile_sem": 1.1585567216238083e-05,
       "planes": 17,
       "rejection_counts": {
-        "genuine_exp_overflow": 0,
         "other": 0,
-        "zero_reactant_partition": 1,
+        "reproduced_reactant_partition": 0,
+        "unclassified_reactant_partition": 1,
         "zero_temperature_tol": 0
       },
       "rejection_reasons": {
@@ -3240,9 +3240,9 @@
       "max_combined_profile_sem": 1.3455197636573444e-05,
       "planes": 17,
       "rejection_counts": {
-        "genuine_exp_overflow": 0,
         "other": 0,
-        "zero_reactant_partition": 5,
+        "reproduced_reactant_partition": 0,
+        "unclassified_reactant_partition": 5,
         "zero_temperature_tol": 0
       },
       "rejection_reasons": {
@@ -3652,9 +3652,9 @@
       "max_combined_profile_sem": 1.1687620166125395e-05,
       "planes": 17,
       "rejection_counts": {
-        "genuine_exp_overflow": 0,
         "other": 0,
-        "zero_reactant_partition": 4,
+        "reproduced_reactant_partition": 0,
+        "unclassified_reactant_partition": 4,
         "zero_temperature_tol": 0
       },
       "rejection_reasons": {
@@ -4064,9 +4064,9 @@
       "max_combined_profile_sem": 1.2108931399995568e-05,
       "planes": 17,
       "rejection_counts": {
-        "genuine_exp_overflow": 0,
         "other": 0,
-        "zero_reactant_partition": 6,
+        "reproduced_reactant_partition": 0,
+        "unclassified_reactant_partition": 6,
         "zero_temperature_tol": 0
       },
       "rejection_reasons": {
@@ -4476,9 +4476,9 @@
       "max_combined_profile_sem": 5.662906800431959e-06,
       "planes": 17,
       "rejection_counts": {
-        "genuine_exp_overflow": 0,
         "other": 0,
-        "zero_reactant_partition": 3,
+        "reproduced_reactant_partition": 0,
+        "unclassified_reactant_partition": 3,
         "zero_temperature_tol": 0
       },
       "rejection_reasons": {
@@ -4888,9 +4888,9 @@
       "max_combined_profile_sem": 4.912215767866328e-06,
       "planes": 17,
       "rejection_counts": {
-        "genuine_exp_overflow": 0,
         "other": 0,
-        "zero_reactant_partition": 3,
+        "reproduced_reactant_partition": 0,
+        "unclassified_reactant_partition": 3,
         "zero_temperature_tol": 0
       },
       "rejection_reasons": {
@@ -5300,9 +5300,9 @@
       "max_combined_profile_sem": 1.5500576741256204e-05,
       "planes": 17,
       "rejection_counts": {
-        "genuine_exp_overflow": 0,
         "other": 0,
-        "zero_reactant_partition": 2,
+        "reproduced_reactant_partition": 0,
+        "unclassified_reactant_partition": 2,
         "zero_temperature_tol": 0
       },
       "rejection_reasons": {
@@ -5712,9 +5712,9 @@
       "max_combined_profile_sem": 1.7221932159152435e-05,
       "planes": 17,
       "rejection_counts": {
-        "genuine_exp_overflow": 0,
         "other": 0,
-        "zero_reactant_partition": 2,
+        "reproduced_reactant_partition": 0,
+        "unclassified_reactant_partition": 2,
         "zero_temperature_tol": 0
       },
       "rejection_reasons": {
@@ -6124,9 +6124,9 @@
       "max_combined_profile_sem": 1.1946725401041629e-05,
       "planes": 17,
       "rejection_counts": {
-        "genuine_exp_overflow": 0,
         "other": 0,
-        "zero_reactant_partition": 3,
+        "reproduced_reactant_partition": 0,
+        "unclassified_reactant_partition": 3,
         "zero_temperature_tol": 0
       },
       "rejection_reasons": {
@@ -6536,9 +6536,9 @@
       "max_combined_profile_sem": 1.8276238274432946e-05,
       "planes": 17,
       "rejection_counts": {
-        "genuine_exp_overflow": 0,
         "other": 0,
-        "zero_reactant_partition": 5,
+        "reproduced_reactant_partition": 0,
+        "unclassified_reactant_partition": 5,
         "zero_temperature_tol": 0
       },
       "rejection_reasons": {
@@ -6948,9 +6948,9 @@
       "max_combined_profile_sem": 6.773557110848074e-06,
       "planes": 17,
       "rejection_counts": {
-        "genuine_exp_overflow": 0,
         "other": 0,
-        "zero_reactant_partition": 5,
+        "reproduced_reactant_partition": 0,
+        "unclassified_reactant_partition": 5,
         "zero_temperature_tol": 0
       },
       "rejection_reasons": {
@@ -7360,9 +7360,9 @@
       "max_combined_profile_sem": 7.033585769959016e-06,
       "planes": 17,
       "rejection_counts": {
-        "genuine_exp_overflow": 0,
         "other": 0,
-        "zero_reactant_partition": 2,
+        "reproduced_reactant_partition": 0,
+        "unclassified_reactant_partition": 2,
         "zero_temperature_tol": 0
       },
       "rejection_reasons": {
@@ -7964,9 +7964,9 @@
       "max_combined_profile_sem": 2.7821172869700146e-07,
       "planes": 33,
       "rejection_counts": {
-        "genuine_exp_overflow": 0,
         "other": 0,
-        "zero_reactant_partition": 2,
+        "reproduced_reactant_partition": 0,
+        "unclassified_reactant_partition": 2,
         "zero_temperature_tol": 0
       },
       "rejection_reasons": {
@@ -8568,9 +8568,9 @@
       "max_combined_profile_sem": 1.0412736157884886e-06,
       "planes": 33,
       "rejection_counts": {
-        "genuine_exp_overflow": 0,
         "other": 0,
-        "zero_reactant_partition": 9,
+        "reproduced_reactant_partition": 0,
+        "unclassified_reactant_partition": 9,
         "zero_temperature_tol": 0
       },
       "rejection_reasons": {
@@ -9172,9 +9172,9 @@
       "max_combined_profile_sem": 2.2504683632069539e-07,
       "planes": 33,
       "rejection_counts": {
-        "genuine_exp_overflow": 0,
         "other": 0,
-        "zero_reactant_partition": 3,
+        "reproduced_reactant_partition": 0,
+        "unclassified_reactant_partition": 3,
         "zero_temperature_tol": 0
       },
       "rejection_reasons": {
@@ -9776,9 +9776,9 @@
       "max_combined_profile_sem": 2.532734383336377e-07,
       "planes": 33,
       "rejection_counts": {
-        "genuine_exp_overflow": 0,
         "other": 0,
-        "zero_reactant_partition": 4,
+        "reproduced_reactant_partition": 0,
+        "unclassified_reactant_partition": 4,
         "zero_temperature_tol": 0
       },
       "rejection_reasons": {
@@ -10380,9 +10380,9 @@
       "max_combined_profile_sem": 8.531278638193796e-08,
       "planes": 33,
       "rejection_counts": {
-        "genuine_exp_overflow": 0,
         "other": 0,
-        "zero_reactant_partition": 2,
+        "reproduced_reactant_partition": 0,
+        "unclassified_reactant_partition": 2,
         "zero_temperature_tol": 0
       },
       "rejection_reasons": {
@@ -10984,9 +10984,9 @@
       "max_combined_profile_sem": 8.964826323736487e-08,
       "planes": 33,
       "rejection_counts": {
-        "genuine_exp_overflow": 0,
         "other": 0,
-        "zero_reactant_partition": 3,
+        "reproduced_reactant_partition": 0,
+        "unclassified_reactant_partition": 3,
         "zero_temperature_tol": 0
       },
       "rejection_reasons": {
@@ -11588,9 +11588,9 @@
       "max_combined_profile_sem": 9.267606507332855e-07,
       "planes": 33,
       "rejection_counts": {
-        "genuine_exp_overflow": 0,
         "other": 0,
-        "zero_reactant_partition": 4,
+        "reproduced_reactant_partition": 0,
+        "unclassified_reactant_partition": 4,
         "zero_temperature_tol": 0
       },
       "rejection_reasons": {
@@ -12192,9 +12192,9 @@
       "max_combined_profile_sem": 8.961286821879473e-07,
       "planes": 33,
       "rejection_counts": {
-        "genuine_exp_overflow": 0,
         "other": 0,
-        "zero_reactant_partition": 4,
+        "reproduced_reactant_partition": 0,
+        "unclassified_reactant_partition": 4,
         "zero_temperature_tol": 0
       },
       "rejection_reasons": {
@@ -12796,9 +12796,9 @@
       "max_combined_profile_sem": 7.023544355939538e-07,
       "planes": 33,
       "rejection_counts": {
-        "genuine_exp_overflow": 0,
         "other": 0,
-        "zero_reactant_partition": 6,
+        "reproduced_reactant_partition": 0,
+        "unclassified_reactant_partition": 6,
         "zero_temperature_tol": 0
       },
       "rejection_reasons": {
@@ -13400,9 +13400,9 @@
       "max_combined_profile_sem": 5.292496239977685e-07,
       "planes": 33,
       "rejection_counts": {
-        "genuine_exp_overflow": 0,
         "other": 0,
-        "zero_reactant_partition": 6,
+        "reproduced_reactant_partition": 0,
+        "unclassified_reactant_partition": 6,
         "zero_temperature_tol": 0
       },
       "rejection_reasons": {
@@ -14004,9 +14004,9 @@
       "max_combined_profile_sem": 4.696986347938578e-07,
       "planes": 33,
       "rejection_counts": {
-        "genuine_exp_overflow": 0,
         "other": 0,
-        "zero_reactant_partition": 4,
+        "reproduced_reactant_partition": 0,
+        "unclassified_reactant_partition": 4,
         "zero_temperature_tol": 0
       },
       "rejection_reasons": {
@@ -14608,9 +14608,9 @@
       "max_combined_profile_sem": 4.266157409393251e-07,
       "planes": 33,
       "rejection_counts": {
-        "genuine_exp_overflow": 0,
         "other": 0,
-        "zero_reactant_partition": 5,
+        "reproduced_reactant_partition": 0,
+        "unclassified_reactant_partition": 5,
         "zero_temperature_tol": 0
       },
       "rejection_reasons": {
@@ -15212,9 +15212,9 @@
       "max_combined_profile_sem": 9.73514705034701e-07,
       "planes": 33,
       "rejection_counts": {
-        "genuine_exp_overflow": 0,
         "other": 0,
-        "zero_reactant_partition": 4,
+        "reproduced_reactant_partition": 0,
+        "unclassified_reactant_partition": 4,
         "zero_temperature_tol": 0
       },
       "rejection_reasons": {
@@ -15816,9 +15816,9 @@
       "max_combined_profile_sem": 1.4286765178319005e-06,
       "planes": 33,
       "rejection_counts": {
-        "genuine_exp_overflow": 0,
         "other": 0,
-        "zero_reactant_partition": 2,
+        "reproduced_reactant_partition": 0,
+        "unclassified_reactant_partition": 2,
         "zero_temperature_tol": 0
       },
       "rejection_reasons": {
@@ -16420,9 +16420,9 @@
       "max_combined_profile_sem": 8.159944483388138e-07,
       "planes": 33,
       "rejection_counts": {
-        "genuine_exp_overflow": 0,
         "other": 0,
-        "zero_reactant_partition": 3,
+        "reproduced_reactant_partition": 0,
+        "unclassified_reactant_partition": 3,
         "zero_temperature_tol": 0
       },
       "rejection_reasons": {
@@ -17024,9 +17024,9 @@
       "max_combined_profile_sem": 1.1342415119420902e-06,
       "planes": 33,
       "rejection_counts": {
-        "genuine_exp_overflow": 0,
         "other": 0,
-        "zero_reactant_partition": 6,
+        "reproduced_reactant_partition": 0,
+        "unclassified_reactant_partition": 6,
         "zero_temperature_tol": 0
       },
       "rejection_reasons": {
@@ -17628,9 +17628,9 @@
       "max_combined_profile_sem": 5.977229083487853e-07,
       "planes": 33,
       "rejection_counts": {
-        "genuine_exp_overflow": 0,
         "other": 0,
-        "zero_reactant_partition": 4,
+        "reproduced_reactant_partition": 0,
+        "unclassified_reactant_partition": 4,
         "zero_temperature_tol": 0
       },
       "rejection_reasons": {
@@ -18232,9 +18232,9 @@
       "max_combined_profile_sem": 6.21160597946266e-07,
       "planes": 33,
       "rejection_counts": {
-        "genuine_exp_overflow": 0,
         "other": 0,
-        "zero_reactant_partition": 3,
+        "reproduced_reactant_partition": 0,
+        "unclassified_reactant_partition": 3,
         "zero_temperature_tol": 0
       },
       "rejection_reasons": {
@@ -18518,9 +18518,9 @@
       "max_combined_profile_sem": null,
       "planes": 9,
       "rejection_counts": {
-        "genuine_exp_overflow": 0,
         "other": 0,
-        "zero_reactant_partition": 0,
+        "reproduced_reactant_partition": 0,
+        "unclassified_reactant_partition": 0,
         "zero_temperature_tol": 12
       },
       "rejection_reasons": {
@@ -18804,9 +18804,9 @@
       "max_combined_profile_sem": null,
       "planes": 9,
       "rejection_counts": {
-        "genuine_exp_overflow": 0,
         "other": 0,
-        "zero_reactant_partition": 0,
+        "reproduced_reactant_partition": 0,
+        "unclassified_reactant_partition": 0,
         "zero_temperature_tol": 12
       },
       "rejection_reasons": {
@@ -19090,9 +19090,9 @@
       "max_combined_profile_sem": null,
       "planes": 9,
       "rejection_counts": {
-        "genuine_exp_overflow": 0,
         "other": 0,
-        "zero_reactant_partition": 0,
+        "reproduced_reactant_partition": 0,
+        "unclassified_reactant_partition": 0,
         "zero_temperature_tol": 12
       },
       "rejection_reasons": {
@@ -19376,9 +19376,9 @@
       "max_combined_profile_sem": null,
       "planes": 9,
       "rejection_counts": {
-        "genuine_exp_overflow": 0,
         "other": 0,
-        "zero_reactant_partition": 0,
+        "reproduced_reactant_partition": 0,
+        "unclassified_reactant_partition": 0,
         "zero_temperature_tol": 12
       },
       "rejection_reasons": {
@@ -19662,9 +19662,9 @@
       "max_combined_profile_sem": null,
       "planes": 9,
       "rejection_counts": {
-        "genuine_exp_overflow": 0,
         "other": 0,
-        "zero_reactant_partition": 0,
+        "reproduced_reactant_partition": 0,
+        "unclassified_reactant_partition": 0,
         "zero_temperature_tol": 12
       },
       "rejection_reasons": {
@@ -19948,9 +19948,9 @@
       "max_combined_profile_sem": null,
       "planes": 9,
       "rejection_counts": {
-        "genuine_exp_overflow": 0,
         "other": 0,
-        "zero_reactant_partition": 0,
+        "reproduced_reactant_partition": 0,
+        "unclassified_reactant_partition": 0,
         "zero_temperature_tol": 12
       },
       "rejection_reasons": {
@@ -20234,9 +20234,9 @@
       "max_combined_profile_sem": null,
       "planes": 9,
       "rejection_counts": {
-        "genuine_exp_overflow": 0,
         "other": 0,
-        "zero_reactant_partition": 0,
+        "reproduced_reactant_partition": 0,
+        "unclassified_reactant_partition": 0,
         "zero_temperature_tol": 12
       },
       "rejection_reasons": {
@@ -20520,9 +20520,9 @@
       "max_combined_profile_sem": null,
       "planes": 9,
       "rejection_counts": {
-        "genuine_exp_overflow": 0,
         "other": 0,
-        "zero_reactant_partition": 0,
+        "reproduced_reactant_partition": 0,
+        "unclassified_reactant_partition": 0,
         "zero_temperature_tol": 12
       },
       "rejection_reasons": {
@@ -20806,9 +20806,9 @@
       "max_combined_profile_sem": null,
       "planes": 9,
       "rejection_counts": {
-        "genuine_exp_overflow": 0,
         "other": 0,
-        "zero_reactant_partition": 0,
+        "reproduced_reactant_partition": 0,
+        "unclassified_reactant_partition": 0,
         "zero_temperature_tol": 12
       },
       "rejection_reasons": {
@@ -21092,9 +21092,9 @@
       "max_combined_profile_sem": null,
       "planes": 9,
       "rejection_counts": {
-        "genuine_exp_overflow": 0,
         "other": 0,
-        "zero_reactant_partition": 0,
+        "reproduced_reactant_partition": 0,
+        "unclassified_reactant_partition": 0,
         "zero_temperature_tol": 12
       },
       "rejection_reasons": {
@@ -21378,9 +21378,9 @@
       "max_combined_profile_sem": null,
       "planes": 9,
       "rejection_counts": {
-        "genuine_exp_overflow": 0,
         "other": 0,
-        "zero_reactant_partition": 0,
+        "reproduced_reactant_partition": 0,
+        "unclassified_reactant_partition": 0,
         "zero_temperature_tol": 12
       },
       "rejection_reasons": {
@@ -21664,9 +21664,9 @@
       "max_combined_profile_sem": null,
       "planes": 9,
       "rejection_counts": {
-        "genuine_exp_overflow": 0,
         "other": 0,
-        "zero_reactant_partition": 0,
+        "reproduced_reactant_partition": 0,
+        "unclassified_reactant_partition": 0,
         "zero_temperature_tol": 12
       },
       "rejection_reasons": {
@@ -21950,9 +21950,9 @@
       "max_combined_profile_sem": null,
       "planes": 9,
       "rejection_counts": {
-        "genuine_exp_overflow": 0,
         "other": 0,
-        "zero_reactant_partition": 0,
+        "reproduced_reactant_partition": 0,
+        "unclassified_reactant_partition": 0,
         "zero_temperature_tol": 12
       },
       "rejection_reasons": {
@@ -22236,9 +22236,9 @@
       "max_combined_profile_sem": null,
       "planes": 9,
       "rejection_counts": {
-        "genuine_exp_overflow": 0,
         "other": 0,
-        "zero_reactant_partition": 0,
+        "reproduced_reactant_partition": 0,
+        "unclassified_reactant_partition": 0,
         "zero_temperature_tol": 12
       },
       "rejection_reasons": {
@@ -22522,9 +22522,9 @@
       "max_combined_profile_sem": null,
       "planes": 9,
       "rejection_counts": {
-        "genuine_exp_overflow": 0,
         "other": 0,
-        "zero_reactant_partition": 0,
+        "reproduced_reactant_partition": 0,
+        "unclassified_reactant_partition": 0,
         "zero_temperature_tol": 12
       },
       "rejection_reasons": {
@@ -22808,9 +22808,9 @@
       "max_combined_profile_sem": null,
       "planes": 9,
       "rejection_counts": {
-        "genuine_exp_overflow": 0,
         "other": 0,
-        "zero_reactant_partition": 0,
+        "reproduced_reactant_partition": 0,
+        "unclassified_reactant_partition": 0,
         "zero_temperature_tol": 12
       },
       "rejection_reasons": {
@@ -23094,9 +23094,9 @@
       "max_combined_profile_sem": null,
       "planes": 9,
       "rejection_counts": {
-        "genuine_exp_overflow": 0,
         "other": 0,
-        "zero_reactant_partition": 0,
+        "reproduced_reactant_partition": 0,
+        "unclassified_reactant_partition": 0,
         "zero_temperature_tol": 12
       },
       "rejection_reasons": {
@@ -23380,9 +23380,9 @@
       "max_combined_profile_sem": null,
       "planes": 9,
       "rejection_counts": {
-        "genuine_exp_overflow": 0,
         "other": 0,
-        "zero_reactant_partition": 0,
+        "reproduced_reactant_partition": 0,
+        "unclassified_reactant_partition": 0,
         "zero_temperature_tol": 12
       },
       "rejection_reasons": {
@@ -23792,9 +23792,9 @@
       "max_combined_profile_sem": 0.0027114907248612734,
       "planes": 17,
       "rejection_counts": {
-        "genuine_exp_overflow": 0,
         "other": 0,
-        "zero_reactant_partition": 0,
+        "reproduced_reactant_partition": 0,
+        "unclassified_reactant_partition": 0,
         "zero_temperature_tol": 0
       },
       "rejection_reasons": {},
@@ -24202,9 +24202,9 @@
       "max_combined_profile_sem": 0.003349661602997306,
       "planes": 17,
       "rejection_counts": {
-        "genuine_exp_overflow": 0,
         "other": 0,
-        "zero_reactant_partition": 0,
+        "reproduced_reactant_partition": 0,
+        "unclassified_reactant_partition": 0,
         "zero_temperature_tol": 0
       },
       "rejection_reasons": {},
@@ -24612,9 +24612,9 @@
       "max_combined_profile_sem": 0.002869276316741795,
       "planes": 17,
       "rejection_counts": {
-        "genuine_exp_overflow": 0,
         "other": 0,
-        "zero_reactant_partition": 0,
+        "reproduced_reactant_partition": 0,
+        "unclassified_reactant_partition": 0,
         "zero_temperature_tol": 0
       },
       "rejection_reasons": {},
@@ -25022,9 +25022,9 @@
       "max_combined_profile_sem": 0.0033026006962443414,
       "planes": 17,
       "rejection_counts": {
-        "genuine_exp_overflow": 0,
         "other": 0,
-        "zero_reactant_partition": 0,
+        "reproduced_reactant_partition": 0,
+        "unclassified_reactant_partition": 0,
         "zero_temperature_tol": 0
       },
       "rejection_reasons": {},
@@ -25432,9 +25432,9 @@
       "max_combined_profile_sem": 0.002917329265377766,
       "planes": 17,
       "rejection_counts": {
-        "genuine_exp_overflow": 0,
         "other": 0,
-        "zero_reactant_partition": 0,
+        "reproduced_reactant_partition": 0,
+        "unclassified_reactant_partition": 0,
         "zero_temperature_tol": 0
       },
       "rejection_reasons": {},
@@ -25842,9 +25842,9 @@
       "max_combined_profile_sem": 0.004605456644365827,
       "planes": 17,
       "rejection_counts": {
-        "genuine_exp_overflow": 0,
         "other": 0,
-        "zero_reactant_partition": 0,
+        "reproduced_reactant_partition": 0,
+        "unclassified_reactant_partition": 0,
         "zero_temperature_tol": 0
       },
       "rejection_reasons": {},
@@ -26252,9 +26252,9 @@
       "max_combined_profile_sem": 0.0066328323807377226,
       "planes": 17,
       "rejection_counts": {
-        "genuine_exp_overflow": 0,
         "other": 0,
-        "zero_reactant_partition": 0,
+        "reproduced_reactant_partition": 0,
+        "unclassified_reactant_partition": 0,
         "zero_temperature_tol": 0
       },
       "rejection_reasons": {},
@@ -26662,9 +26662,9 @@
       "max_combined_profile_sem": 0.00559468374463062,
       "planes": 17,
       "rejection_counts": {
-        "genuine_exp_overflow": 0,
         "other": 0,
-        "zero_reactant_partition": 0,
+        "reproduced_reactant_partition": 0,
+        "unclassified_reactant_partition": 0,
         "zero_temperature_tol": 0
       },
       "rejection_reasons": {},
@@ -27072,9 +27072,9 @@
       "max_combined_profile_sem": 0.006931737179364714,
       "planes": 17,
       "rejection_counts": {
-        "genuine_exp_overflow": 0,
         "other": 0,
-        "zero_reactant_partition": 0,
+        "reproduced_reactant_partition": 0,
+        "unclassified_reactant_partition": 0,
         "zero_temperature_tol": 0
       },
       "rejection_reasons": {},
@@ -27482,9 +27482,9 @@
       "max_combined_profile_sem": 0.005329102289525476,
       "planes": 17,
       "rejection_counts": {
-        "genuine_exp_overflow": 0,
         "other": 0,
-        "zero_reactant_partition": 0,
+        "reproduced_reactant_partition": 0,
+        "unclassified_reactant_partition": 0,
         "zero_temperature_tol": 0
       },
       "rejection_reasons": {},
@@ -27892,9 +27892,9 @@
       "max_combined_profile_sem": 0.008345371598127411,
       "planes": 17,
       "rejection_counts": {
-        "genuine_exp_overflow": 0,
         "other": 0,
-        "zero_reactant_partition": 0,
+        "reproduced_reactant_partition": 0,
+        "unclassified_reactant_partition": 0,
         "zero_temperature_tol": 0
       },
       "rejection_reasons": {},
@@ -28302,9 +28302,9 @@
       "max_combined_profile_sem": 0.007431939853961244,
       "planes": 17,
       "rejection_counts": {
-        "genuine_exp_overflow": 0,
         "other": 0,
-        "zero_reactant_partition": 0,
+        "reproduced_reactant_partition": 0,
+        "unclassified_reactant_partition": 0,
         "zero_temperature_tol": 0
       },
       "rejection_reasons": {},
@@ -28712,9 +28712,9 @@
       "max_combined_profile_sem": 0.006931244923253137,
       "planes": 17,
       "rejection_counts": {
-        "genuine_exp_overflow": 0,
         "other": 0,
-        "zero_reactant_partition": 0,
+        "reproduced_reactant_partition": 0,
+        "unclassified_reactant_partition": 0,
         "zero_temperature_tol": 0
       },
       "rejection_reasons": {},
@@ -29122,9 +29122,9 @@
       "max_combined_profile_sem": 0.006344757149137649,
       "planes": 17,
       "rejection_counts": {
-        "genuine_exp_overflow": 0,
         "other": 0,
-        "zero_reactant_partition": 0,
+        "reproduced_reactant_partition": 0,
+        "unclassified_reactant_partition": 0,
         "zero_temperature_tol": 0
       },
       "rejection_reasons": {},
@@ -29532,9 +29532,9 @@
       "max_combined_profile_sem": 0.010361730361229709,
       "planes": 17,
       "rejection_counts": {
-        "genuine_exp_overflow": 0,
         "other": 0,
-        "zero_reactant_partition": 0,
+        "reproduced_reactant_partition": 0,
+        "unclassified_reactant_partition": 0,
         "zero_temperature_tol": 0
       },
       "rejection_reasons": {},
@@ -29942,9 +29942,9 @@
       "max_combined_profile_sem": 0.005561758293204578,
       "planes": 17,
       "rejection_counts": {
-        "genuine_exp_overflow": 0,
         "other": 0,
-        "zero_reactant_partition": 0,
+        "reproduced_reactant_partition": 0,
+        "unclassified_reactant_partition": 0,
         "zero_temperature_tol": 0
       },
       "rejection_reasons": {},
@@ -30352,9 +30352,9 @@
       "max_combined_profile_sem": 0.011746153181696159,
       "planes": 17,
       "rejection_counts": {
-        "genuine_exp_overflow": 0,
         "other": 0,
-        "zero_reactant_partition": 0,
+        "reproduced_reactant_partition": 0,
+        "unclassified_reactant_partition": 0,
         "zero_temperature_tol": 0
       },
       "rejection_reasons": {},
@@ -30762,9 +30762,9 @@
       "max_combined_profile_sem": 0.009035202026196443,
       "planes": 17,
       "rejection_counts": {
-        "genuine_exp_overflow": 0,
         "other": 0,
-        "zero_reactant_partition": 0,
+        "reproduced_reactant_partition": 0,
+        "unclassified_reactant_partition": 0,
         "zero_temperature_tol": 0
       },
       "rejection_reasons": {},
@@ -30836,17 +30836,19 @@
       "fcc_vacancy": {}
     },
     "rejection_buckets": {
-      "genuine_exp_overflow": {
-        "count": 0,
-        "error_strings": []
-      },
       "other": {
         "count": 0,
         "error_strings": [],
         "rejects": []
       },
-      "zero_reactant_partition": {
-        "count": 145,
+      "reproduced_reactant_partition": {
+        "count": 1,
+        "error_strings": [
+          "invalid configuration: PAFI reactant partition must be finite and positive"
+        ]
+      },
+      "unclassified_reactant_partition": {
+        "count": 144,
         "error_strings": [
           "invalid configuration: PAFI reactant partition must be finite and positive"
         ]
@@ -35362,7 +35364,7 @@
     },
     "interval_summary": "median [Q1, Q3]",
     "order": "interleaved and reversed on alternating replicates",
-    "rejection_classification": "The generic non-positive reactant-partition error is zero_reactant_partition for retained curved constant-energy paths; any occurrence outside that verified class is counted as genuine_exp_overflow.",
+    "rejection_classification": "A reactant-partition rejection is reproduced_reactant_partition only when the rgflux run has exactly the configuration that the cargo test and repro_zero_width_reactant_partition.py reject with that error; every other run with that error is unclassified_reactant_partition. No record is attributed to a cause the guards do not observe.",
     "replicates_per_engine_cell": 12,
     "sampling_error": "standard error across independent replicates",
     "thread_accounting": {

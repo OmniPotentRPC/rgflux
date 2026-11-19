@@ -166,6 +166,8 @@ python3 bench/pafi/repro_zero_width_reactant_partition.py \
   --native-bin <native-build-dir>/target/release/rgflux-pafi-bench
 ```
 
+`analyze.py` labels a reactant partition rejection `reproduced_reactant_partition` only when the run has exactly the configuration in `REPRODUCED_REJECTION`, the configuration the wrapper builds its command from and checks in the printed record. Every other run with that error is `unclassified_reactant_partition`, because no record shows its cause.
+
 Generate the vacancy path once from the pinned rgsaddle revision:
 
 ```sh

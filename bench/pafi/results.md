@@ -31,7 +31,7 @@ The vacancy campaign adds 288 executions with 0 process failures and 0 retained 
 - Accepted 17-plane straight profiles have median maximum pairwise differences of 0.0293-0.0622.
 - The native global straight-path equilibrium is undefined. LAMMPS finite-periodic median maximum errors are 0.183-0.776; the common interacting-basin comparison remains a regularized diagnostic.
 - Vacancy median maximum profile differences are 0.554-0.581 eV and barrier differences are 0.095-0.12 eV. Static minimum and saddle differences are 9.32e-12 and 1.02e-12 eV.
-- Rejections split into 216 zero-temperature-tolerance cases, 145 zero-width reactant partitions, 0 genuine exponential overflows, and 0 other cases.
+- Rejections by bucket: zero-temperature tolerance 216, reproduced reactant partition 1, unclassified reactant partition 144, other 0.
 
 The table reports the largest sample count. Values are medians with interquartile ranges; profile and barrier differences are paired by seed.
 
@@ -232,53 +232,53 @@ This r<4 table is a deliberately imposed common diagnostic, not either engine's 
 
 | bucket | count | exact error string |
 |---|---:|---|
-| zero_reactant_partition | 145 | `invalid configuration: PAFI reactant partition must be finite and positive` |
+| reproduced_reactant_partition | 1 | `invalid configuration: PAFI reactant partition must be finite and positive` |
 | zero_temperature_tol | 216 | `invalid configuration: PAFI zero-temperature path-force quadrature exceeds tolerance` |
-| genuine_exp_overflow | 0 | none |
+| unclassified_reactant_partition | 144 | `invalid configuration: PAFI reactant partition must be finite and positive` |
 | other | 0 | none |
 
 There are no `other` rejects.
 
 ## Per-cell acceptance
 
-| case | planes | T | threads | samples | rgflux hits | reference hits | zero_temperature_tol | zero_reactant_partition | genuine_exp_overflow | other | Fisher p |
+| case | planes | T | threads | samples | rgflux hits | reference hits | zero_temperature_tol | reproduced_reactant_partition | unclassified_reactant_partition | other | Fisher p |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| curved | 17 | 0.05 | 1 | 64 | 8/12 | 12/12 | 0 | 4 | 0 | 0 | 0.0932 |
-| curved | 17 | 0.05 | 4 | 64 | 7/12 | 12/12 | 0 | 5 | 0 | 0 | 0.0373 |
-| curved | 17 | 0.05 | 1 | 128 | 9/12 | 12/12 | 0 | 3 | 0 | 0 | 0.217 |
-| curved | 17 | 0.05 | 4 | 128 | 5/12 | 12/12 | 0 | 7 | 0 | 0 | 0.00458 |
-| curved | 17 | 0.05 | 1 | 256 | 7/12 | 12/12 | 0 | 5 | 0 | 0 | 0.0373 |
-| curved | 17 | 0.05 | 4 | 256 | 6/12 | 12/12 | 0 | 6 | 0 | 0 | 0.0137 |
-| curved | 17 | 0.1 | 1 | 64 | 11/12 | 12/12 | 0 | 1 | 0 | 0 | 1 |
-| curved | 17 | 0.1 | 4 | 64 | 7/12 | 12/12 | 0 | 5 | 0 | 0 | 0.0373 |
-| curved | 17 | 0.1 | 1 | 128 | 8/12 | 12/12 | 0 | 4 | 0 | 0 | 0.0932 |
-| curved | 17 | 0.1 | 4 | 128 | 6/12 | 12/12 | 0 | 6 | 0 | 0 | 0.0137 |
-| curved | 17 | 0.1 | 1 | 256 | 9/12 | 12/12 | 0 | 3 | 0 | 0 | 0.217 |
-| curved | 17 | 0.1 | 4 | 256 | 9/12 | 12/12 | 0 | 3 | 0 | 0 | 0.217 |
-| curved | 17 | 0.2 | 1 | 64 | 10/12 | 12/12 | 0 | 2 | 0 | 0 | 0.478 |
-| curved | 17 | 0.2 | 4 | 64 | 10/12 | 12/12 | 0 | 2 | 0 | 0 | 0.478 |
-| curved | 17 | 0.2 | 1 | 128 | 9/12 | 12/12 | 0 | 3 | 0 | 0 | 0.217 |
-| curved | 17 | 0.2 | 4 | 128 | 7/12 | 12/12 | 0 | 5 | 0 | 0 | 0.0373 |
-| curved | 17 | 0.2 | 1 | 256 | 7/12 | 12/12 | 0 | 5 | 0 | 0 | 0.0373 |
-| curved | 17 | 0.2 | 4 | 256 | 10/12 | 12/12 | 0 | 2 | 0 | 0 | 0.478 |
-| curved | 33 | 0.05 | 1 | 64 | 10/12 | 12/12 | 0 | 2 | 0 | 0 | 0.478 |
-| curved | 33 | 0.05 | 4 | 64 | 3/12 | 12/12 | 0 | 9 | 0 | 0 | 0.000337 |
-| curved | 33 | 0.05 | 1 | 128 | 9/12 | 12/12 | 0 | 3 | 0 | 0 | 0.217 |
-| curved | 33 | 0.05 | 4 | 128 | 8/12 | 12/12 | 0 | 4 | 0 | 0 | 0.0932 |
-| curved | 33 | 0.05 | 1 | 256 | 10/12 | 12/12 | 0 | 2 | 0 | 0 | 0.478 |
-| curved | 33 | 0.05 | 4 | 256 | 9/12 | 12/12 | 0 | 3 | 0 | 0 | 0.217 |
-| curved | 33 | 0.1 | 1 | 64 | 8/12 | 12/12 | 0 | 4 | 0 | 0 | 0.0932 |
-| curved | 33 | 0.1 | 4 | 64 | 8/12 | 12/12 | 0 | 4 | 0 | 0 | 0.0932 |
-| curved | 33 | 0.1 | 1 | 128 | 6/12 | 12/12 | 0 | 6 | 0 | 0 | 0.0137 |
-| curved | 33 | 0.1 | 4 | 128 | 6/12 | 12/12 | 0 | 6 | 0 | 0 | 0.0137 |
-| curved | 33 | 0.1 | 1 | 256 | 8/12 | 12/12 | 0 | 4 | 0 | 0 | 0.0932 |
-| curved | 33 | 0.1 | 4 | 256 | 7/12 | 12/12 | 0 | 5 | 0 | 0 | 0.0373 |
-| curved | 33 | 0.2 | 1 | 64 | 8/12 | 12/12 | 0 | 4 | 0 | 0 | 0.0932 |
-| curved | 33 | 0.2 | 4 | 64 | 10/12 | 12/12 | 0 | 2 | 0 | 0 | 0.478 |
-| curved | 33 | 0.2 | 1 | 128 | 9/12 | 12/12 | 0 | 3 | 0 | 0 | 0.217 |
-| curved | 33 | 0.2 | 4 | 128 | 6/12 | 12/12 | 0 | 6 | 0 | 0 | 0.0137 |
-| curved | 33 | 0.2 | 1 | 256 | 8/12 | 12/12 | 0 | 4 | 0 | 0 | 0.0932 |
-| curved | 33 | 0.2 | 4 | 256 | 9/12 | 12/12 | 0 | 3 | 0 | 0 | 0.217 |
+| curved | 17 | 0.05 | 1 | 64 | 8/12 | 12/12 | 0 | 1 | 3 | 0 | 0.0932 |
+| curved | 17 | 0.05 | 4 | 64 | 7/12 | 12/12 | 0 | 0 | 5 | 0 | 0.0373 |
+| curved | 17 | 0.05 | 1 | 128 | 9/12 | 12/12 | 0 | 0 | 3 | 0 | 0.217 |
+| curved | 17 | 0.05 | 4 | 128 | 5/12 | 12/12 | 0 | 0 | 7 | 0 | 0.00458 |
+| curved | 17 | 0.05 | 1 | 256 | 7/12 | 12/12 | 0 | 0 | 5 | 0 | 0.0373 |
+| curved | 17 | 0.05 | 4 | 256 | 6/12 | 12/12 | 0 | 0 | 6 | 0 | 0.0137 |
+| curved | 17 | 0.1 | 1 | 64 | 11/12 | 12/12 | 0 | 0 | 1 | 0 | 1 |
+| curved | 17 | 0.1 | 4 | 64 | 7/12 | 12/12 | 0 | 0 | 5 | 0 | 0.0373 |
+| curved | 17 | 0.1 | 1 | 128 | 8/12 | 12/12 | 0 | 0 | 4 | 0 | 0.0932 |
+| curved | 17 | 0.1 | 4 | 128 | 6/12 | 12/12 | 0 | 0 | 6 | 0 | 0.0137 |
+| curved | 17 | 0.1 | 1 | 256 | 9/12 | 12/12 | 0 | 0 | 3 | 0 | 0.217 |
+| curved | 17 | 0.1 | 4 | 256 | 9/12 | 12/12 | 0 | 0 | 3 | 0 | 0.217 |
+| curved | 17 | 0.2 | 1 | 64 | 10/12 | 12/12 | 0 | 0 | 2 | 0 | 0.478 |
+| curved | 17 | 0.2 | 4 | 64 | 10/12 | 12/12 | 0 | 0 | 2 | 0 | 0.478 |
+| curved | 17 | 0.2 | 1 | 128 | 9/12 | 12/12 | 0 | 0 | 3 | 0 | 0.217 |
+| curved | 17 | 0.2 | 4 | 128 | 7/12 | 12/12 | 0 | 0 | 5 | 0 | 0.0373 |
+| curved | 17 | 0.2 | 1 | 256 | 7/12 | 12/12 | 0 | 0 | 5 | 0 | 0.0373 |
+| curved | 17 | 0.2 | 4 | 256 | 10/12 | 12/12 | 0 | 0 | 2 | 0 | 0.478 |
+| curved | 33 | 0.05 | 1 | 64 | 10/12 | 12/12 | 0 | 0 | 2 | 0 | 0.478 |
+| curved | 33 | 0.05 | 4 | 64 | 3/12 | 12/12 | 0 | 0 | 9 | 0 | 0.000337 |
+| curved | 33 | 0.05 | 1 | 128 | 9/12 | 12/12 | 0 | 0 | 3 | 0 | 0.217 |
+| curved | 33 | 0.05 | 4 | 128 | 8/12 | 12/12 | 0 | 0 | 4 | 0 | 0.0932 |
+| curved | 33 | 0.05 | 1 | 256 | 10/12 | 12/12 | 0 | 0 | 2 | 0 | 0.478 |
+| curved | 33 | 0.05 | 4 | 256 | 9/12 | 12/12 | 0 | 0 | 3 | 0 | 0.217 |
+| curved | 33 | 0.1 | 1 | 64 | 8/12 | 12/12 | 0 | 0 | 4 | 0 | 0.0932 |
+| curved | 33 | 0.1 | 4 | 64 | 8/12 | 12/12 | 0 | 0 | 4 | 0 | 0.0932 |
+| curved | 33 | 0.1 | 1 | 128 | 6/12 | 12/12 | 0 | 0 | 6 | 0 | 0.0137 |
+| curved | 33 | 0.1 | 4 | 128 | 6/12 | 12/12 | 0 | 0 | 6 | 0 | 0.0137 |
+| curved | 33 | 0.1 | 1 | 256 | 8/12 | 12/12 | 0 | 0 | 4 | 0 | 0.0932 |
+| curved | 33 | 0.1 | 4 | 256 | 7/12 | 12/12 | 0 | 0 | 5 | 0 | 0.0373 |
+| curved | 33 | 0.2 | 1 | 64 | 8/12 | 12/12 | 0 | 0 | 4 | 0 | 0.0932 |
+| curved | 33 | 0.2 | 4 | 64 | 10/12 | 12/12 | 0 | 0 | 2 | 0 | 0.478 |
+| curved | 33 | 0.2 | 1 | 128 | 9/12 | 12/12 | 0 | 0 | 3 | 0 | 0.217 |
+| curved | 33 | 0.2 | 4 | 128 | 6/12 | 12/12 | 0 | 0 | 6 | 0 | 0.0137 |
+| curved | 33 | 0.2 | 1 | 256 | 8/12 | 12/12 | 0 | 0 | 4 | 0 | 0.0932 |
+| curved | 33 | 0.2 | 4 | 256 | 9/12 | 12/12 | 0 | 0 | 3 | 0 | 0.217 |
 | straight | 9 | 0.05 | 1 | 64 | 0/12 | 12/12 | 12 | 0 | 0 | 0 | 7.4e-07 |
 | straight | 9 | 0.05 | 4 | 64 | 0/12 | 12/12 | 12 | 0 | 0 | 0 | 7.4e-07 |
 | straight | 9 | 0.05 | 1 | 128 | 0/12 | 12/12 | 12 | 0 | 0 | 0 | 7.4e-07 |
@@ -362,8 +362,8 @@ Across accepted headline cells, the largest median static minimum and saddle dif
 
 ## Guard for the rgflux reactant partition rejection
 
-The curved, 17 plane, kBT=0.05, 64 sample run with seed 1036330 is rejected with `PAFI reactant partition must be finite and positive`. The cargo test `reproduces_zero_width_reactant_partition` and `repro_zero_width_reactant_partition.py` are guard tests of that existing behaviour. They exercise unchanged rgflux library code and check only the rejection status and error string, not its cause. A dividing plane at index zero would leave the reactant integration without an interval and give a partition of zero, but the guards do not observe the dividing index. No retained cell is classified as a genuine exponential overflow.
+The guarded configuration is curved, 17 planes, kBT=0.05, 64 samples, seed 1036330. Retained rgflux rejections of it with `PAFI reactant partition must be finite and positive`: 1. The cargo test `reproduces_zero_width_reactant_partition` and `repro_zero_width_reactant_partition.py` are guard tests of that existing behaviour. They exercise unchanged rgflux library code and check only the rejection status and error string, not its cause. A dividing plane at index zero would leave the reactant integration without an interval and give a partition of zero, but the guards do not observe the dividing index. 144 other rejections carry the same error but are unclassified: the guards do not cover their configurations, and no retained record shows whether the cause is a dividing plane at index zero, an exponential overflow or something else.
 
 ## Reproduction
 
-Build and run commands are documented in `bench/pafi/README.md`. Raw logs are intentionally excluded.
+Build and run commands are documented in `bench/pafi/README.md`. The raw records, metadata and toolchain notes are in `bench/pafi/raw`; per run logs and work directories are not kept.
