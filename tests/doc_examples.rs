@@ -147,7 +147,17 @@ fn reference_pafi_defaults_match_the_code() {
         "=max_rounds=",
         format!("=usize= | ={}=", defaults.max_rounds).as_str(),
     );
-    assert_row_contains(&pafi_rows, "=zero_temperature_tol=", "\\approx");
+    let tolerance_row = pafi_rows
+        .iter()
+        .find(|row| row.contains("=zero_temperature_tol="))
+        .expect("zero_temperature_tol row");
+    let (documented, tolerance) = documented_approximate_value(tolerance_row);
+    let difference = (defaults.zero_temperature_tol - documented).abs();
+    assert!(
+        difference <= tolerance,
+        "default {} disagrees with documented {documented} by {difference}, above {tolerance}",
+        defaults.zero_temperature_tol
+    );
     assert_row_contains(
         &pafi_rows,
         "=seed=",
@@ -190,6 +200,30 @@ fn extract_pafi_reference_rows(reference: &str) -> Vec<String> {
         }
     }
     rows
+}
+
+fn documented_approximate_value(row: &str) -> (f64, f64) {
+    let marker = "\\approx ";
+    let start = row
+        .find(marker)
+        .unwrap_or_else(|| panic!("row has no approximate value:\n{row}"));
+    let rest = &row[start + marker.len()..];
+    let mut end = 0usize;
+    for (index, ch) in rest.char_indices() {
+        if ch.is_ascii_digit() || ch == '.' {
+            end = index + ch.len_utf8();
+        } else {
+            break;
+        }
+    }
+    assert!(end > 0, "approximate value is empty:\n{row}");
+    let numeric = &rest[..end];
+    let value = numeric
+        .parse::<f64>()
+        .unwrap_or_else(|_| panic!("could not parse `{numeric}` from:\n{row}"));
+    let decimals = numeric.split('.').nth(1).map(str::len).unwrap_or(0);
+    let unit = 10_f64.powi(-(decimals as i32));
+    (value, 0.5 * unit)
 }
 
 fn assert_row_contains(rows: &[String], field: &str, fragment: &str) {
