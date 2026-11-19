@@ -5,6 +5,12 @@ All notable changes to `rgflux` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- `reactant_log_partition` and `normalized_log_rate` stay authoritative for every finite value. Callers read `reactant_partition`, `normalized_rate`, and `normalized_rate_error` as `Option<f64>`. `reactant_partition` and `normalized_rate` are `None` when the exponential of that finite log overflows or underflows. `normalized_rate_error` holds `exp(normalized_log_rate + ln(sigma_ln))` and is `None` only when that value is not finite. A finite log stays on the profile.
+
 ## [0.1.0] - 2026-11-19
 
 ### Added
@@ -31,4 +37,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `ffs::forward_flux_rate` restores positions, velocities, the periodic cell, the thermostat, and the holonomic constraint on return via `EngineSnapshot`, leaving the stochastic stream where the flux and trial reseeds placed it. `ohtst::optimize_hyperplane` delegates the flux mass to `rgsaddle::flux_mass`, keeping length mismatches on `FluxError::Shape` and non-positive or non-finite masses on `FluxError::InvalidConfig`.
 - `stats::batch_means` returns the first sample as the mean of a series that is constant up to rounding (`SERIES_FLAT_TOL`), avoiding floating-point summation drift on repeated non-dyadic values.
-- Compute the PAFI reactant partition in log space with shifted log-sum-exp trapezoid quadrature so deep free-energy wells no longer overflow the partition integral. Propagate `ln Z_R` through normalized rate evaluation and uncertainty propagation while retaining legacy linear-rate and partition fields for compatibility.
+- Compute the PAFI reactant partition in log space with shifted log-sum-exp trapezoid quadrature so deep free-energy wells no longer overflow the partition integral. Propagate `ln Z_R` through normalized rate evaluation and uncertainty propagation. The linear reactant partition and normalized rate hold the exponentials of those log values.

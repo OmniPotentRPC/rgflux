@@ -96,7 +96,9 @@
 //!   `target_error` and the energy part of the tolerance are in engine energy
 //!   units. `time_step` is in engine time units.
 //! - [`FreeEnergyProfile::normalized_rate`] has units of inverse engine time
-//!   and [`FreeEnergyProfile::reactant_partition`] has the units of `s`.
+//!   and [`FreeEnergyProfile::reactant_partition`] has the units of `s` when
+//!   those values are [`Some`]. The log fields stay finite when the linear
+//!   values overflow or underflow.
 //! - `k_B T` comes from [`crate::engine::ThermostatConfig::thermal_energy`] of
 //!   the engine and must be positive.
 //!
@@ -164,7 +166,7 @@
 //! assert_eq!(profile.free_energy.len(), config.planes);
 //! assert_eq!(profile.free_energy[0], 0.0);
 //! assert!(profile.barrier.is_finite() && profile.barrier_error > 0.0);
-//! assert!(profile.normalized_rate > 0.0);
+//! assert!(profile.normalized_rate.is_some_and(|rate| rate > 0.0));
 //! # Ok::<(), rgflux::FluxError>(())
 //! ```
 //!
@@ -359,17 +361,38 @@ pub struct FreeEnergyProfile {
     pub dividing_index: usize,
     /// Reactant-side normalization
     /// `Z_R = 2 * \int_0^{s*} exp(-F(s) / k_B T) ds`.
-    pub reactant_partition: f64,
+    ///
+    /// `Some` when [`Self::reactant_log_partition`] has a finite positive
+    /// exponential. `None` when that finite log overflows or underflows.
+    /// [`Self::reactant_log_partition`] is authoritative.
+    pub reactant_partition: Option<f64>,
     /// Natural logarithm of the reactant-side normalization
     /// `ln Z_R = ln(2 * \int_0^{s*} exp(-F(s) / k_B T) ds)`.
+    ///
+    /// Any finite value is returned. [`Self::reactant_partition`] is the
+    /// exponential when it fits in a finite positive `f64`.
     pub reactant_log_partition: f64,
     /// Normalized PAFI rate
     /// `k = sqrt(k_B T / (2 pi)) * exp(-F(s*) / k_B T) / Z_R`.
-    pub normalized_rate: f64,
-    /// Natural logarithm of [`Self::normalized_rate`].
+    ///
+    /// `Some` when [`Self::normalized_log_rate`] has a finite positive
+    /// exponential. `None` when that finite log overflows or underflows.
+    /// [`Self::normalized_log_rate`] is authoritative.
+    pub normalized_rate: Option<f64>,
+    /// Natural logarithm of the normalized rate.
+    ///
+    /// Any finite value is returned, including values whose exponential
+    /// overflows or underflows. The exponential of a finite log is never
+    /// negative.
     pub normalized_log_rate: f64,
-    /// Propagated standard error of [`Self::normalized_rate`].
-    pub normalized_rate_error: f64,
+    /// Propagated standard error of the linear normalized rate.
+    ///
+    /// `Some(exp(normalized_log_rate + ln(sigma_ln)))` when that value is
+    /// finite, including `Some(0.0)` when the logarithmic error is zero or the
+    /// linear error underflows. `None` only when that exponential is not
+    /// finite. [`Self::normalized_rate`] may be `None` while this field is
+    /// `Some`.
+    pub normalized_rate_error: Option<f64>,
 }
 
 #[derive(Clone, Debug)]
@@ -770,6 +793,75 @@ fn reactant_log_partition_and_sensitivity(
     Ok((reactant_log_partition, d_ln_zr_d_f))
 }
 
+/// Exponential of a finite logarithm when the result is a finite positive `f64`.
+///
+/// Overflow to positive infinity and underflow to `0` are `None`. The
+/// exponential of a finite real value is never negative, so this path has no
+/// negative-rate rejection.
+fn finite_exponential(log_value: f64) -> Option<f64> {
+    let linear = log_value.exp();
+    if linear.is_finite() && linear > 0.0 {
+        Some(linear)
+    } else {
+        None
+    }
+}
+
+/// `ln(|left * right|)` without forming the product.
+///
+/// A zero factor yields negative infinity. A non finite factor yields `NaN`.
+fn ln_abs_product(left: f64, right: f64) -> f64 {
+    if left == 0.0 || right == 0.0 {
+        f64::NEG_INFINITY
+    } else if left.is_finite() && right.is_finite() {
+        left.abs().ln() + right.abs().ln()
+    } else {
+        f64::NAN
+    }
+}
+
+/// Natural log of the Euclidean norm of terms given by log magnitude.
+///
+/// `0.5 * logsumexp(2 ln|t_i|)`. Scaling by the largest magnitude before the
+/// exponential keeps a square that would overflow in linear space. Every term
+/// zero yields negative infinity.
+fn ln_euclidean_norm(ln_abs_terms: &[f64]) -> f64 {
+    let mut max_log_square = f64::NEG_INFINITY;
+    for &ln_abs in ln_abs_terms {
+        if !ln_abs.is_finite() && ln_abs != f64::NEG_INFINITY {
+            return f64::NAN;
+        }
+        let log_square = ln_abs + ln_abs;
+        if log_square > max_log_square {
+            max_log_square = log_square;
+        }
+    }
+    if max_log_square == f64::NEG_INFINITY {
+        return f64::NEG_INFINITY;
+    }
+    if !max_log_square.is_finite() {
+        return f64::INFINITY;
+    }
+    let mut scaled_sum = 0.0_f64;
+    for &ln_abs in ln_abs_terms {
+        scaled_sum += (ln_abs + ln_abs - max_log_square).exp();
+    }
+    0.5 * (max_log_square + scaled_sum.ln())
+}
+
+/// Linear standard error `exp(log_rate + ln_sigma)`.
+///
+/// The linear rate is not an input. `Some(0.0)` when `ln_sigma` is negative
+/// infinity or the exponential underflows to zero. `None` only when the
+/// exponential is not finite.
+fn linear_rate_error(log_rate: f64, ln_sigma: f64) -> Option<f64> {
+    if ln_sigma == f64::NEG_INFINITY && log_rate.is_finite() {
+        return Some(0.0);
+    }
+    let error = (log_rate + ln_sigma).exp();
+    if error.is_finite() { Some(error) } else { None }
+}
+
 fn integrate_profile(
     arc_lengths: &[f64],
     gradients: &[f64],
@@ -812,7 +904,7 @@ fn integrate_profile(
 
     let (reactant_log_partition, d_ln_zr_d_f) =
         reactant_log_partition_and_sensitivity(arc_lengths, &free_energy, dividing, kbt)?;
-    let reactant_partition = reactant_log_partition.exp();
+    let reactant_partition = finite_exponential(reactant_log_partition);
     let barrier_error = standard_error[dividing];
     let normalized_log_rate = 0.5 * (kbt / TAU).ln() - barrier / kbt - reactant_log_partition;
     if !normalized_log_rate.is_finite() {
@@ -820,13 +912,8 @@ fn integrate_profile(
             "PAFI normalized log rate must be finite",
         ));
     }
-    let normalized_rate = normalized_log_rate.exp();
-    if !normalized_rate.is_finite() || normalized_rate < 0.0 {
-        return Err(FluxError::InvalidConfig(
-            "PAFI normalized rate must be finite",
-        ));
-    }
-    let mut variance_ln_rate = 0.0_f64;
+    let normalized_rate = finite_exponential(normalized_log_rate);
+    let mut ln_abs_terms = Vec::with_capacity(n);
     for (gradient_index, sigma) in gradient_errors.iter().copied().enumerate() {
         let barrier_sensitivity = integration_weights[dividing][gradient_index];
         let mut partition_log_sensitivity = 0.0_f64;
@@ -835,20 +922,20 @@ fn integrate_profile(
                 d_ln_zr_d_f[profile_index] * integration_weights[profile_index][gradient_index];
         }
         let log_rate_sensitivity = -barrier_sensitivity / kbt - partition_log_sensitivity;
-        variance_ln_rate += log_rate_sensitivity * log_rate_sensitivity * sigma * sigma;
+        if !log_rate_sensitivity.is_finite() {
+            return Err(FluxError::InvalidConfig(
+                "PAFI normalized-rate logarithmic error must be finite and non-negative",
+            ));
+        }
+        ln_abs_terms.push(ln_abs_product(log_rate_sensitivity, sigma));
     }
-    let sigma_ln_k = variance_ln_rate.sqrt();
-    if !sigma_ln_k.is_finite() || sigma_ln_k < 0.0 {
+    let ln_sigma = ln_euclidean_norm(&ln_abs_terms);
+    if ln_sigma.is_nan() || (ln_sigma.is_infinite() && ln_sigma.is_sign_positive()) {
         return Err(FluxError::InvalidConfig(
             "PAFI normalized-rate logarithmic error must be finite and non-negative",
         ));
     }
-    let normalized_rate_error = normalized_rate * sigma_ln_k;
-    if !normalized_rate_error.is_finite() || normalized_rate_error < 0.0 {
-        return Err(FluxError::InvalidConfig(
-            "PAFI normalized-rate standard error must be finite and non-negative",
-        ));
-    }
+    let normalized_rate_error = linear_rate_error(normalized_log_rate, ln_sigma);
 
     Ok(FreeEnergyProfile {
         arc_lengths: arc_lengths.to_vec(),
@@ -897,13 +984,22 @@ fn path_force_relative_error(arcs: &[f64], energies: &[f64], gradients: &[f64]) 
 ///   coincide in the mass-weighted metric,
 /// - the thermal energy `k_B T` of the engine is not positive,
 /// - the zero-temperature check of [`PafiConfig::zero_temperature_tol`] fails,
-/// - a plane normal degenerates, or the dividing plane is the first plane so
-///   that the reactant partition `Z_R` is not finite and positive.
+/// - a plane normal degenerates, the dividing plane is the first plane, or
+///   [`FreeEnergyProfile::normalized_log_rate`] is not finite.
+///
+/// [`FreeEnergyProfile::normalized_log_rate`] and
+/// [`FreeEnergyProfile::reactant_log_partition`] are authoritative for every
+/// finite value. A finite log whose exponential overflows or underflows does
+/// not reject the profile. [`FreeEnergyProfile::normalized_rate`] and
+/// [`FreeEnergyProfile::reactant_partition`] are then `None`.
+/// [`FreeEnergyProfile::normalized_rate_error`] is `None` only when
+/// `exp(normalized_log_rate + ln(sigma_ln))` is not finite.
 ///
 /// Returns [`FluxError::EmptyInput`] for an empty coordinate axis and
 /// [`FluxError::Shape`] when the engine masses do not match the path
 /// coordinates. [`FluxError::NonFinite`] reports non-finite path coordinates,
-/// constraint forces, force samples, profile values or plane means. Errors
+/// constraint forces, force samples, free energies, reactant partition
+/// exponents, or plane means. Errors
 /// from the engine and from the batch-means estimator are passed through, for
 /// example an invalid [`StatsConfig`] or an engine that does not report the
 /// constraint force on a constrained step.
@@ -1042,14 +1138,17 @@ mod tests {
         }
     }
 
-    struct InconsistentLinearGradient;
+    #[derive(Clone)]
+    struct InconsistentLinearGradient {
+        gradient: f64,
+    }
 
     impl rgsaddle::PointSurface for InconsistentLinearGradient {
         fn eval(
             &self,
             x: ArrayView1<'_, f64>,
         ) -> Result<(f64, Array1<f64>), rgsaddle::SaddleError> {
-            Ok((x[0], Array1::from_vec(vec![0.98])))
+            Ok((x[0], Array1::from_vec(vec![self.gradient])))
         }
     }
 
@@ -1166,7 +1265,7 @@ mod tests {
         assert_eq!(profile.dividing_index, 1);
         assert_eq!(profile.barrier, 1.0);
         assert_eq!(profile.barrier_error, 0.0);
-        assert_eq!(profile.normalized_rate_error, 0.0);
+        assert_eq!(profile.normalized_rate_error, Some(0.0));
     }
 
     fn quartic_gradient_slope(x: f64) -> f64 {
@@ -1306,6 +1405,38 @@ mod tests {
             epsilon = f64::EPSILON * expected_ln_partition.abs()
         );
         assert!(profile.normalized_log_rate.is_finite());
+        assert!(profile.reactant_log_partition > f64::MAX.ln());
+        assert!(profile.reactant_partition.is_none());
+        assert_eq!(profile.normalized_log_rate.exp(), 0.0);
+        assert!(profile.normalized_rate.is_none());
+        assert_eq!(profile.normalized_rate_error, Some(0.0));
+    }
+
+    #[test]
+    fn deep_well_linear_error_does_not_collapse() {
+        let arcs = [0.0, 1.0, 2.0, 3.0];
+        let gradients = [-800.0, -800.0, 800.0, 820.0];
+        let errors = [0.2, 0.2, 0.2, 0.2];
+        let profile = integrate_profile(&arcs, &gradients, &errors, 1.0).expect("profile");
+        assert!(profile.normalized_log_rate.is_finite());
+        assert_eq!(profile.normalized_log_rate.exp(), 0.0);
+        assert!(profile.normalized_rate.is_none());
+        assert_eq!(profile.normalized_rate_error, Some(0.0));
+        assert!(profile.reactant_log_partition > f64::MAX.ln());
+        assert!(profile.reactant_partition.is_none());
+    }
+
+    #[test]
+    fn log_rate_above_the_f64_range_is_accepted() {
+        let arcs = [0.0, (-400.0_f64).exp()];
+        let gradients = [2.0, 2.0];
+        let errors = [1.0, 1.0];
+        let profile = integrate_profile(&arcs, &gradients, &errors, f64::MAX).expect("profile");
+        assert!(profile.normalized_log_rate.is_finite());
+        assert!(profile.normalized_log_rate > f64::MAX.ln());
+        assert!(profile.normalized_rate.is_none());
+        assert_eq!(profile.normalized_rate_error, Some(0.0));
+        assert!(profile.reactant_partition.is_some());
     }
 
     #[test]
@@ -1324,17 +1455,23 @@ mod tests {
         }
         let legacy_partition = 2.0 * legacy_half_partition;
         let legacy_rate = (1.2 / TAU).sqrt() * (-profile.barrier / 1.2).exp() / legacy_partition;
+        let reactant_partition = profile
+            .reactant_partition
+            .expect("representable reactant partition");
+        let normalized_rate = profile.normalized_rate.expect("representable rate");
 
         assert_abs_diff_eq!(
-            profile.reactant_partition,
+            reactant_partition,
             legacy_partition,
             epsilon = f64::EPSILON * legacy_partition.abs()
         );
         assert_abs_diff_eq!(
-            profile.normalized_rate,
+            normalized_rate,
             legacy_rate,
             epsilon = f64::EPSILON * legacy_rate.abs()
         );
+        assert!(profile.normalized_log_rate < 0.0);
+        assert!(normalized_rate > 0.0);
         assert_abs_diff_eq!(
             profile.reactant_log_partition,
             legacy_partition.ln(),
@@ -1343,14 +1480,210 @@ mod tests {
     }
 
     #[test]
+    fn reactant_partition_sensitivity_matches_finite_differences() {
+        let arcs = [0.0, 0.5, 1.0, 1.5];
+        let gradients = [0.3, 0.1, -0.4, -0.6];
+        let kbt = 1.2;
+        let (free_energy, _, dividing) = integrate_means(&arcs, &gradients).expect("means");
+        let (_, sensitivity) =
+            reactant_log_partition_and_sensitivity(&arcs, &free_energy, dividing, kbt)
+                .expect("partition");
+        let step = f64::EPSILON.cbrt();
+        for index in 0..free_energy.len() {
+            let mut up = free_energy.clone();
+            let mut down = free_energy.clone();
+            up[index] += step;
+            down[index] -= step;
+            let (ln_up, _) =
+                reactant_log_partition_and_sensitivity(&arcs, &up, dividing, kbt).expect("up");
+            let (ln_down, _) =
+                reactant_log_partition_and_sensitivity(&arcs, &down, dividing, kbt).expect("down");
+            let fd = (ln_up - ln_down) / (2.0 * step);
+            let scale = sensitivity[index].abs().max(1.0);
+            let discrepancy = (fd - sensitivity[index]).abs();
+            assert!(
+                discrepancy <= step * scale,
+                "d ln Z / d F[{index}] analytic {} fd {fd} discrepancy {discrepancy}",
+                sensitivity[index]
+            );
+        }
+    }
+
+    #[test]
+    fn normalized_rate_error_matches_finite_differences() {
+        let arcs = [0.0, 0.5, 1.0, 1.5];
+        let gradients = [0.3, 0.1, -0.4, -0.6];
+        let errors = [0.02, 0.03, 0.01, 0.02];
+        let kbt = 1.2;
+        let profile = integrate_profile(&arcs, &gradients, &errors, kbt).expect("profile");
+        let rate = profile.normalized_rate.expect("finite rate");
+        let reported = profile.normalized_rate_error.expect("finite rate error");
+        let step = f64::EPSILON.cbrt();
+        let mut variance = 0.0_f64;
+        for index in 0..gradients.len() {
+            let mut up = gradients;
+            let mut down = gradients;
+            up[index] += step;
+            down[index] -= step;
+            let ln_up = integrate_profile(&arcs, &up, &errors, kbt)
+                .expect("up")
+                .normalized_log_rate;
+            let ln_down = integrate_profile(&arcs, &down, &errors, kbt)
+                .expect("down")
+                .normalized_log_rate;
+            let slope = (ln_up - ln_down) / (2.0 * step);
+            variance += slope * slope * errors[index] * errors[index];
+        }
+        let fd_error = rate * variance.sqrt();
+        let scale = reported.abs().max(rate);
+        let discrepancy = (fd_error - reported).abs();
+        assert!(
+            discrepancy <= step * scale,
+            "normalized_rate_error {reported} fd {fd_error} discrepancy {discrepancy}"
+        );
+    }
+
+    /// Relative tolerance for a log space rate error against the delta method.
+    const NORMALIZED_RATE_ERROR_RELATIVE_TOLERANCE: f64 = 16.0 * f64::EPSILON;
+
+    /// The rounded delta method error `5.26e-156` sits this far from the
+    /// value carried through `f64` operations.
+    const FAR_BELOW_RANGE_RATE_ERROR_TOLERANCE: f64 = 256.0 * f64::EPSILON;
+
+    fn assert_relative_close(actual: f64, expected: f64, tolerance: f64) {
+        let scale = expected.abs();
+        let discrepancy = (actual - expected).abs();
+        assert!(
+            scale > 0.0 && discrepancy <= tolerance * scale,
+            "actual {actual} expected {expected} discrepancy {discrepancy} tolerance {tolerance}"
+        );
+    }
+
+    fn rate_far_below_linear_range_inputs() -> (f64, f64, f64) {
+        let plane_error: f64 = 1.0e200;
+        let target_log_rate = -400.0 - f64::MAX.ln();
+        let ln_sigma = 5.26e-156_f64.ln() - target_log_rate;
+        let ln_term = ln_sigma - 0.5 * 2.0_f64.ln();
+        let kbt = (0.5_f64.ln() + plane_error.ln() - ln_term).exp();
+        let barrier_over_kbt = 0.5 * (kbt / TAU).ln() + 400.0 + f64::MAX.ln();
+        let gradient = barrier_over_kbt * kbt;
+        (kbt, gradient, plane_error)
+    }
+
+    /// Linear product `rate * sigma` from summing squares, the previous
+    /// in range evaluation.
+    fn previous_linear_rate_error(
+        arcs: &[f64],
+        gradients: &[f64],
+        errors: &[f64],
+        kbt: f64,
+        rate: f64,
+    ) -> f64 {
+        let n = arcs.len();
+        let (free_energy, _, dividing) = integrate_means(arcs, gradients).expect("means");
+        let (_, d_ln_zr_d_f) =
+            reactant_log_partition_and_sensitivity(arcs, &free_energy, dividing, kbt)
+                .expect("partition");
+        let mut weights = vec![vec![0.0_f64; n]; n];
+        for index in 1..n {
+            weights[index] = weights[index - 1].clone();
+            let ds = arcs[index] - arcs[index - 1];
+            weights[index][index - 1] += 0.5 * ds;
+            weights[index][index] += 0.5 * ds;
+        }
+        let mut variance = 0.0_f64;
+        for (gradient_index, sigma) in errors.iter().copied().enumerate() {
+            let mut partition_log_sensitivity = 0.0_f64;
+            for profile_index in 0..=dividing {
+                partition_log_sensitivity +=
+                    d_ln_zr_d_f[profile_index] * weights[profile_index][gradient_index];
+            }
+            let sensitivity = -weights[dividing][gradient_index] / kbt - partition_log_sensitivity;
+            variance += sensitivity * sensitivity * sigma * sigma;
+        }
+        rate * variance.sqrt()
+    }
+
+    #[test]
+    fn normalized_rate_error_matches_delta_method_below_linear_range() {
+        // The mathematical rate is `exp(-400) / f64::MAX`. Each
+        // `sensitivity * sigma` overflows, and the delta method error
+        // stays near `5.26e-156`.
+        let (kbt, gradient, plane_error) = rate_far_below_linear_range_inputs();
+        let arcs = [0.0, 1.0];
+        let gradients = [gradient, gradient];
+        let errors = [plane_error, plane_error];
+        let profile = integrate_profile(&arcs, &gradients, &errors, kbt).expect("profile");
+        let target_log_rate = -400.0 - f64::MAX.ln();
+        assert_eq!(profile.normalized_log_rate, target_log_rate);
+        assert_eq!(profile.normalized_log_rate.exp(), 0.0);
+        assert!(profile.normalized_rate.is_none());
+        let reported = profile
+            .normalized_rate_error
+            .expect("representable rate error");
+        let ln_sigma = (0.5 / kbt).ln() + plane_error.ln() + 0.5 * 2.0_f64.ln();
+        let expected = (profile.normalized_log_rate + ln_sigma).exp();
+        assert_relative_close(expected, 5.26e-156, FAR_BELOW_RANGE_RATE_ERROR_TOLERANCE);
+        assert_relative_close(reported, expected, NORMALIZED_RATE_ERROR_RELATIVE_TOLERANCE);
+    }
+
+    #[test]
+    fn normalized_rate_error_survives_linear_underflow() {
+        let arcs = [0.0, 1.0, 2.0, 3.0];
+        let gradients = [-800.0, -800.0, 800.0, 820.0];
+        let errors = [0.2, 0.2, 0.2, 0.2];
+        let profile = integrate_profile(&arcs, &gradients, &errors, 1.0).expect("profile");
+        assert!(profile.normalized_log_rate.is_finite());
+        assert_eq!(profile.normalized_log_rate.exp(), 0.0);
+        assert!(profile.normalized_rate.is_none());
+        assert_eq!(profile.normalized_rate_error, Some(0.0));
+    }
+
+    #[test]
+    fn normalized_rate_error_matches_the_in_range_linear_product() {
+        let arcs = [0.0, 0.5, 1.0, 1.5];
+        let gradients = [0.3, 0.1, -0.4, -0.6];
+        let errors = [0.02, 0.03, 0.01, 0.02];
+        let kbt = 1.2;
+        let profile = integrate_profile(&arcs, &gradients, &errors, kbt).expect("profile");
+        let rate = profile.normalized_rate.expect("finite rate");
+        let reported = profile.normalized_rate_error.expect("finite rate error");
+        let previous = previous_linear_rate_error(&arcs, &gradients, &errors, kbt, rate);
+        assert_relative_close(reported, previous, NORMALIZED_RATE_ERROR_RELATIVE_TOLERANCE);
+    }
+
+    #[test]
     fn non_finite_profile_input_is_rejected() {
         let arcs = [0.0, 1.0, 2.0];
         let gradients = [0.0, f64::NAN, 1.0];
-        let errors = [0.0, 0.0, 0.0];
-        let result = integrate_profile(&arcs, &gradients, &errors, 1.0);
+        let integrated = integrate_means(&arcs, &gradients);
+        assert_eq!(
+            integrated,
+            Err(FluxError::NonFinite("PAFI integrated free energy"))
+        );
+        let profile = integrate_profile(&arcs, &gradients, &[0.0, 0.0, 0.0], 1.0);
+        assert_eq!(
+            profile,
+            Err(FluxError::NonFinite("PAFI integrated free energy"))
+        );
+    }
+
+    #[test]
+    fn non_finite_reactant_partition_exponent_is_rejected() {
+        // `f64::MIN_POSITIVE / 4` is a positive subnormal. The free energy
+        // stays finite, and `-F / kT` overflows, so the failure is the
+        // reactant partition rather than `integrate_means`.
+        let arcs = [0.0, 1.0];
+        let gradients = [1.0, 1.0];
+        let thermal = f64::MIN_POSITIVE * 0.25;
+        assert!(thermal.is_finite() && thermal > 0.0);
+        assert!(!(1.0 / thermal).is_finite());
+        let (free_energy, _, _) = integrate_means(&arcs, &gradients).expect("finite free energy");
+        assert!(free_energy.iter().all(|value| value.is_finite()));
+        let result = integrate_profile(&arcs, &gradients, &[0.0, 0.0], thermal);
         assert_eq!(
             result,
-            Err(FluxError::NonFinite("PAFI integrated free energy"))
+            Err(FluxError::NonFinite("PAFI reactant partition exponent"))
         );
     }
 
@@ -1370,9 +1703,23 @@ mod tests {
 
     #[test]
     fn default_tolerance_scales_with_planes_for_consistency_check() {
+        // A 2% path-force error is already above the old fixed default of 0.01,
+        // so that profile does not tell scaling apart from the fixed default.
+        // The error here is halfway between 0.01 and the scaled tolerance.
+        let planes = 33usize;
+        let scaled = default_zero_temperature_tol(planes);
+        let old_fixed = 0.01_f64;
+        assert!(
+            scaled < old_fixed,
+            "scaled tolerance {scaled} is not stricter than the old fixed default {old_fixed}"
+        );
+        let relative_error = 0.5 * (scaled + old_fixed);
+        let surface = InconsistentLinearGradient {
+            gradient: 1.0 - relative_error,
+        };
         let path = Array2::from_shape_vec((2, 1), vec![0.0, 1.0]).expect("shape");
         let mut engine = NativeEngine::new(
-            InconsistentLinearGradient,
+            surface.clone(),
             NativeConfig::default()
                 .with_masses(Array1::from_vec(vec![1.0]))
                 .with_thermostat(ThermostatConfig::default().with_temperature(0.2))
@@ -1380,7 +1727,7 @@ mod tests {
         )
         .expect("engine");
         let config = PafiConfig::default()
-            .with_planes(33)
+            .with_planes(planes)
             .with_burn_in_steps(1)
             .with_sample_steps(2);
         let result = pafi_profile(&mut engine, path.view(), &config);
@@ -1391,21 +1738,24 @@ mod tests {
             ))
         );
 
-        let mut legacy_engine = NativeEngine::new(
-            InconsistentLinearGradient,
+        let mut fixed_engine = NativeEngine::new(
+            surface,
             NativeConfig::default()
                 .with_masses(Array1::from_vec(vec![1.0]))
                 .with_thermostat(ThermostatConfig::default().with_temperature(0.2))
                 .with_seed(23),
         )
         .expect("engine");
-        let legacy_like = PafiConfig::default()
-            .with_planes(33)
-            .with_zero_temperature_tol(0.0257)
+        let fixed_default = PafiConfig::default()
+            .with_planes(planes)
+            .with_zero_temperature_tol(old_fixed)
             .with_burn_in_steps(1)
             .with_sample_steps(2)
             .with_stats(StatsConfig::default().with_min_batches(2));
-        assert!(pafi_profile(&mut legacy_engine, path.view(), &legacy_like).is_ok());
+        assert!(
+            pafi_profile(&mut fixed_engine, path.view(), &fixed_default).is_ok(),
+            "the old fixed default {old_fixed} should accept relative error {relative_error}"
+        );
     }
 
     #[test]
