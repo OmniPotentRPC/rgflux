@@ -371,6 +371,7 @@ pub struct FreeEnergyProfile {
     /// Propagated standard error of [`Self::normalized_rate`].
     pub normalized_rate_error: f64,
     gradients: Vec<f64>,
+    gradient_errors: Vec<f64>,
 }
 
 impl FreeEnergyProfile {
@@ -378,6 +379,12 @@ impl FreeEnergyProfile {
     #[must_use]
     pub fn gradients(&self) -> &[f64] {
         &self.gradients
+    }
+
+    /// Standard errors of [`Self::gradients`] at each hyperplane in [`Self::arc_lengths`].
+    #[must_use]
+    pub fn gradient_errors(&self) -> &[f64] {
+        &self.gradient_errors
     }
 }
 
@@ -913,6 +920,7 @@ fn integrate_profile(
         normalized_log_rate,
         normalized_rate_error,
         gradients: gradients.to_vec(),
+        gradient_errors: gradient_errors.to_vec(),
     })
 }
 
@@ -1842,6 +1850,7 @@ fn integrate_spectral_profile(
         normalized_log_rate,
         normalized_rate_error,
         gradients: gradients.to_vec(),
+        gradient_errors: gradient_errors.to_vec(),
     })
 }
 
@@ -1853,16 +1862,31 @@ pub fn estimate_spectral_tail(
     gradients: &[f64],
     target_se: f64,
 ) -> Result<SpectralTailReport, FluxError> {
+    let zero_errors = vec![0.0_f64; arc_lengths.len()];
+    estimate_spectral_tail_with_errors(arc_lengths, gradients, &zero_errors, target_se)
+}
+
+/// Fit the mean constraint force and free energy with a Chebyshev / cosine expansion
+/// on `arc_lengths` while attenuating finite-difference slope noise by the Wiener
+/// signal-to-noise factor of `gradient_errors` (matching [`integrate_spectral_profile`]).
+///
+/// When `gradient_errors` are all zero, this is identical to [`estimate_spectral_tail`].
+pub fn estimate_spectral_tail_with_errors(
+    arc_lengths: &[f64],
+    gradients: &[f64],
+    gradient_errors: &[f64],
+    target_se: f64,
+) -> Result<SpectralTailReport, FluxError> {
     let n = arc_lengths.len();
     if n < 2 {
         return Err(FluxError::InvalidConfig(
             "estimate_spectral_tail requires at least 2 planes",
         ));
     }
-    if gradients.len() != n {
+    if gradients.len() != n || gradient_errors.len() != n {
         return Err(FluxError::Shape {
             expected: n,
-            got: gradients.len(),
+            got: gradients.len().max(gradient_errors.len()),
             context: "PAFI spectral-tail inputs",
         });
     }
@@ -1883,6 +1907,11 @@ pub fn estimate_spectral_tail(
         if !gradients[i].is_finite() {
             return Err(FluxError::NonFinite("estimate_spectral_tail gradients"));
         }
+        if !gradient_errors[i].is_finite() || gradient_errors[i] < 0.0 {
+            return Err(FluxError::InvalidConfig(
+                "PAFI gradient standard errors must be finite and non-negative",
+            ));
+        }
     }
 
     let s0 = arc_lengths[0];
@@ -1895,10 +1924,39 @@ pub fn estimate_spectral_tail(
     }
 
     let d_basis = hermite_slope_basis(arc_lengths);
-    let slopes: Vec<f64> = (0..n)
+    let raw_slopes: Vec<f64> = (0..n)
         .map(|i| (0..n).map(|j| d_basis[i][j] * gradients[j]).sum())
         .collect();
     let p = n - 1;
+    let mut alphas = vec![1.0_f64; p];
+    for k in 0..p {
+        let diff_k = raw_slopes[k] - raw_slopes[k + 1];
+        let mut var_diff = 0.0_f64;
+        for j in 0..n {
+            let db = d_basis[k][j] - d_basis[k + 1][j];
+            var_diff += db * db * gradient_errors[j] * gradient_errors[j];
+        }
+        if var_diff > 0.0 {
+            let sig2 = diff_k * diff_k;
+            alphas[k] = if sig2 + var_diff > 0.0 {
+                sig2 / (sig2 + var_diff)
+            } else {
+                0.0
+            };
+        }
+    }
+    let slopes: Vec<f64> = (0..n)
+        .map(|i| {
+            let w_i = if i == 0 {
+                alphas[0]
+            } else if i == n - 1 {
+                alphas[p - 1]
+            } else {
+                0.5 * (alphas[i - 1] + alphas[i])
+            };
+            w_i * raw_slopes[i]
+        })
+        .collect();
     let p_f64 = p as f64;
     let mut lobatto_forces = vec![0.0_f64; p + 1];
     for (j, slot) in lobatto_forces.iter_mut().enumerate() {
@@ -1941,10 +1999,11 @@ pub fn estimate_spectral_tail(
 
     let to_x = |s: f64| -> f64 { 2.0 * (s - s0) / total_length - 1.0 };
 
+    let mean_alpha = alphas.iter().copied().sum::<f64>() / p_f64;
     let tail_start = 3.max(p);
     let mut spectral_tail_sum = 0.0_f64;
     for &cm in &profile_coefficients[tail_start..=(p + 1)] {
-        spectral_tail_sum += cm.abs();
+        spectral_tail_sum += mean_alpha * cm.abs();
     }
 
     let (_, trap_barrier, _) = integrate_means(arc_lengths, gradients)?;
@@ -1960,12 +2019,12 @@ pub fn estimate_spectral_tail(
         let sa = arc_lengths[k];
         let sb = arc_lengths[k + 1];
         let ds = sb - sa;
-        let hermite_quad_diff = (ds * ds / 12.0) * (slopes[k] - slopes[k + 1]).abs();
+        let hermite_quad_diff = (ds * ds / 12.0) * (raw_slopes[k] - raw_slopes[k + 1]).abs();
         let trap_inc = 0.5 * (gradients[k] + gradients[k + 1]) * ds;
         let fa = chebyshev_eval(&profile_coefficients, to_x(sa));
         let fb = chebyshev_eval(&profile_coefficients, to_x(sb));
         let spec_inc = fb - fa;
-        let quad_diff = hermite_quad_diff.max((spec_inc - trap_inc).abs());
+        let quad_diff = alphas[k] * hermite_quad_diff.max((spec_inc - trap_inc).abs());
         total_quad_diff += quad_diff;
 
         let endpoint_max = fa.max(fb);
@@ -1979,15 +2038,17 @@ pub fn estimate_spectral_tail(
                 peak_gap = peak_gap.max(f_sub - endpoint_max);
             }
         }
+        let damped_peak_gap = alphas[k] * peak_gap;
         // Weight the global Chebyshev tail across intervals by local force variation |dg| * ds.
         let local_variation = (gradients[k + 1] - gradients[k]).abs() * ds / total_length;
         let local_tail_var = spectral_tail_sum * local_variation;
-        max_peak_gap = max_peak_gap.max(peak_gap);
-        interval_errors[k] = quad_diff + peak_gap + local_tail_var;
+        max_peak_gap = max_peak_gap.max(damped_peak_gap);
+        interval_errors[k] = quad_diff + damped_peak_gap + local_tail_var;
     }
 
-    let raw_tail_bound =
-        (spec_barrier - trap_barrier).abs().max(total_quad_diff) + spectral_tail_sum + max_peak_gap;
+    let raw_tail_bound = (mean_alpha * (spec_barrier - trap_barrier).abs()).max(total_quad_diff)
+        + spectral_tail_sum
+        + max_peak_gap;
     let scale = 1.0 + trap_barrier.abs().max(spec_barrier.abs());
     let rounding_floor = 64.0 * f64::EPSILON * scale;
     let tail_bound = if raw_tail_bound <= rounding_floor {
@@ -2329,7 +2390,8 @@ pub fn pafi_profile_adaptive<E: DynamicsEngine + ?Sized>(
                         .unwrap_or(64.0 * f64::EPSILON * (1.0 + profile.barrier.abs()))
                 };
 
-                let tail = estimate_spectral_tail(&arcs, &gradients, stop_threshold)?;
+                let tail =
+                    estimate_spectral_tail_with_errors(&arcs, &gradients, &errors, stop_threshold)?;
                 let monitor_inputs = MonitorInputs::new(&arcs)
                     .with_force_gradients(&gradients)
                     .with_path_curvatures(&curvatures)
