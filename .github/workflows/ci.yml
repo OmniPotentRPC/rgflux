@@ -74,7 +74,7 @@ jobs:
           python3 bench/pafi/analyze.py \
             --validate-results bench/pafi/results.json
       - name: Public items are documented
-        run: cargo rustdoc --locked --features rgpot,rgpot-session -- -D missing_docs
+        run: cargo rustdoc --locked --features rgpot,rgpot-session --lib -- -D missing_docs
       - name: Rustdoc builds without warnings
         run: ci/check_rustdoc.sh
       - name: Reject machine-local paths
