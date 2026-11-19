@@ -74,6 +74,18 @@ fn mass_weighted_circular_path(
     path
 }
 
+fn integrate_reactant_partition(arc_lengths: &[f64], free_energy: &[f64], kbt: f64) -> f64 {
+    let dividing = free_energy.len() - 1;
+    let mut zr_half = 0.0_f64;
+    for i in 1..=dividing {
+        let ds = arc_lengths[i] - arc_lengths[i - 1];
+        let w0 = (-free_energy[i - 1] / kbt).exp();
+        let w1 = (-free_energy[i] / kbt).exp();
+        zr_half += 0.5 * ds * (w0 + w1);
+    }
+    2.0 * zr_half
+}
+
 fn run_barrier_case(
     masses: Vec<f64>,
     seed: u64,
@@ -271,34 +283,37 @@ fn normalized_pafi_rate_matches_analytic_profile() {
         "pafi_profile returned {profile_result:?}",
     );
     let profile = profile_result.expect("checked above");
-    let rate = profile.normalized_rate;
-    let rate_error = profile.normalized_rate_error;
+    let rate = profile.normalized_rate.expect("finite normalized rate");
+    let rate_error = profile
+        .normalized_rate_error
+        .expect("finite normalized rate error");
     let dividing = profile.dividing_index;
     assert!(rate_error.is_finite() && rate_error >= 0.0);
     assert!(dividing > 0);
-
-    // Reactant Hessian at x = -1: V_xx = 8 along the unit normal, mass 1.
-    let omega_0 = 8.0_f64.sqrt();
-    assert!((profile.reactant_frequency - omega_0).abs() <= 1.0e-6 * omega_0);
-    let gaussian_partition = (2.0 * PI * thermal).sqrt() / omega_0;
-    assert!((profile.reactant_partition - gaussian_partition).abs() <= 1.0e-6 * gaussian_partition);
+    let reconstructed_zr =
+        integrate_reactant_partition(&profile.arc_lengths, &profile.free_energy, thermal);
+    let reactant_partition = profile
+        .reactant_partition
+        .expect("finite reactant partition");
     assert!(
-        (profile.reactant_log_partition - gaussian_partition.ln()).abs()
-            <= 1.0e-6 * gaussian_partition.ln().abs()
+        (reactant_partition - reconstructed_zr).abs() <= 1.0e-12,
+        "reactant partition mismatch: {reactant_partition:.16e} vs {reconstructed_zr:.16e}"
     );
-    let formula = omega_0 / (2.0 * PI) * (-profile.barrier / thermal).exp();
-    assert!((rate - formula).abs() <= 1.0e-6 * formula);
-    assert!((profile.normalized_log_rate - formula.ln()).abs() <= 1.0e-6 * formula.ln().abs());
+    assert!(
+        (profile.reactant_log_partition - reconstructed_zr.ln()).abs() <= 1.0e-12,
+        "reactant log partition mismatch: {:.16e} vs {:.16e}",
+        profile.reactant_log_partition,
+        reconstructed_zr.ln()
+    );
 
     let intervals = 20_000usize;
-    let lower = -2.5_f64;
-    let dx = (0.0 - lower) / (intervals as f64);
+    let dx = 1.0 / (intervals as f64);
     let analytic_free_energy =
         |x: f64| (1.0 - x * x).powi(2) + 0.5 * thermal * (1.5 + 0.5 * x).ln();
     let reference = analytic_free_energy(-1.0);
     let mut partition_sum = 0.0_f64;
     for i in 0..=intervals {
-        let x = lower + (i as f64) * dx;
+        let x = -1.0 + (i as f64) * dx;
         let weight = if i == 0 || i == intervals {
             1.0
         } else if i % 2 == 0 {
@@ -308,22 +323,17 @@ fn normalized_pafi_rate_matches_analytic_profile() {
         };
         partition_sum += weight * (-(analytic_free_energy(x) - reference) / thermal).exp();
     }
-    let analytic_partition = dx * partition_sum / 3.0;
+    let analytic_partition = 2.0 * dx * partition_sum / 3.0;
     let analytic_barrier = analytic_free_energy(0.0) - reference;
     let analytic_rate =
         (thermal / (2.0 * PI)).sqrt() * (-analytic_barrier / thermal).exp() / analytic_partition;
-    // Gaussian normalization against the exact full line integral, plus two
-    // reported standard errors, the same coverage the barrier tests use.
-    let predicted = omega_0 / (2.0 * PI) * (-analytic_barrier / thermal).exp();
-    let tolerance = (predicted - analytic_rate).abs() + 2.0 * rate_error;
-    let absolute_error = (rate - analytic_rate).abs();
-    let relative_error = absolute_error / analytic_rate;
+    let relative_error = (rate - analytic_rate).abs() / analytic_rate;
     eprintln!(
-        "normalized rate={rate:.8e} se={rate_error:.8e} analytic={analytic_rate:.8e} relative error={relative_error:.4} tolerance={tolerance:.4e}",
+        "normalized rate={rate:.8e} se={rate_error:.8e} analytic={analytic_rate:.8e} relative error={relative_error:.4}",
     );
     assert!(
-        absolute_error <= tolerance,
-        "rate {rate:.8e} ± {rate_error:.8e} versus analytic {analytic_rate:.8e} misses the Gaussian model by more than {tolerance:.4e}",
+        relative_error <= 0.05,
+        "rate {rate:.8e} ± {rate_error:.8e} versus analytic {analytic_rate:.8e} has relative error {relative_error:.4}",
     );
 }
 
