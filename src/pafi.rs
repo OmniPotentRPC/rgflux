@@ -33,8 +33,11 @@
 //!   Letters, 120, 135503. <https://doi.org/10.1103/PhysRevLett.120.135503>
 
 use std::f64::consts::TAU;
+use std::num::NonZeroUsize;
 
+use gauss_quad::{FiniteAboveNegOneF64, GaussJacobi, GaussLegendre};
 use ndarray::{Array1, ArrayView1, ArrayView2};
+use quadraturerules::{Domain, QuadratureRule, single_integral_quadrature};
 use rgmin::vecops::{dot, nrm2};
 
 use crate::engine::{
@@ -152,6 +155,8 @@ pub struct FreeEnergyProfile {
     /// Propagated standard error of [`Self::normalized_rate`] (the reactant
     /// Hessian is deterministic, so only `Delta F` contributes).
     pub normalized_rate_error: f64,
+    /// Posterior integral variance for Bayesian quadrature, otherwise zero.
+    pub integration_variance: f64,
     /// Largest `|path-force integral - Delta E|` over the planes at zero
     /// temperature, evaluated with the same quadrature as [`Self::barrier`].
     /// It is the deterministic discretization bias in the profile at this
@@ -173,6 +178,23 @@ struct PlaneGeometry {
 struct PlaneEstimate {
     gradient: f64,
     standard_error: f64,
+}
+
+#[derive(Clone, Debug)]
+struct PlaneRule {
+    fractions: Vec<f64>,
+    endpoint_weights: Option<Vec<f64>>,
+}
+
+struct GlobalProfileInput<'a> {
+    integration: PafiIntegration,
+    arcs: &'a [f64],
+    endpoint_weights: Option<&'a [f64]>,
+    gradients: &'a [f64],
+    gradient_errors: &'a [f64],
+    total_arc: f64,
+    kbt: f64,
+    reactant_curvature: f64,
 }
 
 #[derive(Clone, Debug)]
@@ -324,10 +346,227 @@ impl NaturalSpline {
     }
 }
 
+fn gaussian_rule(planes: usize, jacobi: bool) -> Result<PlaneRule, FluxError> {
+    let degree = NonZeroUsize::new(planes).ok_or(FluxError::InvalidConfig(
+        "PafiConfig::planes must be at least 1",
+    ))?;
+    let pairs: Vec<(f64, f64)> = if jacobi {
+        let exponent = FiniteAboveNegOneF64::new(1.0).ok_or(FluxError::InvalidConfig(
+            "Gauss--Jacobi endpoint exponent must exceed -1",
+        ))?;
+        GaussJacobi::new(degree, exponent, exponent)
+            .as_node_weight_pairs()
+            .iter()
+            .map(|&(node, weight)| (node, weight / (1.0 - node * node)))
+            .collect()
+    } else {
+        GaussLegendre::new(degree).as_node_weight_pairs().to_vec()
+    };
+    let mut mapped: Vec<(f64, f64)> = pairs
+        .into_iter()
+        .map(|(node, weight)| (0.5 * (node + 1.0), 0.5 * weight))
+        .collect();
+    mapped.sort_by(|left, right| left.0.total_cmp(&right.0));
+    Ok(PlaneRule {
+        fractions: mapped.iter().map(|pair| pair.0).collect(),
+        endpoint_weights: Some(mapped.into_iter().map(|pair| pair.1).collect()),
+    })
+}
+
+fn clenshaw_curtis_rule(planes: usize) -> Result<PlaneRule, FluxError> {
+    if planes < 3 || !(planes - 1).is_power_of_two() {
+        return Err(FluxError::InvalidConfig(
+            "Clenshaw--Curtis planes must be 2^m + 1 with m >= 1",
+        ));
+    }
+    let (coordinates, weights) =
+        single_integral_quadrature(QuadratureRule::ClenshawCurtis, Domain::Interval, planes - 2)
+            .map_err(FluxError::InvalidConfig)?;
+    if coordinates.len() != 2 * weights.len() || weights.len() != planes {
+        return Err(FluxError::InvalidConfig(
+            "quadraturerules returned an unexpected Clenshaw--Curtis shape",
+        ));
+    }
+    let mut mapped: Vec<(f64, f64)> = coordinates
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .zip(weights)
+        .map(|(barycentric, weight)| (barycentric[1], weight))
+        .collect();
+    mapped.sort_by(|left, right| left.0.total_cmp(&right.0));
+    Ok(PlaneRule {
+        fractions: mapped.iter().map(|pair| pair.0).collect(),
+        endpoint_weights: Some(mapped.into_iter().map(|pair| pair.1).collect()),
+    })
+}
+
+fn solve_positive_definite(matrix: &[Vec<f64>], rhs: &[f64]) -> Result<Vec<f64>, FluxError> {
+    let n = matrix.len();
+    if n == 0 || rhs.len() != n || matrix.iter().any(|row| row.len() != n) {
+        return Err(FluxError::InvalidConfig(
+            "Bayesian quadrature linear system must be non-empty and square",
+        ));
+    }
+    let mut lower = vec![vec![0.0_f64; n]; n];
+    for i in 0..n {
+        for j in 0..=i {
+            let product: f64 = (0..j).map(|k| lower[i][k] * lower[j][k]).sum();
+            if i == j {
+                let diagonal = matrix[i][i] - product;
+                if !diagonal.is_finite() || diagonal <= 0.0 {
+                    return Err(FluxError::InvalidConfig(
+                        "Bayesian quadrature covariance is not positive definite",
+                    ));
+                }
+                lower[i][j] = diagonal.sqrt();
+            } else {
+                lower[i][j] = (matrix[i][j] - product) / lower[j][j];
+            }
+        }
+    }
+    let mut intermediate = vec![0.0_f64; n];
+    for i in 0..n {
+        let product: f64 = (0..i).map(|j| lower[i][j] * intermediate[j]).sum();
+        intermediate[i] = (rhs[i] - product) / lower[i][i];
+    }
+    let mut solution = vec![0.0_f64; n];
+    for i in (0..n).rev() {
+        let product: f64 = (i + 1..n).map(|j| lower[j][i] * solution[j]).sum();
+        solution[i] = (intermediate[i] - product) / lower[i][i];
+    }
+    Ok(solution)
+}
+
+fn squared_exponential(left: f64, right: f64, length_scale: f64) -> f64 {
+    (-0.5 * ((left - right) / length_scale).powi(2)).exp()
+}
+
+fn kernel_integrals(nodes: &[f64], upper: f64, length_scale: f64) -> (Vec<f64>, f64) {
+    let degree = NonZeroUsize::new(2 * nodes.len() + 1).expect("positive quadrature degree");
+    let rule = GaussLegendre::new(degree);
+    let means = nodes
+        .iter()
+        .map(|&node| {
+            rule.integrate(0.0, upper, |position| {
+                squared_exponential(node, position, length_scale)
+            })
+        })
+        .collect();
+    let integrated = rule.integrate(0.0, upper, |left| {
+        rule.integrate(0.0, upper, |right| {
+            squared_exponential(left, right, length_scale)
+        })
+    });
+    (means, integrated)
+}
+
+fn bayesian_nodes(planes: usize) -> Result<Vec<f64>, FluxError> {
+    if planes < 2 {
+        return Err(FluxError::InvalidConfig(
+            "PafiConfig::planes must be at least 2",
+        ));
+    }
+    let length_scale = 1.0 / (planes as f64).sqrt();
+    let candidates: Vec<f64> = (0..=2 * planes)
+        .map(|index| index as f64 / (2 * planes) as f64)
+        .collect();
+    let (candidate_means, _) = kernel_integrals(&candidates, 1.0, length_scale);
+    let mut selected = Vec::with_capacity(planes);
+    while selected.len() < planes {
+        let covariance: Vec<Vec<f64>> = selected
+            .iter()
+            .map(|&left| {
+                selected
+                    .iter()
+                    .map(|&right| squared_exponential(left, right, length_scale))
+                    .collect()
+            })
+            .collect();
+        let selected_means: Vec<f64> = selected
+            .iter()
+            .map(|&node| {
+                let index = candidates
+                    .iter()
+                    .position(|candidate| *candidate == node)
+                    .expect("selected candidate");
+                candidate_means[index]
+            })
+            .collect();
+        let integral_weights = if selected.is_empty() {
+            Vec::new()
+        } else {
+            solve_positive_definite(&covariance, &selected_means)?
+        };
+        let next = candidates
+            .iter()
+            .enumerate()
+            .filter(|(_, candidate)| !selected.contains(candidate))
+            .map(|(index, &candidate)| {
+                let cross: Vec<f64> = selected
+                    .iter()
+                    .map(|&node| squared_exponential(candidate, node, length_scale))
+                    .collect();
+                let covariance_reduction: f64 = cross
+                    .iter()
+                    .zip(&integral_weights)
+                    .map(|(value, weight)| value * weight)
+                    .sum();
+                let numerator = candidate_means[index] - covariance_reduction;
+                let conditional_variance = if selected.is_empty() {
+                    1.0
+                } else {
+                    let solved =
+                        solve_positive_definite(&covariance, &cross).expect("positive covariance");
+                    1.0 - cross.iter().zip(solved).map(|(a, b)| a * b).sum::<f64>()
+                };
+                (numerator * numerator / conditional_variance, candidate)
+            })
+            .max_by(|left, right| left.0.total_cmp(&right.0))
+            .ok_or(FluxError::InvalidConfig(
+                "Bayesian quadrature has no candidate plane",
+            ))?
+            .1;
+        selected.push(next);
+    }
+    selected.sort_by(f64::total_cmp);
+    Ok(selected)
+}
+
+fn plane_rule(config: &PafiConfig) -> Result<PlaneRule, FluxError> {
+    match config.integration {
+        PafiIntegration::Hermite => Ok(PlaneRule {
+            fractions: (0..config.planes)
+                .map(|index| index as f64 / (config.planes - 1) as f64)
+                .collect(),
+            endpoint_weights: None,
+        }),
+        PafiIntegration::GaussLegendre => gaussian_rule(config.planes, false),
+        PafiIntegration::GaussJacobi => gaussian_rule(config.planes, true),
+        PafiIntegration::ClenshawCurtis => clenshaw_curtis_rule(config.planes),
+        PafiIntegration::Bayesian => Ok(PlaneRule {
+            fractions: bayesian_nodes(config.planes)?,
+            endpoint_weights: None,
+        }),
+    }
+}
+
+#[cfg(test)]
 fn build_plane_geometries(
     path_images: ArrayView2<'_, f64>,
     masses: ArrayView1<'_, f64>,
     planes: usize,
+) -> Result<Vec<PlaneGeometry>, FluxError> {
+    let fractions: Vec<f64> = (0..planes)
+        .map(|index| index as f64 / (planes - 1) as f64)
+        .collect();
+    build_plane_geometries_at(path_images, masses, &fractions)
+}
+
+fn build_plane_geometries_at(
+    path_images: ArrayView2<'_, f64>,
+    masses: ArrayView1<'_, f64>,
+    fractions: &[f64],
 ) -> Result<Vec<PlaneGeometry>, FluxError> {
     if path_images.nrows() < 2 {
         return Err(FluxError::InvalidConfig(
@@ -337,7 +576,7 @@ fn build_plane_geometries(
     if path_images.ncols() == 0 {
         return Err(FluxError::EmptyInput("PAFI path image coordinates"));
     }
-    if planes < 2 {
+    if fractions.len() < 2 {
         return Err(FluxError::InvalidConfig(
             "PafiConfig::planes must be at least 2",
         ));
@@ -362,9 +601,14 @@ fn build_plane_geometries(
         ));
     }
 
-    let mut geometries = Vec::with_capacity(planes);
-    for k in 0..planes {
-        let arc = total_arc * (k as f64) / ((planes - 1) as f64);
+    let mut geometries = Vec::with_capacity(fractions.len());
+    for &fraction in fractions {
+        if !fraction.is_finite() || !(0.0..=1.0).contains(&fraction) {
+            return Err(FluxError::InvalidConfig(
+                "PAFI plane fractions must be finite and in [0, 1]",
+            ));
+        }
+        let arc = total_arc * fraction;
         let (anchor, tangent, curvature) = spline.evaluate(arc);
         let mut normal_raw = Array1::zeros(path_images.ncols());
         let mut normal_derivative_raw = Array1::zeros(path_images.ncols());
@@ -779,6 +1023,172 @@ fn integrate_profile(
         reactant_partition,
         normalized_rate,
         normalized_rate_error,
+        integration_variance: 0.0,
+        quadrature_residual: 0.0,
+    })
+}
+
+fn interpolation_weights(nodes: &[f64], lower: f64, upper: f64) -> Result<Vec<f64>, FluxError> {
+    if nodes.len() < 2 || upper < lower {
+        return Err(FluxError::InvalidConfig(
+            "interpolation quadrature needs two nodes and ordered bounds",
+        ));
+    }
+    let degree = NonZeroUsize::new(nodes.len().div_ceil(2)).ok_or(FluxError::InvalidConfig(
+        "interpolation quadrature degree must be positive",
+    ))?;
+    let rule = GaussLegendre::new(degree);
+    let mut weights = vec![0.0_f64; nodes.len()];
+    for (index, &node) in nodes.iter().enumerate() {
+        weights[index] = rule.integrate(lower, upper, |position| {
+            nodes
+                .iter()
+                .enumerate()
+                .filter(|(other, _)| *other != index)
+                .map(|(_, &other)| (position - other) / (node - other))
+                .product()
+        });
+    }
+    Ok(weights)
+}
+
+fn bayesian_weights(
+    nodes: &[f64],
+    errors: &[f64],
+    gradients: &[f64],
+    upper: f64,
+) -> Result<(Vec<f64>, f64), FluxError> {
+    let amplitude = gradients
+        .iter()
+        .map(|gradient| gradient * gradient)
+        .sum::<f64>()
+        / gradients.len() as f64;
+    let amplitude = amplitude.max(f64::MIN_POSITIVE.sqrt());
+    let length_scale = upper.max(nodes[nodes.len() - 1]) / (nodes.len() as f64).sqrt();
+    let mut covariance: Vec<Vec<f64>> = nodes
+        .iter()
+        .map(|&left| {
+            nodes
+                .iter()
+                .map(|&right| amplitude * squared_exponential(left, right, length_scale))
+                .collect()
+        })
+        .collect();
+    for (index, &error) in errors.iter().enumerate() {
+        covariance[index][index] += error * error + f64::EPSILON * amplitude;
+    }
+    let (mut means, integrated) = kernel_integrals(nodes, upper, length_scale);
+    for mean in &mut means {
+        *mean *= amplitude;
+    }
+    let weights = solve_positive_definite(&covariance, &means)?;
+    let reduction: f64 = means
+        .iter()
+        .zip(&weights)
+        .map(|(mean, weight)| mean * weight)
+        .sum();
+    let variance = (amplitude * integrated - reduction).max(0.0);
+    Ok((weights, variance))
+}
+
+fn integrate_global_profile(input: GlobalProfileInput<'_>) -> Result<FreeEnergyProfile, FluxError> {
+    let GlobalProfileInput {
+        integration,
+        arcs,
+        endpoint_weights,
+        gradients,
+        gradient_errors,
+        total_arc,
+        kbt,
+        reactant_curvature,
+    } = input;
+    if gradients.len() != arcs.len() || gradient_errors.len() != arcs.len() {
+        return Err(FluxError::Shape {
+            expected: arcs.len(),
+            got: gradients.len().max(gradient_errors.len()),
+            context: "PAFI global integration vectors",
+        });
+    }
+    let mut cumulative = Vec::with_capacity(arcs.len());
+    let mut variances = Vec::with_capacity(arcs.len());
+    for &upper in arcs {
+        let (weights, variance) = if integration == PafiIntegration::Bayesian {
+            bayesian_weights(arcs, gradient_errors, gradients, upper)?
+        } else {
+            (interpolation_weights(arcs, 0.0, upper)?, 0.0)
+        };
+        cumulative.push(weights);
+        variances.push(variance);
+    }
+    let (barrier_weights, integration_variance) = if integration == PafiIntegration::Bayesian {
+        bayesian_weights(arcs, gradient_errors, gradients, total_arc)?
+    } else {
+        let normalized = endpoint_weights.ok_or(FluxError::InvalidConfig(
+            "fixed quadrature endpoint weights are missing",
+        ))?;
+        (
+            normalized.iter().map(|weight| total_arc * weight).collect(),
+            0.0,
+        )
+    };
+    let apply = |weights: &[f64]| {
+        weights
+            .iter()
+            .zip(gradients)
+            .map(|(weight, gradient)| weight * gradient)
+            .sum::<f64>()
+    };
+    let propagate = |weights: &[f64]| {
+        weights
+            .iter()
+            .zip(gradient_errors)
+            .map(|(weight, error)| weight * weight * error * error)
+            .sum::<f64>()
+            .sqrt()
+    };
+    let free_energy: Vec<f64> = cumulative.iter().map(|weights| apply(weights)).collect();
+    let standard_error: Vec<f64> = cumulative
+        .iter()
+        .zip(&variances)
+        .map(|(weights, variance)| {
+            if integration == PafiIntegration::Bayesian {
+                variance.sqrt()
+            } else {
+                propagate(weights)
+            }
+        })
+        .collect();
+    let barrier = apply(&barrier_weights);
+    let barrier_error = if integration == PafiIntegration::Bayesian {
+        integration_variance.sqrt()
+    } else {
+        propagate(&barrier_weights)
+    };
+    if !barrier.is_finite() || !barrier_error.is_finite() {
+        return Err(FluxError::NonFinite("PAFI global quadrature"));
+    }
+    let reactant_frequency = reactant_curvature.sqrt();
+    let reactant_partition = (TAU * kbt).sqrt() / reactant_frequency;
+    let normalized_rate = reactant_frequency / TAU * (-barrier / kbt).exp();
+    if !normalized_rate.is_finite() || normalized_rate <= 0.0 {
+        return Err(FluxError::InvalidConfig(
+            "PAFI normalized rate must be finite and positive",
+        ));
+    }
+    let normalized_rate_error = normalized_rate * barrier_error / kbt;
+    Ok(FreeEnergyProfile {
+        arc_lengths: arcs.to_vec(),
+        free_energy,
+        standard_error,
+        barrier,
+        barrier_error,
+        dividing_index: arcs.len() - 1,
+        dividing_arc: total_arc,
+        reactant_frequency,
+        reactant_partition,
+        normalized_rate,
+        normalized_rate_error,
+        integration_variance,
         quadrature_residual: 0.0,
     })
 }
@@ -885,6 +1295,11 @@ pub fn pafi_profile<E: DynamicsEngine + ?Sized>(
     path_images: ArrayView2<'_, f64>,
     config: &PafiConfig,
 ) -> Result<FreeEnergyProfile, FluxError> {
+    if config.planes < 2 {
+        return Err(FluxError::InvalidConfig(
+            "PafiConfig::planes must be at least 2",
+        ));
+    }
     if !config.time_step.is_finite() || config.time_step <= 0.0 {
         return Err(FluxError::InvalidConfig(
             "PafiConfig::time_step must be finite and positive",
@@ -927,7 +1342,10 @@ pub fn pafi_profile<E: DynamicsEngine + ?Sized>(
             ));
         }
         let masses = engine.masses().to_owned();
-        let geometries = build_plane_geometries(path_images, masses.view(), config.planes)?;
+        let spline = NaturalSpline::new(path_images, masses.view())?;
+        let total_arc = spline.end();
+        let rule = plane_rule(config)?;
+        let geometries = build_plane_geometries_at(path_images, masses.view(), &rule.fractions)?;
         let arcs: Vec<f64> = geometries.iter().map(|geometry| geometry.arc).collect();
 
         engine.set_constraint(None)?;
@@ -939,17 +1357,42 @@ pub fn pafi_profile<E: DynamicsEngine + ?Sized>(
             path_energies.push(energy);
             path_gradients.push(-dot(geometry.tangent.view(), forces.view()));
         }
-        let quadrature = Quadrature::new(&arcs)?;
-        let integrated_energy = quadrature.integrate(&path_gradients);
-        let energy_scale = path_energies.iter().fold(0.0_f64, |acc, energy| {
-            acc.max((energy - path_energies[0]).abs())
-        });
-        let quadrature_residual = integrated_energy
+        let (start, _, _) = spline.evaluate(0.0);
+        engine.set_positions(start.view())?;
+        let (start_energy, _) = engine.energy_and_forces()?;
+        let (end, _, _) = spline.evaluate(total_arc);
+        engine.set_positions(end.view())?;
+        let (end_energy, _) = engine.energy_and_forces()?;
+        let energy_scale = path_energies
             .iter()
-            .zip(&path_energies)
-            .fold(0.0_f64, |acc, (integral, energy)| {
-                acc.max((integral - (energy - path_energies[0])).abs())
+            .fold((end_energy - start_energy).abs(), |scale, energy| {
+                scale.max((energy - start_energy).abs())
             });
+        let quadrature = if config.integration == PafiIntegration::Hermite {
+            Some(Quadrature::new(&arcs)?)
+        } else {
+            None
+        };
+        let quadrature_residual = if let Some(quadrature) = &quadrature {
+            let integrated_energy = quadrature.integrate(&path_gradients);
+            integrated_energy.iter().zip(&path_energies).fold(
+                0.0_f64,
+                |residual, (integral, energy)| {
+                    residual.max((integral - (energy - start_energy)).abs())
+                },
+            )
+        } else {
+            let weights: Vec<f64> = match &rule.endpoint_weights {
+                Some(weights) => weights.iter().map(|weight| total_arc * weight).collect(),
+                None => interpolation_weights(&arcs, 0.0, total_arc)?,
+            };
+            let integral: f64 = weights
+                .iter()
+                .zip(&path_gradients)
+                .map(|(weight, gradient)| weight * gradient)
+                .sum();
+            (integral - (end_energy - start_energy)).abs()
+        };
         if !quadrature_residual.is_finite()
             || quadrature_residual > config.zero_temperature_tol * energy_scale
         {
@@ -975,7 +1418,20 @@ pub fn pafi_profile<E: DynamicsEngine + ?Sized>(
                 .iter()
                 .map(|estimate| estimate.standard_error)
                 .collect();
-            let mut profile = integrate_profile(&quadrature, &gradients, &errors, kbt, curvature)?;
+            let mut profile = if let Some(quadrature) = &quadrature {
+                integrate_profile(quadrature, &gradients, &errors, kbt, curvature)?
+            } else {
+                integrate_global_profile(GlobalProfileInput {
+                    integration: config.integration,
+                    arcs: &arcs,
+                    endpoint_weights: rule.endpoint_weights.as_deref(),
+                    gradients: &gradients,
+                    gradient_errors: &errors,
+                    total_arc,
+                    kbt,
+                    reactant_curvature: curvature,
+                })?
+            };
             profile.quadrature_residual = quadrature_residual;
             let target_reached = match config.target_error {
                 Some(target) => profile.barrier_error <= target,
