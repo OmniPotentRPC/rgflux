@@ -199,11 +199,11 @@ The value stored by =PafiConfig::default()= is the 9-plane value shown in the ta
 | =barrier= | =f64= | \(\Delta F = \max_k F(s_k)\) |
 | =barrier_error= | =f64= | Standard error of =barrier= |
 | =dividing_index= | =usize= | First plane where =barrier= is attained |
-| =reactant_partition= | =f64= | \(Z_R = 2 \int_0^{s^*} \exp(-F(s) / k_{\mathrm{B}}T)\,ds\) by the trapezoid rule, in units of \(s\) |
-| =reactant_log_partition= | =f64= | \(\ln Z_R\) from shifted log-sum-exp trapezoid quadrature |
-| =normalized_rate= | =f64= | \(k = \sqrt{k_{\mathrm{B}}T / (2\pi)}\,\exp(-F(s^*) / k_{\mathrm{B}}T) / Z_R\) in inverse engine time |
-| =normalized_log_rate= | =f64= | \(\ln k\) computed from \(\ln Z_R\) |
-| =normalized_rate_error= | =f64= | Delta-method standard error of =normalized_rate= from the plane force errors |
+| =reactant_partition= | =Option<f64>= | \(Z_R = \exp(\ln Z_R)\). =Some= when that exponential is finite and positive. =None= when a finite =reactant_log_partition= overflows or underflows. The log field is authoritative |
+| =reactant_log_partition= | =f64= | \(\ln Z_R\) from shifted log-sum-exp trapezoid quadrature. Any finite value is returned |
+| =normalized_rate= | =Option<f64>= | \(k = \exp(\ln k)\) in inverse engine time. =Some= when that exponential is finite and positive. =None= when a finite =normalized_log_rate= overflows or underflows. The log field is authoritative |
+| =normalized_log_rate= | =f64= | \(\ln k\) computed from \(\ln Z_R\). Any finite value is accepted, including values whose exponential overflows or underflows |
+| =normalized_rate_error= | =Option<f64>= | Delta method standard error =exp(ln k + ln sigma_ln)=. =Some(0.0)= when the logarithmic error is zero or the linear error underflows. =None= only when that exponential is not finite. The linear rate may be =None= while this field is =Some= |
 
 ** =network::NetworkConfig= and =RateTableConfig=
 
