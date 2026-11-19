@@ -1,0 +1,1830 @@
+# rgflux
+
+> Rare event kinetics over rgsaddle and rgmin.
+
+The Rust API separates rate estimators and trajectory sampling from
+potential energy surfaces and molecular dynamics engines.
+
+## Complete documentation
+
+## rgflux
+
+.. raw:: html
+
+     <div class="vi-hero">
+       <div class="vi-hero-brand">
+         <img class`"vi-hero-mark" src`"_static/mark.svg" width`"64" height`"64" alt="" />
+         <div>
+           <p class="vi-hero-name">rgflux</p>
+           <p class="vi-hero-tag">Rare-event kinetics over rgsaddle and rgmin</p>
+         </div>
+       </div>
+       <p class="vi-hero-tagline">Engine-agnostic reactive flux, hyperplane free energies, PAFI, OH-TST, FFS and rate networks.</p>
+       <div class="vi-hero-pills">
+         <span>DynamicsEngine trait</span>
+         <span>Bennett-Chandler recrossing</span>
+         <span>BAOAB + RATTLE reference</span>
+       </div>
+       <div class="vi-hero-actions">
+         <a class`"vi-btn vi-btn-gold" href`"getting-started.html">Get started</a>
+         <a class`"vi-btn vi-btn-ghost" href`"reference.html">Reference</a>
+       </div>
+     </div>
+
+`rgflux` separates rare-event kinetics from specific force fields and molecular dynamics codes. Every sampler drives the `DynamicsEngine` trait, while recorded trajectory estimators such as `kappa::bennett_chandler` stay engine-free.
+
+.. toctree::
+   :maxdepth: 1
+   :caption: Guides
+   :hidden:
+
+   getting-started
+   howto
+   reference
+   explanation
+   reference/bibliography
+   contributing/index
+   changelog
+
+## Getting started
+
+## Install
+
+Add `rgflux` (alongside `ndarray` and `rgsaddle` when defining custom potential surfaces) from the repository while initial kinetics modules migrate from `rgsaddle` cite:`goswamiEfficientExploration2025`:
+
+```console
+$ cargo add --git https://github.com/OmniPotentRPC/rgflux --branch develop
+```
+
+Enable optional `rgpot` and `lammpc` features as needed:
+
+```console
+$ cargo check --features rgpot
+$ cargo check --features rgpot-session
+$ cargo check --features lammpc
+```
+
+The `lammpc` feature links `liblammpc` from `LAMMPC_LIB_DIR`, from `pkg-config` when available, or from `LAMMPC_DIR` (install prefix with `lib/` or `lib64/` and `include/`) when `pkg-config` is not configured.
+
+## 1. Engine-free Bennett-Chandler recrossing
+
+`kappa::bennett_chandler::estimate_bennett_chandler` estimates the time-dependent transmission coefficient \(\kappa(t)\) and its stationary plateau mean with a block-averaged standard error from `stats` cite:`bennettMolecularDynamics1977,chandlerStatisticalMechanics1978,flegalMcmcThirdSignificantFigure2008` directly from recorded dividing-surface velocity and side histories:
+
+```rust
+use rgflux::kappa::bennett_chandler::{
+    BennettChandlerConfig, ReactiveTrajectory, Side, estimate_bennett_chandler,
+};
+
+fn main() -> Result<(), rgflux::FluxError> {
+    let trajectories = vec![
+        ReactiveTrajectory::new(1.2, vec![Side::Product; 16])?,
+        ReactiveTrajectory::new(-0.9, vec![Side::Reactant; 16])?,
+        ReactiveTrajectory::new(0.8, vec![Side::Product; 16])?,
+    ];
+    let estimate = estimate_bennett_chandler(&trajectories, &BennettChandlerConfig::default())?;
+    assert_eq!(estimate.plateau, 1.0);
+    assert_eq!(estimate.standard_error, 0.0);
+    assert!(estimate.stationarity.is_stationary);
+    Ok(())
+}
+```
+
+## 2. Drive a surface with `NativeEngine` and evaluate an OH-TST rate
+
+Implement `rgsaddle::PointSurface` (returning potential energy \(V(\mathbf{x})\) and gradient \(+\nabla V(\mathbf{x})\)), construct `engine::native::NativeEngine`, and call `ohtst::optimize_hyperplane` cite:`johannessonOptimizationHyperplanar2001,vineyardFrequencyFactors1957` to place the dividing hyperplane at the barrier top and evaluate the harmonic hyperplanar TST rate:
+
+```rust
+use ndarray::{Array1, ArrayView1};
+use rgflux::engine::native::{NativeConfig, NativeEngine};
+use rgflux::engine::{DynamicsEngine, HyperplaneConstraint, ThermostatConfig};
+use rgflux::ohtst::{OhtstConfig, optimize_hyperplane};
+
+struct QuarticDoubleWell1D;
+
+impl rgsaddle::PointSurface for QuarticDoubleWell1D {
+    fn eval(&self, x: ArrayView1<f64>) -> Result<(f64, Array1<f64>), rgsaddle::SaddleError> {
+        let u = x[0];
+        let well = u * u - 1.0;
+        Ok((0.25 * well * well, Array1::from_vec(vec![u * well])))
+    }
+}
+
+fn main() -> Result<(), rgflux::FluxError> {
+    let cfg = NativeConfig::default()
+        .with_masses(Array1::from_vec(vec![1.0]))
+        .with_thermostat(
+            ThermostatConfig::default()
+                .with_gamma(1.0)
+                .with_temperature(0.1),
+        )
+        .with_seed(17);
+    let mut engine = NativeEngine::new(QuarticDoubleWell1D, cfg)?;
+    engine.set_positions(Array1::from_vec(vec![-1.0]).view())?;
+
+    let seed_plane =
+        HyperplaneConstraint::from_direction(Array1::from_vec(vec![1.0]).view(), 0.0)?;
+    let ohtst_cfg = OhtstConfig::default()
+        .with_burn_in_steps(64)
+        .with_min_sample_steps(128)
+        .with_sample_step_factor(4)
+        .with_seed(17);
+    let estimate = optimize_hyperplane(&mut engine, &seed_plane, &ohtst_cfg)?;
+
+    assert_eq!(estimate.plane.offset, 0.0);
+    assert!(estimate.rate > 0.0 && estimate.standard_error.is_finite());
+    Ok(())
+}
+```
+
+## Next steps
+
+- doc:`How-to guides <howto>`: worked examples for constrained hyperplane sampling, fixed-normal OH-TST, Forward Flux Sampling, PAFI, and engine-coupled Bennett-Chandler shooting.
+- doc:`Reference <reference>`: complete module, type, configuration field, error variant, and C ABI session reference.
+- doc:`Explanation <explanation>`: mathematical formulation, assumptions, unit conventions, and engine backend wiring.
+
+## How-to guides
+
+## Sample holonomic hyperplane mean forces and configurations
+
+Construct a `HyperplaneConstraint` from a direction vector and scalar offset \(c\), configure `HyperplaneConfig`, and call `hyperplane::sample_hyperplane` over any `DynamicsEngine` cite:`sprikFreeEnergyConstrained1998,leimkuhlerGeodesicIntegration2016`. `sample_hyperplane` installs the constraint, runs BAOAB + RATTLE equilibration and production steps, estimates \(\langle \lambda \rangle ` dA/dc\) with a block-averaged standard error, retains dividing-surface configurations every `retention_stride= steps, and restores the engine's initial positions, velocities, periodic cell, thermostat, and constraint before returning:
+
+```rust
+use ndarray::{Array1, ArrayView1};
+use rgflux::engine::native::{NativeConfig, NativeEngine};
+use rgflux::engine::{DynamicsEngine, HyperplaneConstraint, ThermostatConfig};
+use rgflux::hyperplane::{HyperplaneConfig, sample_hyperplane};
+
+struct DoubleWell2D;
+
+impl rgsaddle::PointSurface for DoubleWell2D {
+    fn eval(&self, r: ArrayView1<f64>) -> Result<(f64, Array1<f64>), rgsaddle::SaddleError> {
+        let (x, y) = (r[0], r[1]);
+        let well = x * x - 1.0;
+        Ok((
+            0.25 * well * well + 0.5 * y * y,
+            Array1::from_vec(vec![x * well, y]),
+        ))
+    }
+}
+
+fn main() -> Result<(), rgflux::FluxError> {
+    let mut engine = NativeEngine::new(
+        DoubleWell2D,
+        NativeConfig::default()
+            .with_masses(Array1::from_vec(vec![1.0, 1.0]))
+            .with_thermostat(
+                ThermostatConfig::default()
+                    .with_gamma(1.0)
+                    .with_temperature(0.2),
+            )
+            .with_seed(11),
+    )?;
+    engine.set_positions(Array1::from_vec(vec![-0.3, 0.0]).view())?;
+
+    let plane =
+        HyperplaneConstraint::from_direction(Array1::from_vec(vec![1.0, 0.0]).view(), -0.3)?;
+    let cfg = HyperplaneConfig::default()
+        .with_burn_in_steps(100)
+        .with_sample_steps(400)
+        .with_retention_stride(20)
+        .with_time_step(0.01)
+        .with_seed(11);
+
+    let sample = sample_hyperplane(&mut engine, &plane, &cfg)?;
+    assert!(sample.mean_force.is_finite());
+    assert!(sample.standard_error >= 0.0);
+    assert_eq!(sample.configurations.dim(), (20, 2));
+    assert!(engine.constraint().is_none());
+    Ok(())
+}
+```
+
+## Diagnose correlated samples with batch means, effective sample size, and Geweke windows
+
+Use `stats::batch_means` for the mean and its correlation-aware standard
+error, `stats::effective_sample_size` for the Geyer initial monotone sequence
+estimate, and `stats::check_stationarity` before accepting an equilibrium or
+plateau window
+cite:`goswamiBayesianHierarchical2025,flyvbjergErrorEstimates1989,geyerPracticalMcmc1992,gewekeEvaluatingAccuracy1992,flegalMcmcThirdSignificantFigure2008`.
+
+For \(a\) non-overlapping batches of width \(b\), batch means \(Y_j\), and
+\(n = ab\) retained observations, the asymptotic variance and standard error
+are
+
+\[
+ \widehat{\sigma}_{\mathrm{BM}}^2 =
+ \frac{b}{a - 1}\sum_{j=1}^{a}(Y_j-\bar{Y})^2,\qquad
+ \operatorname{SE}(\bar{X}) =
+ \sqrt{\widehat{\sigma}_{\mathrm{BM}}^2/n}.
+\]
+
+Geyer's paired initial positive and monotone autocovariance sequence gives the
+statistical inefficiency \(g = 2\tau_{\mathrm{int}}\) and
+\(n_{\mathrm{eff}} = n/g\). The Geweke diagnostic compares leading and
+trailing windows with
+
+\[
+ \lvert z\rvert =
+ \frac{|\bar{X}_{\mathrm{first}}-\bar{X}_{\mathrm{last}}|}
+ {\sqrt{\operatorname{SE}_{\mathrm{first}}^2+
+        \operatorname{SE}_{\mathrm{last}}^2}}.
+\]
+
+```rust
+use rgflux::stats::{
+    StatsConfig, batch_means, check_stationarity, effective_sample_size,
+};
+
+fn main() -> Result<(), rgflux::FluxError> {
+    let samples: Vec<f64> = (0..256)
+        .map(|i| {
+            let phase = (i % 16) as f64;
+            (phase * std::f64::consts::TAU / 16.0).sin()
+        })
+        .collect();
+    let config = StatsConfig::default()
+        .with_min_batches(8)
+        .with_stationarity_first_fraction(0.25)
+        .with_stationarity_last_fraction(0.50)
+        .with_max_z_score(3.0);
+
+    let estimate = batch_means(&samples, &config)?;
+    let n_eff = effective_sample_size(&samples)?;
+    let stationarity = check_stationarity(&samples, &config)?;
+
+    assert!(estimate.standard_error >= 0.0);
+    assert_eq!(estimate.n_eff, n_eff);
+    assert!(n_eff >= 1.0 && n_eff <= samples.len() as f64);
+    assert!(stationarity.is_stationary);
+    Ok(())
+}
+```
+
+## Assemble a rate-network edge and kMC configuration
+
+A directed rate network stores non-negative first-order rates \(k_{ij}\).
+Its continuous-time master equation is
+
+\[
+ \frac{dp_i}{dt} =
+ \sum_{j\ne i} p_j k_{ji} -
+ p_i\sum_{j\ne i}k_{ij}.
+\]
+For a BKL or Gillespie residence-time step in state \(i\), define
+\(K_i = \sum_j k_{ij}\), select event \(j\) with probability
+\(k_{ij}/K_i\), and draw
+\(\Delta t = -\ln u/K_i\) for \(u\) uniform on \((0,1)\)
+cite:`goswamiEfficientExploration2025,goswamiConcurrencyAkmc2025,bortzNewAlgorithmMonteCarlo1975,gillespieGeneralMethod1976,henkelmanLongTimeScale2001`.
+
+`RateEdge::new` validates one directed edge. `NetworkConfig` records thermal
+and detailed-balance policy, while `RateTableConfig` records trajectory
+limits. `build_rate_table` is deliberately a typed migration boundary in this
+release and returns `FluxError::Unimplemented` rather than silently producing
+an incomplete table.
+
+```rust
+use rgflux::FluxError;
+use rgflux::network::{
+    NetworkConfig, RateEdge, RateTableConfig, build_rate_table,
+};
+
+fn main() -> Result<(), rgflux::FluxError> {
+    let edges = vec![
+        RateEdge::new(0, 1, 2.0)?,
+        RateEdge::new(1, 0, 0.5)?,
+    ];
+    let network = NetworkConfig::default()
+        .with_temperature(500.0)
+        .with_boltzmann(1.0)
+        .with_enforce_detailed_balance(true)
+        .with_min_rate(1.0e-12);
+    let trajectory = RateTableConfig::default()
+        .with_max_steps(10_000)
+        .with_seed(7);
+
+    assert_eq!(trajectory.max_steps, 10_000);
+    assert!(matches!(
+        build_rate_table(2, &edges, &network),
+        Err(FluxError::Unimplemented(_))
+    ));
+    Ok(())
+}
+```
+
+## Place a fixed-normal OH-TST dividing hyperplane and evaluate the rate
+
+Pass a seed `HyperplaneConstraint` and `OhtstConfig` to `ohtst::optimize_hyperplane` cite:`goswamiAdaptivePruning2026,johannessonOptimizationHyperplanar2001,bligaardOptimizationHyperplanar2005,vineyardFrequencyFactors1957`. Even when the seed offset is displaced from the saddle (here \(c_0 ` -0.4\) while the barrier sits at \(c^\ddagger ` 0\)), `optimize_hyperplane` relaxes into the reactant minimum, brackets and bisects the stationary dividing hyperplane along the seed normal, samples the curvature probe plane, and returns \(k_{\mathrm{OHTST}} ` \frac{1}{2\pi}\sqrt{\kappa / \mu}\exp(-\Delta V / k_{\mathrm{B}}T)\) (with \(\mu\) from `rgsaddle::flux_mass=) alongside its delta-method standard error:
+
+```rust
+use ndarray::{Array1, ArrayView1};
+use rgflux::engine::native::{NativeConfig, NativeEngine};
+use rgflux::engine::{DynamicsEngine, HyperplaneConstraint, ThermostatConfig};
+use rgflux::ohtst::{OhtstConfig, optimize_hyperplane};
+
+struct ObliqueDoubleWell2D;
+
+impl rgsaddle::PointSurface for ObliqueDoubleWell2D {
+    fn eval(&self, r: ArrayView1<f64>) -> Result<(f64, Array1<f64>), rgsaddle::SaddleError> {
+        let u = 0.6 * r[0] + 0.8 * r[1];
+        let v = -0.8 * r[0] + 0.6 * r[1];
+        let well = u * u - 1.0;
+        let du = u * well;
+        let dv = 2.0 * v;
+        Ok((
+            0.25 * well * well + v * v,
+            Array1::from_vec(vec![0.6 * du - 0.8 * dv, 0.8 * du + 0.6 * dv]),
+        ))
+    }
+}
+
+fn main() -> Result<(), rgflux::FluxError> {
+    let mut engine = NativeEngine::new(
+        ObliqueDoubleWell2D,
+        NativeConfig::default()
+            .with_masses(Array1::from_vec(vec![2.0, 8.0]))
+            .with_thermostat(
+                ThermostatConfig::default()
+                    .with_gamma(1.0)
+                    .with_temperature(0.1),
+            )
+            .with_seed(33),
+    )?;
+    engine.set_positions(Array1::from_vec(vec![-0.6, -0.8]).view())?;
+
+    // Seed normal (3, 4) / 5 = (0.6, 0.8) with a displaced offset c_0 = -0.4.
+    let seed_plane =
+        HyperplaneConstraint::from_direction(Array1::from_vec(vec![3.0, 4.0]).view(), -0.4)?;
+    let cfg = OhtstConfig::default()
+        .with_max_outer_steps(16)
+        .with_max_translation(0.25)
+        .with_burn_in_steps(64)
+        .with_min_sample_steps(128)
+        .with_sample_step_factor(8)
+        .with_time_step(0.01)
+        .with_seed(33);
+
+    let est = optimize_hyperplane(&mut engine, &seed_plane, &cfg)?;
+    assert!(est.plane.offset.abs() < 1e-12);
+    assert!(est.rate > 0.0 && est.standard_error.is_finite());
+    Ok(())
+}
+```
+
+## Compute a transition rate with direct Forward Flux Sampling (FFS)
+
+Initialize the engine inside reactant basin \(A\) (\(\lambda(\mathbf{x}_0) \le \lambda_0\)) with positive Langevin friction \(\gamma > 0\), specify strictly increasing interfaces \(\lambda_0 < \lambda_1 < \dots < \lambda_n\) in `FfsConfig`, and pass an order-parameter closure \(\lambda(\mathbf{x})\) to `ffs::forward_flux_rate` cite:`goswamiEfficientExploration2025,allenSamplingRareSwitching2005,allenSimulatingRareEvents2006,allenForwardFluxEfficiency2006,allenForwardFluxReview2009`:
+
+```rust
+use ndarray::{Array1, ArrayView1};
+use rgflux::engine::native::{NativeConfig, NativeEngine};
+use rgflux::engine::{DynamicsEngine, ThermostatConfig};
+use rgflux::ffs::{FfsConfig, forward_flux_rate};
+
+struct QuarticDoubleWell1D;
+
+impl rgsaddle::PointSurface for QuarticDoubleWell1D {
+    fn eval(&self, x: ArrayView1<f64>) -> Result<(f64, Array1<f64>), rgsaddle::SaddleError> {
+        let dx = x[0] * x[0] - 1.0;
+        Ok((dx * dx, Array1::from_vec(vec![4.0 * x[0] * dx])))
+    }
+}
+
+fn main() -> Result<(), rgflux::FluxError> {
+    let cfg = NativeConfig::default()
+        .with_masses(Array1::from_vec(vec![1.0]))
+        .with_thermostat(
+            ThermostatConfig::default()
+                .with_gamma(2.0)
+                .with_temperature(0.9),
+        )
+        .with_seed(11);
+    let mut engine = NativeEngine::new(QuarticDoubleWell1D, cfg)?;
+    engine.set_positions(Array1::from_vec(vec![-1.0]).view())?;
+    engine.shoot_velocities(11)?;
+
+    let ffs_cfg = FfsConfig::default()
+        .with_interfaces(vec![-0.8, -0.4, -0.1, 0.2])
+        .with_points_per_interface(16)
+        .with_trials_per_interface(64)
+        .with_max_trial_steps(3_000)
+        .with_max_flux_steps(400_000)
+        .with_burn_in_steps(50)
+        .with_time_step(0.01)
+        .with_seed(11);
+
+    let est = forward_flux_rate(&mut engine, |x| x[0], &ffs_cfg)?;
+    assert!(est.initial_flux > 0.0);
+    assert_eq!(est.interface_probabilities.len(), 3);
+    assert!(est.rate > 0.0 && est.standard_error > 0.0);
+    assert_eq!(engine.positions()[0], -1.0);
+    Ok(())
+}
+```
+
+## Compute a free-energy profile, barrier and rate along a reaction path (PAFI workflow)
+
+Projected Average Force Integration (PAFI) cite:`goswamiEnhancedClimbingImage2026,goswamiReproducibleOrchestration2026,swinburneUnsupervisedCalculation2018` takes the images of a converged minimum-energy path, for example from a nudged elastic band, and returns the free-energy profile \(F(s)\), the barrier \(\Delta F\), the dividing plane, and the normalized rate \(k\) through `pafi::pafi_profile`. The method is described under /Projected Average Force Integration/ in the explanation page and the defaults in the reference page.
+
+The example runs a straight path from the minimum \(x ` -1\) to the saddle \(x ` 0\) of the widening double well \(V(x, y) ` (1 - x^2)^2 + \tfrac{1}{2}(1.5 + 0.5x)y^2\) at \(k_{\mathrm{B}}T ` 0.2\), where the exact barrier is \(\Delta F = 1 + \tfrac{1}{2}k_{\mathrm{B}}T \ln 1.5\). It uses 33 planes. The trapezoid rule over the planes biases \(\Delta F\) low by about \(0.0156\,(8/(\text{planes} - 1))^2\) here, which is 0.025 with the default 9 planes (eight standard errors of this short run) and 0.0016 with 33, so the run checks the result within five standard errors.
+
+```rust
+use ndarray::{Array1, Array2, ArrayView1};
+use rgflux::engine::ThermostatConfig;
+use rgflux::engine::native::{NativeConfig, NativeEngine};
+use rgflux::pafi::{PafiConfig, pafi_profile};
+use rgflux::stats::StatsConfig;
+
+struct WideningWell2D;
+
+impl rgsaddle::PointSurface for WideningWell2D {
+    fn eval(&self, r: ArrayView1<f64>) -> Result<(f64, Array1<f64>), rgsaddle::SaddleError> {
+        let (x, y) = (r[0], r[1]);
+        let well = 1.0 - x * x;
+        let k = 1.5 + 0.5 * x;
+        Ok((
+            well * well + 0.5 * k * y * y,
+            Array1::from_vec(vec![-4.0 * x * well + 0.25 * y * y, k * y]),
+        ))
+    }
+}
+
+fn main() -> Result<(), rgflux::FluxError> {
+    let temperature = 0.2;
+    let mut engine = NativeEngine::new(
+        WideningWell2D,
+        NativeConfig::default()
+            .with_masses(Array1::from_vec(vec![1.0, 1.0]))
+            .with_thermostat(
+                ThermostatConfig::default()
+                    .with_gamma(1.5)
+                    .with_temperature(temperature),
+            )
+            .with_seed(19),
+    )?;
+
+    // PAFI samples at `config.planes` planes along a spline through these
+    // images. Two images would do for a straight path; a curved path needs
+    // the images of the converged band.
+    let config = PafiConfig::default()
+        .with_planes(33)
+        .with_burn_in_steps(500)
+        .with_sample_steps(8_000)
+        .with_stats(StatsConfig::default().with_min_batches(4))
+        .with_seed(19);
+    let images = 5;
+    let mut path = Array2::<f64>::zeros((images, 2));
+    for k in 0..images {
+        path[[k, 0]] = -1.0 + (k as f64) / ((images - 1) as f64);
+    }
+
+    let profile = pafi_profile(&mut engine, path.view(), &config)?;
+    assert_eq!(profile.arc_lengths.len(), config.planes);
+    assert_eq!(profile.free_energy[0], 0.0);
+    assert_eq!(profile.dividing_index, config.planes - 1);
+
+    let analytic = 1.0 + 0.5 * temperature * 1.5_f64.ln();
+    assert!(profile.barrier_error > 0.0);
+    assert!((profile.barrier - analytic).abs() < 5.0 * profile.barrier_error);
+    assert!(profile.normalized_rate > 0.0 && profile.normalized_rate_error > 0.0);
+    Ok(())
+}
+```
+
+Points to adapt for a real path:
+
+- *Images*: `path_images` has one row per image and one column per degree of freedom, in the units and ordering of the engine. The planes are placed by the spline, not at the images, so the number of images and `planes` are independent.
+- *Planes and tolerance*: The zero-temperature check compares \(\lvert I_T - \Delta E_0\rvert / \max(E_{\mathrm{unit}}, \lvert\Delta E_0\rvert)\) with a dimensionless tolerance. Here \(I_T\) is the trapezoid integral of \(dV/ds\), \(\Delta E_0\) is the endpoint energy change and \(E_{\mathrm{unit}}\) is one energy unit of the engine. The stored default is about 2.6% for 9 planes. While the field retains that value, the effective tolerance scales as \((\text{planes} - 1)^{-2}\) when `planes` changes. A value supplied with `with_zero_temperature_tol` is used unchanged. A sharper path can require a larger explicit tolerance. A failing check returns `FluxError::InvalidConfig` before any sampling.
+- *Statistical error*: Set `with_target_error(0.01)` and `with_max_rounds(8)` to repeat sampling in rounds of `sample_steps` until `barrier_error` reaches the target. Reaching `max_rounds` first is not an error, so compare `barrier_error` with the target yourself.
+- *Reproducibility*: The seed of plane \(k\) in round \(r\) is `seed + 4099 * k + 1000003 * r`, so a fixed `with_seed` gives the same profile for a deterministic engine.
+- *Engine*: `pafi_profile_dyn` accepts `&mut dyn DynamicsEngine`. The engine is restored on return, with the stochastic stream the only exception.
+
+## Shoot Bennett-Chandler reactive-flux trajectories and compare with Kramers
+
+Combine `hyperplane::sample_hyperplane` (to harvest thermalized configurations on the dividing surface \(x ` 0\)) with `kappa::bennett_chandler::shoot_bennett_chandler` and compare the resulting plateau transmission coefficient against `kappa::kramers_transmission_coefficient= cite:`goswamiEfficientExploration2025,bennettMolecularDynamics1977,chandlerStatisticalMechanics1978,kramersBrownianMotion1940`:
+
+```rust
+use ndarray::{Array1, ArrayView1};
+use rgflux::engine::native::{NativeConfig, NativeEngine};
+use rgflux::engine::{HyperplaneConstraint, ThermostatConfig};
+use rgflux::hyperplane::{HyperplaneConfig, sample_hyperplane};
+use rgflux::kappa::bennett_chandler::{ShootingConfig, shoot_bennett_chandler};
+use rgflux::kappa::kramers_transmission_coefficient;
+
+struct SeparableDoubleWell2D;
+
+impl rgsaddle::PointSurface for SeparableDoubleWell2D {
+    fn eval(&self, r: ArrayView1<f64>) -> Result<(f64, Array1<f64>), rgsaddle::SaddleError> {
+        let (x, y) = (r[0], r[1]);
+        let dx = x * x - 1.0;
+        Ok((dx * dx + y * y, Array1::from_vec(vec![4.0 * x * dx, 2.0 * y])))
+    }
+}
+
+fn main() -> Result<(), rgflux::FluxError> {
+    let gamma = 6.0;
+    let omega_b = 2.0;
+    let kramers = kramers_transmission_coefficient(gamma, omega_b)?;
+
+    let dividing_surface =
+        HyperplaneConstraint::new(Array1::from_vec(vec![1.0, 0.0]), 0.0)?;
+    let mut engine = NativeEngine::new(
+        SeparableDoubleWell2D,
+        NativeConfig::default()
+            .with_masses(Array1::from_vec(vec![1.0, 1.0]))
+            .with_thermostat(
+                ThermostatConfig::default()
+                    .with_gamma(gamma)
+                    .with_temperature(0.08),
+            )
+            .with_seed(42),
+    )?;
+
+    let surface_sample = sample_hyperplane(
+        &mut engine,
+        &dividing_surface,
+        &HyperplaneConfig::default()
+            .with_burn_in_steps(100)
+            .with_sample_steps(400)
+            .with_retention_stride(10)
+            .with_time_step(0.02)
+            .with_seed(42),
+    )?;
+
+    let shoot_cfg = ShootingConfig::default()
+        .with_steps(120)
+        .with_time_step(0.05)
+        .with_antithetic(true)
+        .with_seed(99);
+    let bc = shoot_bennett_chandler(
+        &mut engine,
+        &dividing_surface,
+        surface_sample.configurations.view(),
+        &shoot_cfg,
+    )?;
+
+    assert!(bc.plateau > 0.0 && bc.standard_error > 0.0);
+    assert!(kramers > 0.3 && kramers < 0.31);
+    Ok(())
+}
+```
+
+## Wrap an `rgmin` objective with `EindirSurface`
+
+Any `eindir_core::DifferentiableObjective<f64>` (such as `rgmin::Oracle`) can be adapted into a `ForceSurface` via `engine::EindirSurface` and passed to `NativeEngine`:
+
+```rust
+use ndarray::Array1;
+use rgflux::engine::native::{NativeConfig, NativeEngine};
+use rgflux::engine::{DynamicsEngine, EindirSurface};
+
+fn main() -> Result<(), rgflux::FluxError> {
+    let oracle = rgmin::Oracle::unbounded(2, |x| {
+        let energy = 0.5 * (x[0] * x[0] + 4.0 * x[1] * x[1]);
+        let grad = Array1::from_vec(vec![x[0], 4.0 * x[1]]);
+        (energy, grad)
+    });
+    let surface = EindirSurface::new(oracle);
+    let mut engine = NativeEngine::new(
+        surface,
+        NativeConfig::default()
+            .with_masses(Array1::from_vec(vec![1.0, 2.0]))
+            .with_seed(7),
+    )?;
+    engine.shoot_velocities(7)?;
+    let report = engine.step(0.01)?;
+    assert!(report.potential_energy.is_finite() && report.kinetic_energy.is_finite());
+    Ok(())
+}
+```
+
+## Reference
+
+## Module overview
+
+| Module | Scope | Status |
+|---+---+---|
+| `engine` | `DynamicsEngine` trait, `ForceSurface`, `EindirSurface`, `HyperplaneConstraint`, `ThermostatConfig`, `SurfaceVelocityPolicy`, `StepReport`, `native` BAOAB/RATTLE backend, optional direct `lammpc` backend, `rgpot` static PES wrapper, and `rgpot-session` MD session skeleton (`openmm`, `nblib`, `lammps`) | Implemented (`native`, `lammpc`, `rgpot`) and `rgpot-session` skeleton |
+| `stats` | Batch means, effective sample size `n_eff`, and stationarity diagnostics | Implemented; spline propagation moves from `rgsaddle` |
+| `kappa::bennett_chandler` | Engine-free reactive-flux estimator and `DynamicsEngine` trajectory shooter | Implemented |
+| `kappa` | Kramers analytical barrier-recrossing factor; surface-shooting quench classifiers and first-crossing estimators | `kramers_transmission_coefficient` and `KappaConfig` implemented; quench and first-crossing drivers move from `rgsaddle` |
+| `hyperplane` | Constrained hyperplane sampling (`sample_hyperplane`) and zero-variance control variates | Mean constraint force and configuration retention implemented; torque and control variates move from `rgsaddle` |
+| `pafi` | Projected Average Force Integration along reaction paths (`PafiConfig`, `FreeEnergyProfile`, `pafi_profile`, `pafi_profile_dyn`) | Implemented: mass-metric spline planes with not-a-knot ends, zero-temperature path-force check, burn-in and batch-means sampling per plane, adaptive rounds to a target error, log-stable reactant partition quadrature, trapezoid free-energy profile, barrier, and normalized rate with propagated errors; the engine is restored on return |
+| `ohtst` | OH-TST with a fixed hyperplane normal (`optimize_hyperplane`) | Implemented for a fixed normal with `rgsaddle::flux_mass`; normal optimization moves from `rgsaddle` |
+| `ffs` | Forward Flux Sampling across ordered interfaces (`forward_flux_rate`) | Implemented: flux collection, staged trials, and uncertainty propagation. Exit restores positions, velocities, the periodic cell, the thermostat, and the constraint; the stochastic stream is left where the run put it |
+| `network` | Symmetry-resolved rate networks and kinetic Monte Carlo rate tables (`NetworkConfig`, `RateTableConfig`, `RateEdge`, `build_rate_table`) | `RateEdge::new` and configuration types implemented; `build_rate_table` moves from `rgsaddle` |
+| `error` | Shared `FluxError` enum and `From<rgsaddle::SaddleError>` conversion | Implemented |
+| `config` | Internal `with_setters!` macro used by public configuration types | Private module, so it has no importable public path; every generated public setter is listed in the inventory below |
+
+## Documentation map
+
+| API area | Reference entry | Method guide and theory |
+|---+---+---|
+| `pafi` | This page, `PafiConfig`, `FreeEnergyProfile`, functions, and generated inventory | `howto.org`, /Compute a free-energy profile, barrier and rate along a reaction path/; `explanation.org`, /Projected Average Force Integration (PAFI)/ |
+| `ohtst` | This page, `OhtstConfig`, `OhtstEstimate`, and generated inventory | `howto.org`, /Place a fixed-normal OH-TST dividing hyperplane and evaluate the rate/; `explanation.org`, /Holonomic hyperplane sampling and fixed-normal OH-TST/ |
+| `hyperplane` | This page, `HyperplaneConfig`, `HyperplaneSample`, and generated inventory | `howto.org`, /Sample holonomic hyperplane mean forces and configurations/; `explanation.org`, /Holonomic hyperplane sampling and fixed-normal OH-TST/ |
+| `ffs` | This page, `FfsConfig`, `FfsEstimate`, and generated inventory | `howto.org`, /Compute a transition rate with direct Forward Flux Sampling/; `explanation.org`, /Forward Flux Sampling (FFS)/ |
+| `network` | This page, network configuration, edge and function entries, and generated inventory | `howto.org`, /Assemble a rate-network edge and kMC configuration/; `explanation.org`, /Kinetic rate networks (network)/ |
+| `kappa` | This page, `KappaConfig`, Bennett-Chandler types and functions, Kramers function, and generated inventory | `howto.org`, /Shoot Bennett-Chandler reactive-flux trajectories and compare with Kramers/; `explanation.org`, /Reactive-flux recrossing (kappa and kappa::bennett_chandler)/ |
+| `stats` | This page, constants, configuration, outputs, functions, and generated inventory | `howto.org`, /Diagnose correlated samples with batch means, effective sample size, and Geweke windows/; `explanation.org`, /Correlated time-series diagnostics (stats)/ |
+| `engine` | This page, features, configuration, traits, types, methods, constants, and generated inventory | `howto.org` examples for hyperplanes, trajectory methods, and `EindirSurface`; `getting-started.org`, /Choose an engine/ |
+| internal `config` | This page, /Configuration structs and field defaults/, plus every `with_*` path in the generated inventory | `AGENTS.md`, /Public configuration convention/ |
+| C ABI and Python | This page, /Binding surface/ | No exported binding exists in this release |
+
+## Cargo features
+
+| Feature | Dependencies | Description |
+|---+---+---|
+| `default` | none | Pure-Rust `engine::native`, `stats`, `kappa`, `hyperplane`, `ohtst`, `ffs`, `pafi`, and `network` over `rgsaddle` and `rgmin` |
+| `rgpot` | `dep:rgpot-core` | Enables `engine::rgpot::RgpotSurface` and `RgpotConfig` over `rgpot_core::potential::PotentialImpl` DLPack callbacks |
+| `rgpot-session` | `dep:rgpot-core` | Enables `engine::rgpot_session::RgpotSessionEngine`, `RgpotSessionConfig`, and `SessionEngineKind` (`OpenMm`, `NbLib`, `Lammps`) |
+| `lammpc` | `dep:rgpot-core`, `dep:capnp` | Enables `engine::lammpc::LammpcEngine`, `LammpcConfig`, and `MASS_VELOCITY_TO_EV` over `liblammpc` (`lammpc_session_*`) |
+
+## Configuration structs and field defaults
+
+Every public configuration struct is `#[non_exhaustive]` and provides chainable `#[must_use]` `with_*` builder methods. Setter methods for `Option<T>` fields accept `impl Into<Option<T>>` so passing a bare `T` sets `Some(T)` and passing `None` clears the option.
+
+### `engine::ThermostatConfig`
+
+| Field | Type | Default | Constraint / Meaning |
+|---+---+---+---|
+| `gamma` | `f64` | `1.0` | Langevin friction coefficient \(\gamma \ge 0\) in inverse time units (`0.0` selects velocity-Verlet NVE) |
+| `temperature` | `f64` | `1.0` | Absolute temperature \(T \ge 0\) |
+| `boltzmann` | `f64` | `1.0` | Boltzmann constant \(k_{\mathrm{B}} > 0\) in the engine's energy-per-temperature unit |
+
+Method: `ThermostatConfig::thermal_energy(&self) -> Result<f64, FluxError>` validates finiteness and domain bounds and returns \(k_{\mathrm{B}} T\).
+
+### `engine::HyperplaneConstraint`
+
+| Field | Type | Default | Constraint / Meaning |
+|---+---+---+---|
+| `normal` | `Array1<f64>` | `vec![1.0]` | Unit Euclidean normal \(\mathbf{n}\) (\(\lvert\lVert\mathbf{n}\rVert_2 - 1\rvert \le \text{UNIT\_NORMAL\_TOL}\)) oriented from reactant to product |
+| `offset` | `f64` | `0.0` | Scalar offset \(c\) in \(\sigma(\mathbf{x}) ` \mathbf{n} \cdot \mathbf{x} - c ` 0\) |
+
+Constructors and methods: `HyperplaneConstraint::new(normal, offset)`, `from_direction(direction, offset)`, `validate(&self)`, and `signed_distance(&self, positions)`.
+
+### `engine::native::NativeConfig`
+
+| Field | Type | Default | Constraint / Meaning |
+|---+---+---+---|
+| `masses` | `Array1<f64>` | `vec![1.0]` | Strictly positive per-coordinate masses \(m_i > 0\) (sets `dof ` masses.len()=) |
+| `thermostat` | `ThermostatConfig` | `ThermostatConfig::default()` | Langevin thermostat parameters |
+| `constraint` | `Option<HyperplaneConstraint>` | `None` | Optional active holonomic hyperplane constraint |
+| `projection` | `ConstraintProjection` | `ConstraintProjection::Rattle` | Holonomic constraint projection scheme (`Rattle` or `Shake`) |
+| `cell` | `Option<[f64; 9]>` | `None` | Optional row-major \(3 \times 3\) periodic simulation box |
+| `seed` | `u64` | `1` | Initial deterministic PRNG seed for Ornstein-Uhlenbeck thermal noise |
+
+### `engine::lammpc::LammpcConfig` (feature `lammpc`)
+
+| Field | Type | Default | Constraint / Meaning |
+|---+---+---+---|
+| `atomic_numbers` | `Vec<i32>` | `vec![18, 18]` | Non-empty atomic numbers in live atom order (\(N_{\mathrm{atoms}}\) entries; `dof ` 3 * N_atoms=) |
+| `type_to_atomic_number` | `Vec<i32>` | `vec![18]` | Non-empty LAMMPS type map (\(\text{type } i+1 \mapsto Z\)) |
+| `masses_by_type` | `Vec<f64>` | `vec![39.948]` | Strictly positive per-type masses in amu (length must match `type_to_atomic_number`) |
+| `pair_style` | `String` | `"lj/cut 8.5"` | Non-empty LAMMPS `pair_style` specification |
+| `pair_coeffs` | `Vec<String>` | `vec!["1 1 0.010323 3.405"]` | LAMMPS `pair_coeff` argument strings |
+| `extra_setup` | `Vec<String>` | `vec![]` | Optional additional LAMMPS setup lines applied after pair setup |
+| `boundary` | `String` | `"p p p"` | LAMMPS boundary specification string |
+| `suffix` | `String` | `""` | Optional LAMMPS accelerator suffix (`omp`, `gpu`, `kk`) |
+| `thermostat` | `ThermostatConfig` | `ThermostatConfig::default()` | Langevin thermostat in metal units (\(\gamma\) in \(\mathrm{ps}^{-1}\), \(k_{\mathrm{B}}T\) in eV) |
+| `constraint` | `Option<HyperplaneConstraint>` | `None` | Optional holonomic hyperplane constraint |
+| `cell` | `Option<[f64; 9]>` | `Some(diag(30.0, 30.0, 30.0))` | Optional row-major \(3 \times 3\) simulation cell in Å |
+| `seed` | `u64` | `1` | Initial deterministic PRNG seed passed to `lammpc_session_md_initialize` |
+
+### `engine::rgpot::RgpotConfig` (feature `rgpot`)
+
+| Field | Type | Default | Constraint / Meaning |
+|---+---+---+---|
+| `atomic_numbers` | `Vec<i32>` | `vec![1]` | Non-empty atomic numbers \(Z_i\) (\(N_{\mathrm{atoms}}\) entries; `dof ` 3 * N_atoms=) |
+| `default_cell` | `[f64; 9]` | `diag(100.0, 100.0, 100.0)` | Fallback row-major \(3 \times 3\) periodic box (Å) when `cell` is `None` (`DEFAULT_RGPOT_BOX_EDGE ` 100.0=) |
+
+### `engine::rgpot_session::RgpotSessionConfig` (feature `rgpot-session`)
+
+| Field | Type | Default | Constraint / Meaning |
+|---+---+---+---|
+| `engine` | `SessionEngineKind` | `SessionEngineKind::OpenMm` | Target MD session backend: `OpenMm` (`"openmm"`), `NbLib` (`"nblib"`), or `Lammps` (`"lammps"`) |
+| `engine_path` | `Option<PathBuf>` | `None` | Optional explicit shared-library plugin path |
+| `spec` | `Vec<u8>` | `vec![]` | Serialized system specification bytes forwarded to `rgpot_md_session_create` |
+| `options` | `Option<String>` | `None` | Optional backend-specific option string |
+| `masses` | `Array1<f64>` | `Array1::from_elem(3, 1.0)` | Per-coordinate masses in amu (length must be a positive multiple of 3) |
+| `thermostat` | `ThermostatConfig` | `ThermostatConfig::default()` | Langevin thermostat (\(\gamma\) in \(\mathrm{ps}^{-1}\), \(k_{\mathrm{B}}T\) in eV) |
+| `constraint` | `Option<HyperplaneConstraint>` | `None` | Optional hyperplane constraint forwarded to `rgpot_md_session_step_langevin` |
+| `cell` | `Option<[f64; 9]>` | `None` | Optional row-major \(3 \times 3\) periodic box in Å |
+| `seed` | `u64` | `1` | Deterministic 64-bit PRNG seed |
+
+### `stats::StatsConfig`
+
+| Field | Type | Default | Constraint / Meaning |
+|---+---+---+---|
+| `min_batches` | `usize` | `16` (`DEFAULT_MIN_BATCHES`) | Target minimum batch count (\(\ge 2\)) when sizing batches automatically |
+| `batch_size` | `Option<usize>` | `None` | Explicit batch width (\(\ge 1\) leaving \(\ge 2\) batches), or `None` for automatic sizing |
+| `stationarity_first_fraction` | `f64` | `0.25` (`DEFAULT_FIRST_FRACTION`) | Leading sub-window fraction in \((0, 1)\) for Geweke's stationarity test |
+| `stationarity_last_fraction` | `f64` | `0.50` (`DEFAULT_LAST_FRACTION`) | Trailing sub-window fraction in \((0, 1)\) (\(f_{\mathrm{first}} + f_{\mathrm{last}} \le 1\)) |
+| `max_z_score` | `f64` | `3.0` (`DEFAULT_MAX_Z_SCORE`) | Maximum allowed Geweke \(\lvert z \rvert\) score (\(> 0\)) |
+
+### `kappa::KappaConfig`
+
+| Field | Type | Default | Constraint / Meaning |
+|---+---+---+---|
+| `commit_checkpoints` | `usize` | `4` | Consecutive basin-commitment checkpoints required to stop a half-trajectory |
+| `quench_force_tol` | `f64` | `0.001` | Steepest-descent force tolerance when assigning end states by quenching |
+| `quench_max_steps` | `usize` | `2_000` | Maximum quench steps per trajectory endpoint |
+
+### `kappa::bennett_chandler::BennettChandlerConfig` and `ShootingConfig`
+
+| Struct | Field | Type | Default | Constraint / Meaning |
+|---|---|---|---|---|
+| `BennettChandlerConfig` | `plateau_start_fraction` | `f64` | `0.5` (`DEFAULT_PLATEAU_START_FRACTION`) | Inclusive start fraction \([0, 1)\) of the plateau window |
+| `BennettChandlerConfig` | `plateau_end_fraction` | `f64` | `1.0` (`DEFAULT_PLATEAU_END_FRACTION`) | Exclusive end fraction \((0, 1]\) (window must span \(\ge 4\) steps) |
+| `BennettChandlerConfig` | `stats` | `StatsConfig` | `StatsConfig::default()` | Batch-means and stationarity controls |
+| `ShootingConfig` | `steps` | `usize` | `200` (`DEFAULT_SHOOTING_STEPS`) | Integration steps per shot (\(\ge 4\)) |
+| `ShootingConfig` | `time_step` | `f64` | `0.01` (`DEFAULT_SHOOTING_TIME_STEP`) | Integration timestep \(\Delta t > 0\) |
+| `ShootingConfig` | `antithetic` | `bool` | `true` | Shoot antithetic \((+\mathbf{v}, -\mathbf{v})\) pairs from each configuration |
+| `ShootingConfig` | `seed` | `u64` | `1` | Deterministic base PRNG seed |
+| `ShootingConfig` | `estimator` | `BennettChandlerConfig` | `BennettChandlerConfig::default()` | Plateau estimator configuration |
+
+### `hyperplane::HyperplaneConfig`
+
+| Field | Type | Default | Constraint / Meaning |
+|---+---+---+---|
+| `burn_in_steps` | `usize` | `500` | Equilibration steps discarded before recording |
+| `sample_steps` | `usize` | `4_000` | Production steps integrated on the hyperplane (\(\ge 2\)) |
+| `retention_stride` | `usize` | `10` | Steps between retained configurations (\(\ge 1\)) |
+| `time_step` | `f64` | `0.005` | Integration timestep \(\Delta t > 0\) |
+| `seed` | `u64` | `1` | Deterministic PRNG seed |
+| `stats` | `StatsConfig` | `StatsConfig::default()` | Batch-means controls for \(\langle \lambda \rangle\) |
+
+### `ohtst::OhtstConfig`
+
+| Field | Type | Default | Constraint / Meaning |
+|---+---+---+---|
+| `max_outer_steps` | `usize` | `32` | Maximum bracketing / outer steps (\(\ge 1\)); reactant minimization budget is \(8 \times \text{max\_outer\_steps}\) |
+| `patience` | `usize` | `3` | Consecutive accepted planes within gradient noise (reserved for variational normal optimization) |
+| `max_translation` | `f64` | `0.25` | Step size for dividing-surface bracketing and upper cap on curvature probe distance \(\delta\) (\(> 0\)) |
+| `max_rotation` | `f64` | `0.25` | Trust-region cap on normal rotation angle in radians (\(\ge 0\)) |
+| `min_overlap` | `f64` | `0.03` | Minimum two-state BAR overlap before warning (reserved for variational normal optimization) |
+| `use_mbar` | `bool` | `true` | Combine reversible work across plane nodes with MBAR (reserved for variational normal optimization) |
+| `seed` | `u64` | `1` | Deterministic PRNG seed forwarded to curvature sampling |
+| `stats` | `StatsConfig` | `StatsConfig::default()` | Batch-means settings for the curvature probe sample |
+| `burn_in_steps` | `usize` | `256` | Equilibration steps discarded before the curvature probe sample |
+| `min_sample_steps` | `usize` | `128` | Lower bound on curvature-sample steps (\(\ge 2\)) |
+| `sample_step_factor` | `usize` | `64` | Multiplier on `max_outer_steps` for curvature-sample length (\(\max(\text{max\_outer\_steps} \times \text{sample\_step\_factor}, \text{min\_sample\_steps})\)) |
+| `retention_stride` | `usize` | `16` | Steps between retained configurations in the curvature sample (\(\ge 1\)) |
+| `time_step` | `f64` | `0.01` | Integration timestep \(\Delta t > 0\) for the curvature sample |
+
+### `ffs::FfsConfig`
+
+| Field | Type | Default | Constraint / Meaning |
+|---+---+---+---|
+| `interfaces` | `Vec<f64>` | `vec![-0.5, 0.0, 0.5]` | Strictly increasing order-parameter levels \(\lambda_0 < \lambda_1 < \dots < \lambda_n\) (\(\text{len} \ge 2\)) |
+| `points_per_interface` | `usize` | `128` | Crossing configurations \(M_0\) collected at \(\lambda_0\) (\(\ge 2\)) |
+| `trials_per_interface` | `usize` | `256` | Trial trajectories \(K\) launched at each stage (\(\ge 1\)) |
+| `max_trial_steps` | `usize` | `10_000` | Maximum integration steps per trial before aborting (\(\ge 1\)) |
+| `max_flux_steps` | `usize` | `200_000` | Maximum integration steps during initial flux collection (\(\ge 1\)) |
+| `burn_in_steps` | `usize` | `0` | Burn-in steps discarded before counting \(\lambda_0\) crossings |
+| `time_step` | `f64` | `0.005` | Integration timestep \(\Delta t > 0\) |
+| `seed` | `u64` | `1` | Deterministic PRNG seed |
+| `stats` | `StatsConfig` | `StatsConfig::default()` | Batch-means controls for the inter-crossing intervals |
+
+### `pafi::PafiConfig`
+
+| Field | Type | Default | Constraint / Meaning |
+|---+---+---+---|
+| `planes` | `usize` | `9` | Number of hyperplanes at equal spacing along the spline path (\(\ge 2\)) |
+| `burn_in_steps` | `usize` | `500` | Equilibration steps discarded on each hyperplane before sampling (\(\ge 1\)); every plane and round restarts from the anchor |
+| `sample_steps` | `usize` | `4_000` | Production steps added per hyperplane and round (\(\ge 2\)) |
+| `time_step` | `f64` | `0.002` | Integration timestep \(\Delta t > 0\) in engine time units |
+| `target_error` | `Option<f64>` | `None` | Optional target standard error on \(\Delta F\) (finite, \(\ge 0\)); `None` runs one round |
+| `max_rounds` | `usize` | `4` | Maximum sampling rounds (\(\ge 1\)); later rounds run only while `target_error` is set and not reached, and missing it is not an error |
+| `zero_temperature_tol` | `f64` | \(2 (\pi^2 / 12) / 8^2 \approx 0.0257\) | Dimensionless tolerance for \(\lvert I_T - \Delta E_0\rvert / \max(E_{\mathrm{unit}}, \lvert\Delta E_0\rvert)\), where both energies use engine energy units and \(E_{\mathrm{unit}}\) is one such unit (finite, \(\ge 0\)); see the scaling note below |
+| `seed` | `u64` | `1` | Base of the per-plane seeds `seed + 4099 * plane + 1000003 * round` (wrapping) |
+| `stats` | `StatsConfig` | `StatsConfig::default()` | Batch-means settings for the per-plane force series |
+
+Here \(I_T\) is the trapezoid integral of \(dV/ds\) over the plane anchors and \(\Delta E_0\) is the endpoint energy change. The ratio is relative to \(\lvert\Delta E_0\rvert\) at or above one engine energy unit and bounds the absolute discrepancy below that scale.
+
+The value stored by `PafiConfig::default()` is the 9-plane value shown in the table. While the field retains that value, the effective tolerance is \(2 (\pi^2 / 12) / (\text{planes} - 1)^2\), so changing `planes` scales the tolerance with the trapezoid error. An explicitly different value is used unchanged. The scaling follows a quarter-turn circular arc through a harmonic well. A path that turns further can need a larger explicit tolerance.
+
+### `pafi::FreeEnergyProfile`
+
+| Field | Type | Meaning |
+|---+---+---|
+| `arc_lengths` | `Vec<f64>` | Plane coordinates \(s_k\): the mass-weighted chord-length parameter of the spline, from 0 at the first image to the total path length at the last, at equal spacing. Not scaled to \([0, 1]\) |
+| `free_energy` | `Vec<f64>` | \(F(s_k) - F(s_0)\) by the trapezoid rule; the first entry is 0 |
+| `standard_error` | `Vec<f64>` | Standard error of `free_energy` from the batch-means errors of the plane forces; the first entry is 0 |
+| `barrier` | `f64` | \(\Delta F = \max_k F(s_k)\) |
+| `barrier_error` | `f64` | Standard error of `barrier` |
+| `dividing_index` | `usize` | First plane where `barrier` is attained |
+| `reactant_partition` | `f64` | \(Z_R = 2 \int_0^{s^*} \exp(-F(s) / k_{\mathrm{B}}T)\,ds\) by the trapezoid rule, in units of \(s\) |
+| `reactant_log_partition` | `f64` | \(\ln Z_R\) from shifted log-sum-exp trapezoid quadrature |
+| `normalized_rate` | `f64` | \(k = \sqrt{k_{\mathrm{B}}T / (2\pi)}\,\exp(-F(s^*) / k_{\mathrm{B}}T) / Z_R\) in inverse engine time |
+| `normalized_log_rate` | `f64` | \(\ln k\) computed from \(\ln Z_R\) |
+| `normalized_rate_error` | `f64` | Delta-method standard error of `normalized_rate` from the plane force errors |
+
+### `network::NetworkConfig` and `RateTableConfig`
+
+| Struct | Field | Type | Default | Constraint / Meaning |
+|---|---|---|---|---|
+| `NetworkConfig` | `temperature` | `f64` | `300.0` | Absolute temperature \(T > 0\) |
+| `NetworkConfig` | `boltzmann` | `f64` | `1.0` | Boltzmann constant \(k_{\mathrm{B}} > 0\) |
+| `NetworkConfig` | `enforce_detailed_balance` | `bool` | `true` | Enforce detailed balance across reverse edges |
+| `NetworkConfig` | `min_rate` | `Option<f64>` | `None` | Optional rate floor below which negligible channels are pruned |
+| `RateTableConfig` | `max_steps` | `usize` | `100_000` | Maximum kMC steps per trajectory (\(\ge 1\)) |
+| `RateTableConfig` | `seed` | `u64` | `1` | Deterministic PRNG seed for event selection and residence-time draws |
+
+## Public output types, functions, and constants
+
+| Item | Signature / Fields | Description |
+|---+---+---|
+| `engine::UNIT_NORMAL_TOL` | `64.0 * f64::EPSILON` | Unit Euclidean normal tolerance (\(2^{-46}\)) |
+| `engine::HYPERPLANE_PROJECTION_TOL` | `16.0 * f64::EPSILON` | Relative holonomic SHAKE residual tolerance (\(2^{-48}\)) |
+| `engine::DEFAULT_REJECTION_MAX_ATTEMPTS` | `4_096` | Default maximum redraw attempts in `SurfaceVelocityPolicy::RejectRedraw` |
+| `engine::lammpc::MASS_VELOCITY_TO_EV` | `0.000_103_642_696_562_621_75` | LAMMPS metal-unit factor `mvv2e` converting \(\mathrm{amu} \cdot (\text{Å/ps})^2\) to eV |
+| `engine::draw_maxwell_boltzmann_velocities` | `(masses, kbt, seed) -> Result<Array1<f64>, FluxError>` | Deterministic Box-Muller draw \(v_i \sim \mathcal{N}(0, k_{\mathrm{B}}T / m_i)\) |
+| `engine::reflect_velocity_in_place` | `(&mut velocities, masses, normal) -> Result<f64, FluxError>` | Kinetic-energy-preserving mass-weighted Householder reflection across `normal` |
+| `stats::SERIES_FLAT_TOL` | `64.0 * f64::EPSILON` | Relative flatness tolerance for constant-series detection |
+| `stats::VARIANCE_REL_FLOOR` | `SERIES_FLAT_TOL * SERIES_FLAT_TOL` | Relative variance floor (\(2^{-92}\)) |
+| `stats::MIN_STATIONARITY_SAMPLES` | `4` | Minimum window length for `check_stationarity` |
+| `stats::BatchEstimate` | `mean`, `standard_error`, `variance`, `batch_count`, `batch_size`, `n_samples`, `n_eff`, `tau_int` | Output of `stats::batch_means(samples, config)` |
+| `stats::StationarityReport` | `is_stationary`, `z_score`, `max_z_score`, `drift_slope`, `first_mean`, `second_mean` | Output of `stats::check_stationarity(samples, config)` |
+| `stats::effective_sample_size` | `(samples) -> Result<f64, FluxError>` | Geyer initial-monotone-sequence effective sample size \(n_{\mathrm{eff}}\) |
+| `kappa::kramers_transmission_coefficient` | `(gamma, barrier_frequency) -> Result<f64, FluxError>` | Kramers spatial-diffusion factor \(\kappa_{\mathrm{K}} = \sqrt{1 + \alpha^2} - \alpha\) |
+| `kappa::bennett_chandler::BennettChandlerEstimate` | `kappa_t`, `plateau`, `standard_error`, `n_eff`, `plateau_window`, `stationarity`, `positive_flux_count` | Output of `estimate_bennett_chandler` and `shoot_bennett_chandler` |
+| `hyperplane::HyperplaneSample` | `plane`, `mean_force`, `standard_error`, `configurations` | Output of `hyperplane::sample_hyperplane(engine, plane, config)` |
+| `ohtst::OhtstEstimate` | `plane`, `rate`, `standard_error` | Output of `ohtst::optimize_hyperplane(engine, seed_plane, config)` |
+| `ffs::FfsEstimate` | `initial_flux`, `interface_probabilities`, `rate`, `standard_error` | Output of `ffs::forward_flux_rate(engine, order_param, config)` |
+| `pafi::FreeEnergyProfile` | `arc_lengths`, `free_energy`, `standard_error`, `barrier`, `barrier_error`, `dividing_index`, `reactant_partition`, `reactant_log_partition`, `normalized_rate`, `normalized_log_rate`, `normalized_rate_error` | Output of `pafi::pafi_profile(engine, path_images, config)` and `pafi::pafi_profile_dyn(engine, path_images, config)`; see the field table in the configuration section |
+| `network::RateEdge` | `from`, `to`, `rate` (`RateEdge::new(from, to, rate)`) | Directed elementary transition edge in `network::build_rate_table` |
+
+## Error variants (`FluxError`)
+
+| Variant | Payload | Trigger condition |
+|---+---+---|
+| `EmptyInput` | `&'static str` | Empty sample slice, trajectory list, mass vector, or direction vector |
+| `NoPositiveFlux` | unit | No reactive-flux trajectory has `initial_normal_velocity > 0` |
+| `NonStationaryPlateau` | `z_score`, `max_z_score`, `drift_slope` | Candidate Bennett-Chandler plateau window exceeds `max_z_score` |
+| `Shape` | `expected`, `got`, `context` | Coordinate, velocity, normal, mass, or trajectory length mismatch |
+| `NonFinite` | `&'static str` | `NaN` or infinite input, energy, force, rate, or intermediate value |
+| `InvalidConfig` | `&'static str` | Configuration parameter or physical invariant out of domain |
+| `ConstraintViolation` | `residual`, `tolerance` | Relative hyperplane residual after SHAKE projection exceeds `HYPERPLANE_PROJECTION_TOL` |
+| `SurfaceRejection` | `max_attempts` | `SurfaceVelocityPolicy::RejectRedraw` exhausted `max_attempts` |
+| `Surface` | `String` | Potential energy surface callback failure or converted `rgsaddle::SaddleError` |
+| `BackendUnavailable` | `&'static str` | Unlinked external MD session call on `RgpotSessionEngine` or unsupported unconstrained Langevin / constrained NVE mode in `LammpcEngine` |
+| `Lammpc` | `String` | Error returned by the `lammpc_session_*` C ABI or Cap'n Proto message decoding |
+| `Unimplemented` | `&'static str` | Estimator whose implementation is still migrating from `rgsaddle` (`build_rate_table`) |
+
+## Binding surface
+
+### C ABI
+
+`rgflux` exports no `extern "C"` function and has no C header in this release.
+The optional `lammpc` engine consumes, but does not re-export, the following
+`liblammpc` C ABI symbols:
+
+| Purpose | Consumed symbols |
+|---+---|
+| Session lifecycle | `lammpc_session_create_from_config`, `lammpc_session_destroy`, `lammpc_abi_version` |
+| Force evaluation | `lammpc_session_calculate_result`, `lammpc_potential_result_size_for_force_input` |
+| Constrained dynamics | `lammpc_session_md_initialize`, `lammpc_session_md_step`, `lammpc_session_md_set_velocities`, `lammpc_session_md_state` |
+| Unconstrained NVE dynamics | `lammpc_session_nve_set_positions`, `lammpc_session_nve_set_velocities`, `lammpc_session_nve_step`, `lammpc_session_nve_state` |
+| Errors and capabilities | `lammpc_last_error`, `lammpc_capabilities_result` |
+
+All declarations are private implementation details in
+`src/engine/lammpc.rs`. The public Rust boundary is `LammpcConfig`,
+`LammpcEngine`, and the `DynamicsEngine` implementation listed below.
+
+### Python
+
+`rgflux` has no Python extension module, Python package, or type stub in this
+release. Python callers need a separate downstream wrapper. Consequently
+there are no Python names beyond the Rust inventory below.
+
+## Public API documentation coverage
+
+The release audit uses `cargo-public-api` with every feature enabled. It
+counts modules, types, variants, fields, constants, functions, trait methods,
+inherent methods, builder methods, and public re-export paths. Generated
+trait implementations and blanket implementations are omitted because they
+do not add an `rgflux` declaration.
+
+Before this audit, 0 of 563 qualified public item paths had an explicit
+qualified entry in the Org reference. The gaps were primarily builder methods,
+`DynamicsEngine` methods on concrete engines, optional engine methods,
+constants, enum variants, and public re-export paths. After this audit, the
+generated inventory below maps all 563 of 563 paths to this page. The
+descriptive tables above document semantics, defaults, constraints, outputs,
+and errors. The how-to page documents every estimator workflow with runnable
+Rust, equations, and literature citations.
+
+The generated block is authoritative. Run
+`python3 scripts/generate_api_inventory.py` after changing public Rust API.
+
+### Complete qualified Rust inventory
+
+# BEGIN GENERATED PUBLIC API
+#### `DynamicsEngine`
+
+- `rgflux::DynamicsEngine`
+- `rgflux::DynamicsEngine::apply_dividing_surface`
+- `rgflux::DynamicsEngine::cell`
+- `rgflux::DynamicsEngine::constraint`
+- `rgflux::DynamicsEngine::dof`
+- `rgflux::DynamicsEngine::energy_and_forces`
+- `rgflux::DynamicsEngine::kinetic_energy`
+- `rgflux::DynamicsEngine::masses`
+- `rgflux::DynamicsEngine::positions`
+- `rgflux::DynamicsEngine::reflect_velocity`
+- `rgflux::DynamicsEngine::reseed`
+- `rgflux::DynamicsEngine::set_cell`
+- `rgflux::DynamicsEngine::set_constraint`
+- `rgflux::DynamicsEngine::set_positions`
+- `rgflux::DynamicsEngine::set_thermostat`
+- `rgflux::DynamicsEngine::set_velocities`
+- `rgflux::DynamicsEngine::shoot_velocities`
+- `rgflux::DynamicsEngine::step`
+- `rgflux::DynamicsEngine::thermostat`
+- `rgflux::DynamicsEngine::velocities`
+
+#### `EindirSurface`
+
+- `rgflux::EindirSurface`
+
+#### `FluxError`
+
+- `rgflux::FluxError`
+- `rgflux::FluxError::BackendUnavailable`
+- `rgflux::FluxError::ConstraintViolation`
+- `rgflux::FluxError::ConstraintViolation::residual`
+- `rgflux::FluxError::ConstraintViolation::tolerance`
+- `rgflux::FluxError::EmptyInput`
+- `rgflux::FluxError::InvalidConfig`
+- `rgflux::FluxError::Lammpc`
+- `rgflux::FluxError::NoPositiveFlux`
+- `rgflux::FluxError::NonFinite`
+- `rgflux::FluxError::NonStationaryPlateau`
+- `rgflux::FluxError::NonStationaryPlateau::drift_slope`
+- `rgflux::FluxError::NonStationaryPlateau::max_z_score`
+- `rgflux::FluxError::NonStationaryPlateau::z_score`
+- `rgflux::FluxError::Shape`
+- `rgflux::FluxError::Shape::context`
+- `rgflux::FluxError::Shape::expected`
+- `rgflux::FluxError::Shape::got`
+- `rgflux::FluxError::Surface`
+- `rgflux::FluxError::SurfaceRejection`
+- `rgflux::FluxError::SurfaceRejection::max_attempts`
+- `rgflux::FluxError::Unimplemented`
+
+#### `ForceSurface`
+
+- `rgflux::ForceSurface`
+- `rgflux::ForceSurface::energy_and_forces`
+
+#### `HyperplaneConstraint`
+
+- `rgflux::HyperplaneConstraint`
+- `rgflux::HyperplaneConstraint::normal`
+- `rgflux::HyperplaneConstraint::offset`
+
+#### `StepReport`
+
+- `rgflux::StepReport`
+- `rgflux::StepReport::constraint_force`
+- `rgflux::StepReport::kinetic_energy`
+- `rgflux::StepReport::potential_energy`
+
+#### `SurfaceVelocityPolicy`
+
+- `rgflux::SurfaceVelocityPolicy`
+- `rgflux::SurfaceVelocityPolicy::Reflect`
+- `rgflux::SurfaceVelocityPolicy::RejectRedraw`
+- `rgflux::SurfaceVelocityPolicy::RejectRedraw::max_attempts`
+- `rgflux::SurfaceVelocityPolicy::RejectRedraw::seed`
+
+#### `ThermostatConfig`
+
+- `rgflux::ThermostatConfig`
+- `rgflux::ThermostatConfig::boltzmann`
+- `rgflux::ThermostatConfig::gamma`
+- `rgflux::ThermostatConfig::temperature`
+
+#### `engine`
+
+- `rgflux::engine`
+- `rgflux::engine::DEFAULT_REJECTION_MAX_ATTEMPTS`
+- `rgflux::engine::DynamicsEngine`
+- `rgflux::engine::DynamicsEngine::apply_dividing_surface`
+- `rgflux::engine::DynamicsEngine::cell`
+- `rgflux::engine::DynamicsEngine::constraint`
+- `rgflux::engine::DynamicsEngine::dof`
+- `rgflux::engine::DynamicsEngine::energy_and_forces`
+- `rgflux::engine::DynamicsEngine::kinetic_energy`
+- `rgflux::engine::DynamicsEngine::masses`
+- `rgflux::engine::DynamicsEngine::positions`
+- `rgflux::engine::DynamicsEngine::reflect_velocity`
+- `rgflux::engine::DynamicsEngine::reseed`
+- `rgflux::engine::DynamicsEngine::set_cell`
+- `rgflux::engine::DynamicsEngine::set_constraint`
+- `rgflux::engine::DynamicsEngine::set_positions`
+- `rgflux::engine::DynamicsEngine::set_thermostat`
+- `rgflux::engine::DynamicsEngine::set_velocities`
+- `rgflux::engine::DynamicsEngine::shoot_velocities`
+- `rgflux::engine::DynamicsEngine::step`
+- `rgflux::engine::DynamicsEngine::thermostat`
+- `rgflux::engine::DynamicsEngine::velocities`
+- `rgflux::engine::EindirSurface`
+- `rgflux::engine::EindirSurface::energy_and_forces`
+- `rgflux::engine::EindirSurface::inner`
+- `rgflux::engine::EindirSurface::new`
+- `rgflux::engine::ForceSurface`
+- `rgflux::engine::ForceSurface::energy_and_forces`
+- `rgflux::engine::HYPERPLANE_PROJECTION_TOL`
+- `rgflux::engine::HyperplaneConstraint`
+- `rgflux::engine::HyperplaneConstraint::default`
+- `rgflux::engine::HyperplaneConstraint::from_direction`
+- `rgflux::engine::HyperplaneConstraint::new`
+- `rgflux::engine::HyperplaneConstraint::normal`
+- `rgflux::engine::HyperplaneConstraint::offset`
+- `rgflux::engine::HyperplaneConstraint::signed_distance`
+- `rgflux::engine::HyperplaneConstraint::validate`
+- `rgflux::engine::HyperplaneConstraint::with_normal`
+- `rgflux::engine::HyperplaneConstraint::with_offset`
+- `rgflux::engine::StepReport`
+- `rgflux::engine::StepReport::constraint_force`
+- `rgflux::engine::StepReport::kinetic_energy`
+- `rgflux::engine::StepReport::new`
+- `rgflux::engine::StepReport::potential_energy`
+- `rgflux::engine::SurfaceVelocityPolicy`
+- `rgflux::engine::SurfaceVelocityPolicy::Reflect`
+- `rgflux::engine::SurfaceVelocityPolicy::RejectRedraw`
+- `rgflux::engine::SurfaceVelocityPolicy::RejectRedraw::max_attempts`
+- `rgflux::engine::SurfaceVelocityPolicy::RejectRedraw::seed`
+- `rgflux::engine::ThermostatConfig`
+- `rgflux::engine::ThermostatConfig::boltzmann`
+- `rgflux::engine::ThermostatConfig::default`
+- `rgflux::engine::ThermostatConfig::gamma`
+- `rgflux::engine::ThermostatConfig::temperature`
+- `rgflux::engine::ThermostatConfig::thermal_energy`
+- `rgflux::engine::ThermostatConfig::with_boltzmann`
+- `rgflux::engine::ThermostatConfig::with_gamma`
+- `rgflux::engine::ThermostatConfig::with_temperature`
+- `rgflux::engine::UNIT_NORMAL_TOL`
+- `rgflux::engine::draw_maxwell_boltzmann_velocities`
+- `rgflux::engine::lammpc`
+- `rgflux::engine::lammpc::LammpcConfig`
+- `rgflux::engine::lammpc::LammpcConfig::atomic_numbers`
+- `rgflux::engine::lammpc::LammpcConfig::boundary`
+- `rgflux::engine::lammpc::LammpcConfig::cell`
+- `rgflux::engine::lammpc::LammpcConfig::constraint`
+- `rgflux::engine::lammpc::LammpcConfig::default`
+- `rgflux::engine::lammpc::LammpcConfig::extra_setup`
+- `rgflux::engine::lammpc::LammpcConfig::masses_by_type`
+- `rgflux::engine::lammpc::LammpcConfig::pair_coeffs`
+- `rgflux::engine::lammpc::LammpcConfig::pair_style`
+- `rgflux::engine::lammpc::LammpcConfig::seed`
+- `rgflux::engine::lammpc::LammpcConfig::suffix`
+- `rgflux::engine::lammpc::LammpcConfig::thermostat`
+- `rgflux::engine::lammpc::LammpcConfig::type_to_atomic_number`
+- `rgflux::engine::lammpc::LammpcConfig::with_atomic_numbers`
+- `rgflux::engine::lammpc::LammpcConfig::with_boundary`
+- `rgflux::engine::lammpc::LammpcConfig::with_cell`
+- `rgflux::engine::lammpc::LammpcConfig::with_constraint`
+- `rgflux::engine::lammpc::LammpcConfig::with_extra_setup`
+- `rgflux::engine::lammpc::LammpcConfig::with_masses_by_type`
+- `rgflux::engine::lammpc::LammpcConfig::with_pair_coeffs`
+- `rgflux::engine::lammpc::LammpcConfig::with_pair_style`
+- `rgflux::engine::lammpc::LammpcConfig::with_seed`
+- `rgflux::engine::lammpc::LammpcConfig::with_suffix`
+- `rgflux::engine::lammpc::LammpcConfig::with_thermostat`
+- `rgflux::engine::lammpc::LammpcConfig::with_type_to_atomic_number`
+- `rgflux::engine::lammpc::LammpcEngine`
+- `rgflux::engine::lammpc::LammpcEngine::apply_dividing_surface`
+- `rgflux::engine::lammpc::LammpcEngine::cell`
+- `rgflux::engine::lammpc::LammpcEngine::constraint`
+- `rgflux::engine::lammpc::LammpcEngine::dof`
+- `rgflux::engine::lammpc::LammpcEngine::drop`
+- `rgflux::engine::lammpc::LammpcEngine::energy_and_forces`
+- `rgflux::engine::lammpc::LammpcEngine::kinetic_energy`
+- `rgflux::engine::lammpc::LammpcEngine::masses`
+- `rgflux::engine::lammpc::LammpcEngine::new`
+- `rgflux::engine::lammpc::LammpcEngine::positions`
+- `rgflux::engine::lammpc::LammpcEngine::reflect_velocity`
+- `rgflux::engine::lammpc::LammpcEngine::reseed`
+- `rgflux::engine::lammpc::LammpcEngine::set_cell`
+- `rgflux::engine::lammpc::LammpcEngine::set_constraint`
+- `rgflux::engine::lammpc::LammpcEngine::set_positions`
+- `rgflux::engine::lammpc::LammpcEngine::set_thermostat`
+- `rgflux::engine::lammpc::LammpcEngine::set_velocities`
+- `rgflux::engine::lammpc::LammpcEngine::shoot_velocities`
+- `rgflux::engine::lammpc::LammpcEngine::step`
+- `rgflux::engine::lammpc::LammpcEngine::thermostat`
+- `rgflux::engine::lammpc::LammpcEngine::velocities`
+- `rgflux::engine::lammpc::MASS_VELOCITY_TO_EV`
+- `rgflux::engine::native`
+- `rgflux::engine::native::ConstraintProjection`
+- `rgflux::engine::native::ConstraintProjection::Rattle`
+- `rgflux::engine::native::ConstraintProjection::Shake`
+- `rgflux::engine::native::NativeConfig`
+- `rgflux::engine::native::NativeConfig::cell`
+- `rgflux::engine::native::NativeConfig::constraint`
+- `rgflux::engine::native::NativeConfig::default`
+- `rgflux::engine::native::NativeConfig::masses`
+- `rgflux::engine::native::NativeConfig::projection`
+- `rgflux::engine::native::NativeConfig::seed`
+- `rgflux::engine::native::NativeConfig::thermostat`
+- `rgflux::engine::native::NativeConfig::with_cell`
+- `rgflux::engine::native::NativeConfig::with_constraint`
+- `rgflux::engine::native::NativeConfig::with_masses`
+- `rgflux::engine::native::NativeConfig::with_projection`
+- `rgflux::engine::native::NativeConfig::with_seed`
+- `rgflux::engine::native::NativeConfig::with_thermostat`
+- `rgflux::engine::native::NativeEngine`
+- `rgflux::engine::native::NativeEngine::apply_dividing_surface`
+- `rgflux::engine::native::NativeEngine::cell`
+- `rgflux::engine::native::NativeEngine::constraint`
+- `rgflux::engine::native::NativeEngine::dof`
+- `rgflux::engine::native::NativeEngine::energy_and_forces`
+- `rgflux::engine::native::NativeEngine::kinetic_energy`
+- `rgflux::engine::native::NativeEngine::masses`
+- `rgflux::engine::native::NativeEngine::new`
+- `rgflux::engine::native::NativeEngine::positions`
+- `rgflux::engine::native::NativeEngine::projection`
+- `rgflux::engine::native::NativeEngine::reflect_velocity`
+- `rgflux::engine::native::NativeEngine::reseed`
+- `rgflux::engine::native::NativeEngine::reseed_rng`
+- `rgflux::engine::native::NativeEngine::set_cell`
+- `rgflux::engine::native::NativeEngine::set_constraint`
+- `rgflux::engine::native::NativeEngine::set_positions`
+- `rgflux::engine::native::NativeEngine::set_thermostat`
+- `rgflux::engine::native::NativeEngine::set_velocities`
+- `rgflux::engine::native::NativeEngine::shoot_velocities`
+- `rgflux::engine::native::NativeEngine::step`
+- `rgflux::engine::native::NativeEngine::surface`
+- `rgflux::engine::native::NativeEngine::thermostat`
+- `rgflux::engine::native::NativeEngine::velocities`
+- `rgflux::engine::reflect_velocity_in_place`
+- `rgflux::engine::rgpot`
+- `rgflux::engine::rgpot::DEFAULT_RGPOT_BOX_EDGE`
+- `rgflux::engine::rgpot::RgpotConfig`
+- `rgflux::engine::rgpot::RgpotConfig::atomic_numbers`
+- `rgflux::engine::rgpot::RgpotConfig::default`
+- `rgflux::engine::rgpot::RgpotConfig::default_cell`
+- `rgflux::engine::rgpot::RgpotConfig::with_atomic_numbers`
+- `rgflux::engine::rgpot::RgpotConfig::with_default_cell`
+- `rgflux::engine::rgpot::RgpotSurface`
+- `rgflux::engine::rgpot::RgpotSurface::energy_and_forces`
+- `rgflux::engine::rgpot::RgpotSurface::n_atoms`
+- `rgflux::engine::rgpot::RgpotSurface::new`
+- `rgflux::engine::rgpot_session`
+- `rgflux::engine::rgpot_session::RgpotSessionConfig`
+- `rgflux::engine::rgpot_session::RgpotSessionConfig::cell`
+- `rgflux::engine::rgpot_session::RgpotSessionConfig::constraint`
+- `rgflux::engine::rgpot_session::RgpotSessionConfig::default`
+- `rgflux::engine::rgpot_session::RgpotSessionConfig::engine`
+- `rgflux::engine::rgpot_session::RgpotSessionConfig::engine_path`
+- `rgflux::engine::rgpot_session::RgpotSessionConfig::masses`
+- `rgflux::engine::rgpot_session::RgpotSessionConfig::options`
+- `rgflux::engine::rgpot_session::RgpotSessionConfig::seed`
+- `rgflux::engine::rgpot_session::RgpotSessionConfig::spec`
+- `rgflux::engine::rgpot_session::RgpotSessionConfig::thermostat`
+- `rgflux::engine::rgpot_session::RgpotSessionConfig::with_cell`
+- `rgflux::engine::rgpot_session::RgpotSessionConfig::with_constraint`
+- `rgflux::engine::rgpot_session::RgpotSessionConfig::with_engine`
+- `rgflux::engine::rgpot_session::RgpotSessionConfig::with_engine_path`
+- `rgflux::engine::rgpot_session::RgpotSessionConfig::with_masses`
+- `rgflux::engine::rgpot_session::RgpotSessionConfig::with_options`
+- `rgflux::engine::rgpot_session::RgpotSessionConfig::with_seed`
+- `rgflux::engine::rgpot_session::RgpotSessionConfig::with_spec`
+- `rgflux::engine::rgpot_session::RgpotSessionConfig::with_thermostat`
+- `rgflux::engine::rgpot_session::RgpotSessionEngine`
+- `rgflux::engine::rgpot_session::RgpotSessionEngine::apply_dividing_surface`
+- `rgflux::engine::rgpot_session::RgpotSessionEngine::cell`
+- `rgflux::engine::rgpot_session::RgpotSessionEngine::constraint`
+- `rgflux::engine::rgpot_session::RgpotSessionEngine::dof`
+- `rgflux::engine::rgpot_session::RgpotSessionEngine::energy_and_forces`
+- `rgflux::engine::rgpot_session::RgpotSessionEngine::engine_kind`
+- `rgflux::engine::rgpot_session::RgpotSessionEngine::kinetic_energy`
+- `rgflux::engine::rgpot_session::RgpotSessionEngine::masses`
+- `rgflux::engine::rgpot_session::RgpotSessionEngine::new`
+- `rgflux::engine::rgpot_session::RgpotSessionEngine::positions`
+- `rgflux::engine::rgpot_session::RgpotSessionEngine::reflect_velocity`
+- `rgflux::engine::rgpot_session::RgpotSessionEngine::reseed`
+- `rgflux::engine::rgpot_session::RgpotSessionEngine::rgpot_version_major`
+- `rgflux::engine::rgpot_session::RgpotSessionEngine::set_cell`
+- `rgflux::engine::rgpot_session::RgpotSessionEngine::set_constraint`
+- `rgflux::engine::rgpot_session::RgpotSessionEngine::set_positions`
+- `rgflux::engine::rgpot_session::RgpotSessionEngine::set_thermostat`
+- `rgflux::engine::rgpot_session::RgpotSessionEngine::set_velocities`
+- `rgflux::engine::rgpot_session::RgpotSessionEngine::shoot_velocities`
+- `rgflux::engine::rgpot_session::RgpotSessionEngine::step`
+- `rgflux::engine::rgpot_session::RgpotSessionEngine::thermostat`
+- `rgflux::engine::rgpot_session::RgpotSessionEngine::velocities`
+- `rgflux::engine::rgpot_session::SessionEngineKind`
+- `rgflux::engine::rgpot_session::SessionEngineKind::Lammps`
+- `rgflux::engine::rgpot_session::SessionEngineKind::NbLib`
+- `rgflux::engine::rgpot_session::SessionEngineKind::OpenMm`
+- `rgflux::engine::rgpot_session::SessionEngineKind::engine_name`
+
+#### `error`
+
+- `rgflux::error`
+- `rgflux::error::FluxError`
+- `rgflux::error::FluxError::BackendUnavailable`
+- `rgflux::error::FluxError::ConstraintViolation`
+- `rgflux::error::FluxError::ConstraintViolation::residual`
+- `rgflux::error::FluxError::ConstraintViolation::tolerance`
+- `rgflux::error::FluxError::EmptyInput`
+- `rgflux::error::FluxError::InvalidConfig`
+- `rgflux::error::FluxError::Lammpc`
+- `rgflux::error::FluxError::NoPositiveFlux`
+- `rgflux::error::FluxError::NonFinite`
+- `rgflux::error::FluxError::NonStationaryPlateau`
+- `rgflux::error::FluxError::NonStationaryPlateau::drift_slope`
+- `rgflux::error::FluxError::NonStationaryPlateau::max_z_score`
+- `rgflux::error::FluxError::NonStationaryPlateau::z_score`
+- `rgflux::error::FluxError::Shape`
+- `rgflux::error::FluxError::Shape::context`
+- `rgflux::error::FluxError::Shape::expected`
+- `rgflux::error::FluxError::Shape::got`
+- `rgflux::error::FluxError::Surface`
+- `rgflux::error::FluxError::SurfaceRejection`
+- `rgflux::error::FluxError::SurfaceRejection::max_attempts`
+- `rgflux::error::FluxError::Unimplemented`
+- `rgflux::error::FluxError::from`
+
+#### `ffs`
+
+- `rgflux::ffs`
+- `rgflux::ffs::FfsConfig`
+- `rgflux::ffs::FfsConfig::burn_in_steps`
+- `rgflux::ffs::FfsConfig::default`
+- `rgflux::ffs::FfsConfig::interfaces`
+- `rgflux::ffs::FfsConfig::max_flux_steps`
+- `rgflux::ffs::FfsConfig::max_trial_steps`
+- `rgflux::ffs::FfsConfig::points_per_interface`
+- `rgflux::ffs::FfsConfig::seed`
+- `rgflux::ffs::FfsConfig::stats`
+- `rgflux::ffs::FfsConfig::time_step`
+- `rgflux::ffs::FfsConfig::trials_per_interface`
+- `rgflux::ffs::FfsConfig::with_burn_in_steps`
+- `rgflux::ffs::FfsConfig::with_interfaces`
+- `rgflux::ffs::FfsConfig::with_max_flux_steps`
+- `rgflux::ffs::FfsConfig::with_max_trial_steps`
+- `rgflux::ffs::FfsConfig::with_points_per_interface`
+- `rgflux::ffs::FfsConfig::with_seed`
+- `rgflux::ffs::FfsConfig::with_stats`
+- `rgflux::ffs::FfsConfig::with_time_step`
+- `rgflux::ffs::FfsConfig::with_trials_per_interface`
+- `rgflux::ffs::FfsEstimate`
+- `rgflux::ffs::FfsEstimate::initial_flux`
+- `rgflux::ffs::FfsEstimate::interface_probabilities`
+- `rgflux::ffs::FfsEstimate::rate`
+- `rgflux::ffs::FfsEstimate::standard_error`
+- `rgflux::ffs::forward_flux_rate`
+
+#### `hyperplane`
+
+- `rgflux::hyperplane`
+- `rgflux::hyperplane::HyperplaneConfig`
+- `rgflux::hyperplane::HyperplaneConfig::burn_in_steps`
+- `rgflux::hyperplane::HyperplaneConfig::default`
+- `rgflux::hyperplane::HyperplaneConfig::retention_stride`
+- `rgflux::hyperplane::HyperplaneConfig::sample_steps`
+- `rgflux::hyperplane::HyperplaneConfig::seed`
+- `rgflux::hyperplane::HyperplaneConfig::stats`
+- `rgflux::hyperplane::HyperplaneConfig::time_step`
+- `rgflux::hyperplane::HyperplaneConfig::with_burn_in_steps`
+- `rgflux::hyperplane::HyperplaneConfig::with_retention_stride`
+- `rgflux::hyperplane::HyperplaneConfig::with_sample_steps`
+- `rgflux::hyperplane::HyperplaneConfig::with_seed`
+- `rgflux::hyperplane::HyperplaneConfig::with_stats`
+- `rgflux::hyperplane::HyperplaneConfig::with_time_step`
+- `rgflux::hyperplane::HyperplaneConstraint`
+- `rgflux::hyperplane::HyperplaneConstraint::normal`
+- `rgflux::hyperplane::HyperplaneConstraint::offset`
+- `rgflux::hyperplane::HyperplaneSample`
+- `rgflux::hyperplane::HyperplaneSample::configurations`
+- `rgflux::hyperplane::HyperplaneSample::mean_force`
+- `rgflux::hyperplane::HyperplaneSample::plane`
+- `rgflux::hyperplane::HyperplaneSample::standard_error`
+- `rgflux::hyperplane::sample_hyperplane`
+
+#### `kappa`
+
+- `rgflux::kappa`
+- `rgflux::kappa::BennettChandlerConfig`
+- `rgflux::kappa::BennettChandlerConfig::plateau_end_fraction`
+- `rgflux::kappa::BennettChandlerConfig::plateau_start_fraction`
+- `rgflux::kappa::BennettChandlerConfig::stats`
+- `rgflux::kappa::BennettChandlerEstimate`
+- `rgflux::kappa::BennettChandlerEstimate::kappa_t`
+- `rgflux::kappa::BennettChandlerEstimate::n_eff`
+- `rgflux::kappa::BennettChandlerEstimate::plateau`
+- `rgflux::kappa::BennettChandlerEstimate::plateau_window`
+- `rgflux::kappa::BennettChandlerEstimate::positive_flux_count`
+- `rgflux::kappa::BennettChandlerEstimate::standard_error`
+- `rgflux::kappa::BennettChandlerEstimate::stationarity`
+- `rgflux::kappa::KappaConfig`
+- `rgflux::kappa::KappaConfig::commit_checkpoints`
+- `rgflux::kappa::KappaConfig::default`
+- `rgflux::kappa::KappaConfig::quench_force_tol`
+- `rgflux::kappa::KappaConfig::quench_max_steps`
+- `rgflux::kappa::KappaConfig::with_commit_checkpoints`
+- `rgflux::kappa::KappaConfig::with_quench_force_tol`
+- `rgflux::kappa::KappaConfig::with_quench_max_steps`
+- `rgflux::kappa::ReactiveTrajectory`
+- `rgflux::kappa::ReactiveTrajectory::initial_normal_velocity`
+- `rgflux::kappa::ReactiveTrajectory::sides`
+- `rgflux::kappa::ShootingConfig`
+- `rgflux::kappa::ShootingConfig::antithetic`
+- `rgflux::kappa::ShootingConfig::estimator`
+- `rgflux::kappa::ShootingConfig::seed`
+- `rgflux::kappa::ShootingConfig::steps`
+- `rgflux::kappa::ShootingConfig::time_step`
+- `rgflux::kappa::Side`
+- `rgflux::kappa::Side::Product`
+- `rgflux::kappa::Side::Reactant`
+- `rgflux::kappa::bennett_chandler`
+- `rgflux::kappa::bennett_chandler::BennettChandlerConfig`
+- `rgflux::kappa::bennett_chandler::BennettChandlerConfig::default`
+- `rgflux::kappa::bennett_chandler::BennettChandlerConfig::plateau_end_fraction`
+- `rgflux::kappa::bennett_chandler::BennettChandlerConfig::plateau_start_fraction`
+- `rgflux::kappa::bennett_chandler::BennettChandlerConfig::stats`
+- `rgflux::kappa::bennett_chandler::BennettChandlerConfig::with_plateau_end_fraction`
+- `rgflux::kappa::bennett_chandler::BennettChandlerConfig::with_plateau_start_fraction`
+- `rgflux::kappa::bennett_chandler::BennettChandlerConfig::with_stats`
+- `rgflux::kappa::bennett_chandler::BennettChandlerEstimate`
+- `rgflux::kappa::bennett_chandler::BennettChandlerEstimate::kappa_t`
+- `rgflux::kappa::bennett_chandler::BennettChandlerEstimate::n_eff`
+- `rgflux::kappa::bennett_chandler::BennettChandlerEstimate::plateau`
+- `rgflux::kappa::bennett_chandler::BennettChandlerEstimate::plateau_window`
+- `rgflux::kappa::bennett_chandler::BennettChandlerEstimate::positive_flux_count`
+- `rgflux::kappa::bennett_chandler::BennettChandlerEstimate::standard_error`
+- `rgflux::kappa::bennett_chandler::BennettChandlerEstimate::stationarity`
+- `rgflux::kappa::bennett_chandler::DEFAULT_PLATEAU_END_FRACTION`
+- `rgflux::kappa::bennett_chandler::DEFAULT_PLATEAU_START_FRACTION`
+- `rgflux::kappa::bennett_chandler::DEFAULT_SHOOTING_STEPS`
+- `rgflux::kappa::bennett_chandler::DEFAULT_SHOOTING_TIME_STEP`
+- `rgflux::kappa::bennett_chandler::ReactiveTrajectory`
+- `rgflux::kappa::bennett_chandler::ReactiveTrajectory::initial_normal_velocity`
+- `rgflux::kappa::bennett_chandler::ReactiveTrajectory::new`
+- `rgflux::kappa::bennett_chandler::ReactiveTrajectory::sides`
+- `rgflux::kappa::bennett_chandler::ShootingConfig`
+- `rgflux::kappa::bennett_chandler::ShootingConfig::antithetic`
+- `rgflux::kappa::bennett_chandler::ShootingConfig::default`
+- `rgflux::kappa::bennett_chandler::ShootingConfig::estimator`
+- `rgflux::kappa::bennett_chandler::ShootingConfig::seed`
+- `rgflux::kappa::bennett_chandler::ShootingConfig::steps`
+- `rgflux::kappa::bennett_chandler::ShootingConfig::time_step`
+- `rgflux::kappa::bennett_chandler::ShootingConfig::with_antithetic`
+- `rgflux::kappa::bennett_chandler::ShootingConfig::with_estimator`
+- `rgflux::kappa::bennett_chandler::ShootingConfig::with_seed`
+- `rgflux::kappa::bennett_chandler::ShootingConfig::with_steps`
+- `rgflux::kappa::bennett_chandler::ShootingConfig::with_time_step`
+- `rgflux::kappa::bennett_chandler::Side`
+- `rgflux::kappa::bennett_chandler::Side::Product`
+- `rgflux::kappa::bennett_chandler::Side::Reactant`
+- `rgflux::kappa::bennett_chandler::Side::from_signed_distance`
+- `rgflux::kappa::bennett_chandler::Side::indicator`
+- `rgflux::kappa::bennett_chandler::estimate_bennett_chandler`
+- `rgflux::kappa::bennett_chandler::shoot_bennett_chandler`
+- `rgflux::kappa::bennett_chandler::shoot_reactive_trajectories`
+- `rgflux::kappa::estimate_bennett_chandler`
+- `rgflux::kappa::kramers_transmission_coefficient`
+- `rgflux::kappa::shoot_bennett_chandler`
+- `rgflux::kappa::shoot_reactive_trajectories`
+
+#### `network`
+
+- `rgflux::network`
+- `rgflux::network::NetworkConfig`
+- `rgflux::network::NetworkConfig::boltzmann`
+- `rgflux::network::NetworkConfig::default`
+- `rgflux::network::NetworkConfig::enforce_detailed_balance`
+- `rgflux::network::NetworkConfig::min_rate`
+- `rgflux::network::NetworkConfig::temperature`
+- `rgflux::network::NetworkConfig::with_boltzmann`
+- `rgflux::network::NetworkConfig::with_enforce_detailed_balance`
+- `rgflux::network::NetworkConfig::with_min_rate`
+- `rgflux::network::NetworkConfig::with_temperature`
+- `rgflux::network::RateEdge`
+- `rgflux::network::RateEdge::from`
+- `rgflux::network::RateEdge::new`
+- `rgflux::network::RateEdge::rate`
+- `rgflux::network::RateEdge::to`
+- `rgflux::network::RateTableConfig`
+- `rgflux::network::RateTableConfig::default`
+- `rgflux::network::RateTableConfig::max_steps`
+- `rgflux::network::RateTableConfig::seed`
+- `rgflux::network::RateTableConfig::with_max_steps`
+- `rgflux::network::RateTableConfig::with_seed`
+- `rgflux::network::build_rate_table`
+
+#### `ohtst`
+
+- `rgflux::ohtst`
+- `rgflux::ohtst::OhtstConfig`
+- `rgflux::ohtst::OhtstConfig::burn_in_steps`
+- `rgflux::ohtst::OhtstConfig::default`
+- `rgflux::ohtst::OhtstConfig::max_outer_steps`
+- `rgflux::ohtst::OhtstConfig::max_rotation`
+- `rgflux::ohtst::OhtstConfig::max_translation`
+- `rgflux::ohtst::OhtstConfig::min_overlap`
+- `rgflux::ohtst::OhtstConfig::min_sample_steps`
+- `rgflux::ohtst::OhtstConfig::patience`
+- `rgflux::ohtst::OhtstConfig::retention_stride`
+- `rgflux::ohtst::OhtstConfig::sample_step_factor`
+- `rgflux::ohtst::OhtstConfig::seed`
+- `rgflux::ohtst::OhtstConfig::stats`
+- `rgflux::ohtst::OhtstConfig::time_step`
+- `rgflux::ohtst::OhtstConfig::use_mbar`
+- `rgflux::ohtst::OhtstConfig::with_burn_in_steps`
+- `rgflux::ohtst::OhtstConfig::with_max_outer_steps`
+- `rgflux::ohtst::OhtstConfig::with_max_rotation`
+- `rgflux::ohtst::OhtstConfig::with_max_translation`
+- `rgflux::ohtst::OhtstConfig::with_min_overlap`
+- `rgflux::ohtst::OhtstConfig::with_min_sample_steps`
+- `rgflux::ohtst::OhtstConfig::with_patience`
+- `rgflux::ohtst::OhtstConfig::with_retention_stride`
+- `rgflux::ohtst::OhtstConfig::with_sample_step_factor`
+- `rgflux::ohtst::OhtstConfig::with_seed`
+- `rgflux::ohtst::OhtstConfig::with_stats`
+- `rgflux::ohtst::OhtstConfig::with_time_step`
+- `rgflux::ohtst::OhtstConfig::with_use_mbar`
+- `rgflux::ohtst::OhtstEstimate`
+- `rgflux::ohtst::OhtstEstimate::plane`
+- `rgflux::ohtst::OhtstEstimate::rate`
+- `rgflux::ohtst::OhtstEstimate::standard_error`
+- `rgflux::ohtst::optimize_hyperplane`
+
+#### `pafi`
+
+- `rgflux::pafi`
+- `rgflux::pafi::FreeEnergyProfile`
+- `rgflux::pafi::FreeEnergyProfile::arc_lengths`
+- `rgflux::pafi::FreeEnergyProfile::barrier`
+- `rgflux::pafi::FreeEnergyProfile::barrier_error`
+- `rgflux::pafi::FreeEnergyProfile::dividing_index`
+- `rgflux::pafi::FreeEnergyProfile::free_energy`
+- `rgflux::pafi::FreeEnergyProfile::normalized_log_rate`
+- `rgflux::pafi::FreeEnergyProfile::normalized_rate`
+- `rgflux::pafi::FreeEnergyProfile::normalized_rate_error`
+- `rgflux::pafi::FreeEnergyProfile::reactant_log_partition`
+- `rgflux::pafi::FreeEnergyProfile::reactant_partition`
+- `rgflux::pafi::FreeEnergyProfile::standard_error`
+- `rgflux::pafi::PafiConfig`
+- `rgflux::pafi::PafiConfig::burn_in_steps`
+- `rgflux::pafi::PafiConfig::default`
+- `rgflux::pafi::PafiConfig::max_rounds`
+- `rgflux::pafi::PafiConfig::planes`
+- `rgflux::pafi::PafiConfig::sample_steps`
+- `rgflux::pafi::PafiConfig::seed`
+- `rgflux::pafi::PafiConfig::stats`
+- `rgflux::pafi::PafiConfig::target_error`
+- `rgflux::pafi::PafiConfig::time_step`
+- `rgflux::pafi::PafiConfig::with_burn_in_steps`
+- `rgflux::pafi::PafiConfig::with_max_rounds`
+- `rgflux::pafi::PafiConfig::with_planes`
+- `rgflux::pafi::PafiConfig::with_sample_steps`
+- `rgflux::pafi::PafiConfig::with_seed`
+- `rgflux::pafi::PafiConfig::with_stats`
+- `rgflux::pafi::PafiConfig::with_target_error`
+- `rgflux::pafi::PafiConfig::with_time_step`
+- `rgflux::pafi::PafiConfig::with_zero_temperature_tol`
+- `rgflux::pafi::PafiConfig::zero_temperature_tol`
+- `rgflux::pafi::pafi_profile`
+- `rgflux::pafi::pafi_profile_dyn`
+
+#### `stats`
+
+- `rgflux::stats`
+- `rgflux::stats::BatchEstimate`
+- `rgflux::stats::BatchEstimate::batch_count`
+- `rgflux::stats::BatchEstimate::batch_size`
+- `rgflux::stats::BatchEstimate::mean`
+- `rgflux::stats::BatchEstimate::n_eff`
+- `rgflux::stats::BatchEstimate::n_samples`
+- `rgflux::stats::BatchEstimate::standard_error`
+- `rgflux::stats::BatchEstimate::tau_int`
+- `rgflux::stats::BatchEstimate::variance`
+- `rgflux::stats::DEFAULT_FIRST_FRACTION`
+- `rgflux::stats::DEFAULT_LAST_FRACTION`
+- `rgflux::stats::DEFAULT_MAX_Z_SCORE`
+- `rgflux::stats::DEFAULT_MIN_BATCHES`
+- `rgflux::stats::MIN_STATIONARITY_SAMPLES`
+- `rgflux::stats::SERIES_FLAT_TOL`
+- `rgflux::stats::StationarityReport`
+- `rgflux::stats::StationarityReport::drift_slope`
+- `rgflux::stats::StationarityReport::first_mean`
+- `rgflux::stats::StationarityReport::is_stationary`
+- `rgflux::stats::StationarityReport::max_z_score`
+- `rgflux::stats::StationarityReport::second_mean`
+- `rgflux::stats::StationarityReport::z_score`
+- `rgflux::stats::StatsConfig`
+- `rgflux::stats::StatsConfig::batch_size`
+- `rgflux::stats::StatsConfig::default`
+- `rgflux::stats::StatsConfig::max_z_score`
+- `rgflux::stats::StatsConfig::min_batches`
+- `rgflux::stats::StatsConfig::stationarity_first_fraction`
+- `rgflux::stats::StatsConfig::stationarity_last_fraction`
+- `rgflux::stats::StatsConfig::with_batch_size`
+- `rgflux::stats::StatsConfig::with_max_z_score`
+- `rgflux::stats::StatsConfig::with_min_batches`
+- `rgflux::stats::StatsConfig::with_stationarity_first_fraction`
+- `rgflux::stats::StatsConfig::with_stationarity_last_fraction`
+- `rgflux::stats::VARIANCE_REL_FLOOR`
+- `rgflux::stats::batch_means`
+- `rgflux::stats::check_stationarity`
+- `rgflux::stats::effective_sample_size`
+
+# END GENERATED PUBLIC API
+
+## Explanation
+
+## Engine-agnostic kinetics
+
+Saddle-point searches in `rgsaddle` and local or Riemannian minimizers in `rgmin` query static energy and gradient surfaces cite:`goswamiEfficientExploration2025,goswamiEnhancedClimbingImage2026,goswamiGaussianProcessSaddle2025,goswamiAdaptivePruning2026,goswamiReproducibleOrchestration2026`. Finite-temperature kinetics additionally requires finite-timestep propagation, thermal velocity seeding, dividing-surface velocity boundary rules, deterministic PRNG reseeding, and holonomic hyperplane constraints.
+
+`rgflux::engine::DynamicsEngine` captures that contract in an object-safe trait. Every trajectory sampler in `rgflux` accepts `&mut E` for `E: DynamicsEngine + ?Sized`, supporting both monomorphized generics and `&mut dyn DynamicsEngine` dynamic dispatch without coupling rate estimators to a particular molecular dynamics package cite:`goswamiEfficientExploration2025,eon2901`.
+
+### How each engine backend is wired
+
+1. *In-process BAOAB + RATTLE/SHAKE reference backend (`engine::native::NativeEngine`)*:
+   Integrates unconstrained or hyperplane-constrained Langevin dynamics (\(\gamma > 0\)) and velocity-Verlet NVE dynamics (\(\gamma ` 0\)) using the symmetric BAOAB splitting (half velocity kick *B*, half coordinate drift *A*, exact Ornstein-Uhlenbeck thermostat update *O*, half drift *A*, closing half kick *B*) cite:`leimkuhlerRationalConstruction2012,leimkuhlerGeodesicIntegration2016`. Static potential energy surfaces enter through `engine::ForceSurface`, which converts gradients \(+\nabla V(\mathbf{x})\) into physical forces \(\mathbf{F}(\mathbf{x}) ` -\nabla V(\mathbf{x})\):
+   - Any `rgsaddle::PointSurface` via a blanket `ForceSurface` implementation (forwarding optional periodic cells through `eval_in_cell`).
+   - Any `eindir_core::DifferentiableObjective<f64>` (as used by `rgmin::Oracle`) wrapped in `engine::EindirSurface`.
+   - Any `rgpot_core::potential::PotentialImpl` callback wrapped in `engine::rgpot::RgpotSurface` (feature `rgpot`), exchanging zero-copy CPU DLPack tensors (`rgpot_force_input_t` / `rgpot_force_out_t`).
+2. *Direct LAMMPS backend (`engine::lammpc::LammpcEngine`, feature `lammpc`)*:
+   Links `liblammpc` and drives its persistent `lammpc_session_*` C ABI with `PotentialConfig` and `ForceInput` Cap'n Proto messages from `rgpot-core`. It supports constrained Langevin (\(\gamma > 0\)) or zero-friction projected velocity-Verlet (\(\gamma ` 0\)) dynamics on a `HyperplaneConstraint` via `lammpc_session_md_initialize`, `lammpc_session_md_step`, and `lammpc_session_md_state` (evaluating endpoint potential energy and physical forces via `lammpc_session_calculate_result` to form the mass-weighted multiplier \(\lambda\)), as well as unconstrained velocity-Verlet NVE (\(\gamma ` 0\), no constraint) via `lammpc_session_nve_*` with periodic image-flag coordinate unwrapping. Unconstrained Langevin (\(\gamma > 0\), no constraint) returns `FluxError::BackendUnavailable`, and C ABI failures return `FluxError::Lammpc`.
+3. *External MD session adapter (`engine::rgpot_session::RgpotSessionEngine`, feature `rgpot-session`)*:
+   Targets `rgpot`'s engine-neutral session C ABI (`rgpot_md_session_*` and `rgpot_core::md_session`) across OpenMM (`SessionEngineKind::OpenMm`, `"openmm"`), GROMACS `nblib` (`SessionEngineKind::NbLib`, `"nblib"`), and LAMMPS (`SessionEngineKind::Lammps`, `"lammps"`). State accessors, Maxwell-Boltzmann velocity draws, and mass-weighted Householder dividing-surface reflections operate in-process; on `develop`, `step`, `energy_and_forces`, and `reseed` return `FluxError::BackendUnavailable` until `rgpot_core::md_session` merges onto `rgpot` `develop`.
+
+### Units across engines and estimators
+
+`rgflux` is unit-consistent with the active `DynamicsEngine`:
+
+- Let \([L]\), \([M]\), \([E]\), and \([T]\) denote the engine's length, mass, energy, and time units (satisfying \([E] ` [M][L]^2[T]^{-2}\) in consistent dynamical units, or reduced units where \(k_{\mathrm{B}} ` 1\)).
+- Hyperplane normals \(\mathbf{n}\) are dimensionless Euclidean unit vectors (\(\|\mathbf{n}\|_2 ` 1\) within `UNIT_NORMAL_TOL` \(` 64\,\varepsilon_{\mathrm{mach}}\) cite:`highamAccuracyStability2002`); plane offsets \(c\) have unit \([L]\).
+- Potential energies \(V(\mathbf{x})\), kinetic energies \(K(\mathbf{v}) ` \tfrac{1}{2}\sum_i m_i v_i^2\), and thermal energy \(k_{\mathrm{B}} T\) (`ThermostatConfig::thermal_energy=) have unit \([E]\).
+- Physical forces \(\mathbf{F}(\mathbf{x}) ` -\nabla V(\mathbf{x})\) and the holonomic constraint Lagrange multiplier \(\lambda ` dA/dc\) have unit \([E][L]^{-1}\).
+- First-order transition rates (\(k_{\mathrm{OHTST}}\) in `ohtst`, \(k_{AB}\) in `ffs`, and `normalized_rate` in `pafi`) have inverse time units \([T]^{-1}\).
+- Across the `lammpc`, `rgpot`, and `rgpot-session` boundaries, quantities follow LAMMPS `metal` / `rgpot` units: coordinates and box vectors in Å, velocities in Å/ps, forces in eV/Å, energies and \(k_{\mathrm{B}}T\) in eV, masses in amu (with dynamical conversion factor `MASS_VELOCITY_TO_EV` \(` 1.0364269656262175 \times 10^{-4}\;\mathrm{eV / (amu \cdot \AA^2 / ps^2)}\) in `LammpcEngine=), time steps in ps, and Langevin friction \(\gamma\) in \(\mathrm{ps}^{-1}\).
+
+## Holonomic hyperplane sampling and fixed-normal OH-TST
+
+### Theory
+
+Optimal Hyperplanar Transition State Theory (OH-TST) cite:`goswamiEfficientExploration2025,goswamiAdaptivePruning2026,goswamiEnhancedClimbingImage2026,johannessonOptimizationHyperplanar2001,bligaardOptimizationHyperplanar2005` approximates the dividing surface between reactant and product basins by a hyperplane
+
+\[
+\sigma(\mathbf{x}) ` \mathbf{n} \cdot \mathbf{x} - c ` 0, \qquad \|\mathbf{n}\|_2 = 1,
+\]
+
+with constrained Helmholtz free energy
+
+\[
+A(\mathbf{n}, c) = -k_{\mathrm{B}} T \ln \int \delta(\mathbf{n} \cdot \mathbf{x} - c)\,\exp\!\left(-\frac{V(\mathbf{x})}{k_{\mathrm{B}} T}\right) d\mathbf{x}.
+\]
+
+Under diagonal mass matrix \(\mathbf{M} ` \mathrm{diag}(m_i)\), the inverse-mass metric norm of \(\nabla \sigma ` \mathbf{n}\) is
+
+\[
+z ` \mathbf{n}^\top \mathbf{M}^{-1} \mathbf{n} ` \sum_{i`1}^{D} \frac{n_i^2}{m_i}, \qquad \mu ` \frac{1}{z} ` \left(\sum_{i`1}^{D} \frac{n_i^2}{m_i}\right)^{-1},
+\]
+
+where \(\mu\) is the effective directional flux mass along \(\mathbf{n}\), evaluated via `rgsaddle::flux_mass`. Note that Eq. (24) of Jóhannesson and Jónsson (2001) cite:`johannessonOptimizationHyperplanar2001` writes \(\sum_i m_i n_i^2\), which coincides with \(\mu ` (\sum_i n_i^2 / m_i)^{-1}\) only when all coordinates share a common mass. Because \(z\) is independent of position on a flat hyperplane, the Blue Moon geometric Jacobian of Sprik and Ciccotti (1998) cite:`sprikFreeEnergyConstrained1998` is constant across \(\sigma(\mathbf{x}) ` 0\), and the thermodynamic mean force equals the canonical average of the holonomic Lagrange multiplier:
+
+\[
+\frac{\partial A}{\partial c} ` \langle \lambda \rangle_c, \qquad \lambda(\mathbf{x}) ` -\frac{\mathbf{n}^\top \mathbf{M}^{-1} \mathbf{F}(\mathbf{x})}{\mathbf{n}^\top \mathbf{M}^{-1} \mathbf{n}} = \frac{\mathbf{n}^\top \mathbf{M}^{-1} \nabla V(\mathbf{x})}{\mathbf{n}^\top \mathbf{M}^{-1} \mathbf{n}}.
+\]
+
+`hyperplane::sample_hyperplane` equilibrates the constrained system for `burn_in_steps`, records \(\lambda_t\) over `sample_steps` steps, and estimates \(\langle \lambda \rangle_c\) and its block-averaged standard error \(\sigma_\lambda\) via `stats::batch_means` cite:`flyvbjergErrorEstimates1989,flegalMcmcThirdSignificantFigure2008` while retaining dividing-surface configurations every `retention_stride` steps.
+
+`ohtst::optimize_hyperplane` holds the seed normal \(\mathbf{n}\) fixed and determines the stationary dividing hyperplane offset \(c^\ddagger\) and harmonic hyperplanar TST rate cite:`vineyardFrequencyFactors1957,johannessonOptimizationHyperplanar2001`:
+
+1. *Reactant relaxation*: Clears any active constraint and relaxes from the engine's starting coordinates by backtracking line search along \(\mathbf{F}(\mathbf{x})\) (up to \(8 \times \text{max\_outer\_steps}\) updates) until \(\max_i |F_i| \le \text{SERIES\_FLAT\_TOL}\) and the directional slope \(-\mathbf{n} \cdot \mathbf{F}\) rises through \(\mathbf{x}_{\min}\) (\(s_{\min} ` \mathbf{n} \cdot \mathbf{x}_{\min}\), \(V_{\min} ` V(\mathbf{x}_{\min})\)). Stationary maxima or flat ledges are escaped by stepping \(-\text{max\_translation}\,\mathbf{n}\).
+2. *Dividing-surface bracketing and bisection*: If the seed point \(\mathbf{x}_{\min} + (c_0 - s_{\min})\mathbf{n}\) already satisfies \(|-\mathbf{n} \cdot \mathbf{F}| \le \text{SERIES\_FLAT\_TOL}\) and \(V > V_{\min}\), \(c^\ddagger ` c_0\) is accepted directly. Otherwise, the offset marches from \(s_{\min}\) in direction \(\mathrm{sign}(c_0 - s_{\min})\) (\(+1\) when \(c_0 \ge s_{\min}\)) in increments of `max_translation` (up to `max_outer_steps`) until the directional slope changes sign, then bisects the bracket \([c_{\mathrm{lo}}, c_{\mathrm{hi}}]\) to tolerance \(\text{SERIES\_FLAT\_TOL}\,(1 + c_{\mathrm{hi}})\) to obtain \(c^\ddagger\) and static barrier \(\Delta V ` V^\ddagger - V_{\min} > 0\).
+3. *Reactant curvature probing*: Places a parallel probe plane at signed offset \(c_{\mathrm{probe}} ` s_{\min} + \mathrm{sign}(c^\ddagger - s_{\min})\,\delta\) with \(\delta ` \min(\text{max\_translation}, \tfrac{1}{2}|c^\ddagger - s_{\min}|)\), calls `sample_hyperplane` for \(\max(\text{max\_outer\_steps} \times \text{sample\_step\_factor}, \text{min\_sample\_steps})\) steps, and infers the reactant curvature along \(\mathbf{n}\):
+
+   \[
+   \kappa = \frac{\langle \lambda \rangle_{c_{\mathrm{probe}}}}{c_{\mathrm{probe}} - s_{\min}} > 0.
+   \]
+
+   Because \(\langle \lambda \rangle\) carries the sign of \(c_{\mathrm{probe}} - s_{\min}\), dividing by the signed separation yields \(\kappa > 0\) on either side of the reactant minimum.
+4. *Rate and delta-method uncertainty*: With flux mass \(\mu ` (\sum_i n_i^2 / m_i)^{-1}\) from `rgsaddle::flux_mass` (mapping a normal/mass length mismatch to `FluxError::Shape` and a non-finite or non-positive metric to `FluxError::InvalidConfig`) and angular frequency \(\omega ` \sqrt{\kappa / \mu}\), the fixed-normal OH-TST rate and its first-order delta-method standard error are
+
+   \[
+   k_{\mathrm{OHTST}} ` \frac{1}{2\pi}\sqrt{\frac{\kappa}{\mu}}\,\exp\!\left(-\frac{\Delta V}{k_{\mathrm{B}} T}\right), \qquad \sigma_{k_{\mathrm{OHTST}}} ` k_{\mathrm{OHTST}}\,\frac{\sigma_\lambda}{2\,\lvert\langle \lambda \rangle\rvert}.
+   \]
+
+### Assumptions and scope on `develop`
+
+- Single dominant reaction channel along the fixed unit normal \(\mathbf{n}\); positive barrier \(\Delta V > 0\) and locally harmonic reactant well (\(\kappa > 0\)) at the probe offset \(c_{\mathrm{probe}}\).
+- Positive thermal energy \(k_{\mathrm{B}} T > 0\) and strictly positive masses \(m_i > 0\).
+- On `develop`, `hyperplane::sample_hyperplane` and fixed-normal `ohtst::optimize_hyperplane` are implemented; the in-plane virial, rotational torque \(\partial A / \partial \mathbf{n}\), Assaraf-Caffarel / Stein zero-variance control variates cite:`assarafZeroVariance1999`, two-state BAR / multi-state MBAR reversible work cite:`bennettEfficientEstimation1976,shirtsStatisticallyOptimal2008`, and Riemannian trust-region normal optimization (`patience`, `min_overlap`, `use_mbar`) move from `rgsaddle`.
+
+### Engine wiring
+
+Both `sample_hyperplane` and `optimize_hyperplane` capture an internal `EngineSnapshot` (`positions`, `velocities`, `cell`, `thermostat`, and `constraint`) before modifying the engine and restore those five fields on exit (returning any restoration error if sampling succeeded, or preserving the primary sampling error if both failed). In `NativeEngine` and `LammpcEngine`, two-pass linear SHAKE projects positions to relative residual \(\lvert \mathbf{n} \cdot \mathbf{x} - c \rvert / (1 + \lvert c \rvert + \|\mathbf{x}\|_2) \le 16\,\varepsilon_{\mathrm{mach}}\) (`HYPERPLANE_PROJECTION_TOL`) cite:`ryckaertShake1977`, and RATTLE projects velocities to the mass-metric tangent space \(\mathbf{n} \cdot \mathbf{v} = 0\) cite:`andersenRattle1983,leimkuhlerGeodesicIntegration2016`.
+
+## Forward Flux Sampling (FFS)
+
+### Theory
+
+Direct Forward Flux Sampling cite:`goswamiEfficientExploration2025,allenSamplingRareSwitching2005,allenSimulatingRareEvents2006,allenForwardFluxEfficiency2006,allenForwardFluxReview2009` computes the rare-event transition rate \(k_{AB}\) from reactant basin \(A\) (\(\lambda(\mathbf{x}) \le \lambda_0\)) to product state \(B\) (\(\lambda(\mathbf{x}) \ge \lambda_n\)) across strictly ordered reaction-coordinate interfaces \(\lambda_0 < \lambda_1 < \dots < \lambda_n\):
+
+\[
+k_{AB} ` \Phi_{A,0} \prod_{i`0}^{n-1} P(\lambda_{i+1} \mid \lambda_i).
+\]
+
+`ffs::forward_flux_rate` evaluates this product in two phases:
+
+1. *Initial escape flux \(\Phi_{A,0}\)*: Starting from an initial state inside basin \(A\) (\(\lambda(\mathbf{x}_0) \le \lambda_0\)), the engine is reseeded from `config.seed`, `burn_in_steps` steps are discarded, and the trajectory is stepped by \(\Delta t ` \text{time\_step}\) up to `max_flux_steps` until \(M_0 ` \text{points\_per\_interface} \ge 2\) positive-going crossings of \(\lambda_0\) are collected. The crossing detector is armed whenever \(\lambda(\mathbf{x}) \le \lambda_0\) and triggers on the first subsequent step with \(\lambda(\mathbf{x}) > \lambda_0\), storing the phase point \((\mathbf{x}, \mathbf{v})\) and the elapsed waiting time \(\Delta \tau_m > 0\) since the previous crossing (or since burn-in finished). If an excursion reaches the product level \(\lambda(\mathbf{x}) \ge \lambda_n\), the engine is immediately reset to the initial basin-\(A\) phase point \((\mathbf{x}_0, \mathbf{v}_0)\) and re-armed. From the batch-means average waiting interval \(\bar{\tau}\) and standard error \(\sigma_{\bar{\tau}}\) (`stats::batch_means`), the escape flux and its delta-method uncertainty are
+
+   \[
+   \Phi_{A,0} ` \frac{1}{\bar{\tau}}, \qquad \sigma_{\Phi_{A,0}} ` \frac{\sigma_{\bar{\tau}}}{\bar{\tau}^2}.
+   \]
+
+2. *Staged conditional probabilities \(P(\lambda_{i+1} \mid \lambda_i)\)*: At each stage \(i ` 0, \dots, n - 1\) with \(M_i \ge 2\) stored phase points at \(\lambda_i\), \(K ` \text{trials\_per\_interface} \ge 1\) trial trajectories are launched by drawing a starting index \(c \in \{0, \dots, M_i - 1\}\) uniformly, restoring its \((\mathbf{x}, \mathbf{v})\), calling `engine.reseed(seed)` with a fresh deterministic seed from the `StdRng` stream, and stepping up to `max_trial_steps` until \(\lambda(\mathbf{x}) \ge \lambda_{i+1}\) (success; phase point saved for stage \(i + 1\) when \(i + 1 < n - 1\)) or \(\lambda(\mathbf{x}) \le \lambda_0\) (return to basin \(A\), failure). With \(k_c\) trials and \(s_c\) successes launched from starting point \(c\) (\(\sum_c k_c ` K\), \(\hat{p}_i ` \frac{1}{K}\sum_c s_c\)), the cluster-variance standard error captures heterogeneity across entry points on \(\lambda_i\):
+
+   \[
+   \sigma_{p_i} ` \frac{1}{K}\sqrt{\frac{M_i}{M_i - 1}\sum_{c`0}^{M_i - 1} (s_c - \hat{p}_i k_c)^2}.
+   \]
+
+3. *Composite rate and error propagation*: Combining the initial flux and stage probabilities in quadrature yields
+
+   \[
+   \sigma_{k_{AB}} ` k_{AB}\sqrt{\left(\frac{\sigma_{\Phi_{A,0}}}{\Phi_{A,0}}\right)^2 + \sum_{i`0}^{n-1} \left(\frac{\sigma_{p_i}}{\hat{p}_i}\right)^2}.
+   \]
+
+### Assumptions and units
+
+- Does *not* require detailed balance or knowledge of the stationary phase-space distribution, making it applicable to both equilibrium and driven non-equilibrium stochastic systems cite:`allenSimulatingRareEvents2006`.
+- Requires stochastic dynamics (e.g. Langevin \(\gamma > 0\)) so that trajectories launched from the same interface phase point \((\mathbf{x}, \mathbf{v})\) diverge after `DynamicsEngine::reseed`.
+- Requires strictly increasing interfaces \(\lambda_0 < \lambda_1 < \dots < \lambda_n\) (\(n + 1 \ge 2\)), initial state \(\lambda(\mathbf{x}_0) \le \lambda_0\), at least two collected phase points per interface (\(M_i \ge 2\)), and at least one successful trial per stage (\(\hat{p}_i > 0\)).
+- Order parameter \(\lambda(\mathbf{x})\) has any user-chosen unit; \(\Phi_{A,0}\), \(k_{AB}\), and \(\sigma_{k_{AB}}\) have unit \([T]^{-1}\); \(P(\lambda_{i+1} \mid \lambda_i)\) is dimensionless.
+
+### Engine wiring
+
+`forward_flux_rate` drives any `DynamicsEngine` via `positions`, `velocities`, `set_positions`, `set_velocities`, `reseed`, and `step`. On entry it captures an `EngineSnapshot` (`positions`, `velocities`, `cell`, `thermostat`, and `constraint`) and writes all five pieces back before returning (returning any restoration error when the run succeeded, or preserving the run error if both failed). The stochastic stream is left where the flux and trial `reseed` calls placed it.
+
+## Projected Average Force Integration (PAFI)
+
+### Theory
+
+Projected Average Force Integration (PAFI) cite:`goswamiEfficientExploration2025,goswamiEnhancedClimbingImage2026,goswamiReproducibleOrchestration2026,swinburneUnsupervisedCalculation2018` turns a converged minimum-energy path \(\mathbf{X}(s)\), for example a nudged elastic band, into a finite-temperature free-energy profile \(F(s)\) without a global collective variable. The method itself is that of Swinburne and Marinica; the paths it needs come from the band methods cited first.
+
+The path parameter \(s\) is the arc length in the mass-weighted metric, \(ds^2 ` d\mathbf{X}^\top \mathbf{M}\, d\mathbf{X}\) with \(\mathbf{M} ` \mathrm{diag}(m_i)\). At each \(s\) the plane has the unit normal \(\mathbf{n}(s) ` \mathbf{M}\mathbf{X}'(s) / \lVert \mathbf{M}\mathbf{X}'(s) \rVert\) and the equation \(\sigma(\mathbf{x}, s) ` \mathbf{n}(s) \cdot (\mathbf{x} - \mathbf{X}(s)) ` 0\), so planes are orthogonal to the path in the metric \(\mathbf{M}\). Neighbouring planes tilt at the rate \(\mathbf{n}' ` d\mathbf{n}/ds\), which adds a Jacobian term to the constrained mean force. With \(\lambda\) the Lagrange multiplier of the holonomic constraint on the plane (the same multiplier as in the hyperplane section above):
+
+\[
+\frac{dF}{ds}(s) ` \Bigl\langle \lambda(\mathbf{x}) \bigl( \mathbf{n} \cdot \mathbf{X}' - (\mathbf{x} - \mathbf{X}) \cdot \mathbf{n}' \bigr) \Bigr\rangle_{\sigma(\mathbf{x}, s) ` 0}.
+\]
+
+Two limits anchor the estimator:
+
+- *Straight path (\(\mathbf{n}' ` \mathbf{0}\))*: the Jacobian term vanishes and \(dF/ds\) is the Sprik-Ciccotti mean constraint force \(\langle \lambda \rangle\) that `hyperplane::sample_hyperplane` samples on a single plane cite:`sprikFreeEnergyConstrained1998`. On the widening double well \(V(x, y) ` (1 - x^2)^2 + \tfrac{1}{2}k(x)y^2\) with \(k(x) ` 1.5 + 0.5x\), the profile from \(x ` -1\) to \(x ` 0\) ends at \(\Delta F(T) ` \Delta E_0 + \tfrac{1}{2}k_{\mathrm{B}}T \ln(k(0)/k(-1))\). The integration tests reproduce this value within two standard errors, for unit and anisotropic masses.
+- *Zero temperature (\(T \to 0\))*: the sampled points collapse onto the anchor and the integral of \(dF/ds\) becomes the static line integral \(\int \nabla V(\mathbf{X}) \cdot \mathbf{X}'\,ds ` \Delta E_0\). `pafi_profile= evaluates that trapezoid sum on the plane anchors before it samples anything and compares it with the end-to-end energy change, see the tolerance note below.
+
+The profile is the trapezoid integral of the plane means \(g_k\),
+
+\[
+F(s_k) - F(s_0) ` \sum_{j`1}^{k} \tfrac{1}{2}\,(g_{j-1} + g_j)\,(s_j - s_{j-1}),
+\]
+
+the barrier is \(\Delta F = \max_k F(s_k)\) at the dividing plane \(s^*\), and the normalized rate is
+
+\[
+k ` \sqrt{\frac{k_{\mathrm{B}}T}{2\pi}}\;\frac{\exp(-F(s^*)/k_{\mathrm{B}}T)}{Z_R}, \qquad Z_R ` 2\int_0^{s^*} \exp\!\left(-\frac{F(s)}{k_{\mathrm{B}}T}\right) ds,
+\]
+
+with \(Z_R\) also by the trapezoid rule.
+
+### What `pafi_profile` does
+
+1. *Spline*: The images become a cubic spline in the chord-length parameter, the sum of \(\sqrt{\sum_j m_j \Delta x_j^2}\) between neighbours. The end second derivatives follow from linear extrapolation of the second derivative, the not-a-knot condition, so the first and last planes keep the curvature of the path. Natural end conditions (zero second derivative) would set \(\mathbf{n}'\) to zero on the end planes and bias the end increments of the profile. Three images give one parabola, two images a straight line. Coincident images are rejected.
+2. *Planes*: `planes` planes sit at equal values of the parameter from the first to the last image. Each has an anchor \(\mathbf{X}(s_k)\), the normal \(\mathbf{n}\), and \(\mathbf{n}'\).
+3. *Zero-temperature check*: let \(I_T\) be the trapezoid sum of \(dV/ds\) over the anchors and \(\Delta E_0 ` V(\mathbf{X}(s_{K-1})) - V(\mathbf{X}(s_0))\). The code compares \(\lvert I_T - \Delta E_0\rvert / \max(E_{\mathrm{unit}}, \lvert\Delta E_0\rvert)\) with the effective `zero_temperature_tol`, where \(E_{\mathrm{unit}}\) is one energy unit of the engine. A mismatch returns `FluxError::InvalidConfig= without sampling.
+4. *Sampling*: On each plane the engine gets the constraint, is placed at the anchor, receives Maxwell-Boltzmann velocities from the per-plane seed, runs `burn_in_steps` steps, and then `sample_steps` steps that each record \(\lambda\,(\mathbf{n} \cdot \mathbf{X}' - (\mathbf{x} - \mathbf{X}) \cdot \mathbf{n}')\). `stats::batch_means` turns each series into a mean and a standard error.
+5. *Integration*: The profile, barrier, dividing plane, \(Z_R\) and rate follow from the plane means. The plane errors are independent, so they propagate through the trapezoid weights; the rate error comes from the delta method over the profile and \(Z_R\).
+6. *Adaptive rounds*: With `target_error` set, steps 4 and 5 repeat for up to `max_rounds` rounds, each adding `sample_steps` samples to every plane, until `barrier_error` is at most the target. The result uses all samples. Missing the target is not an error, so compare `barrier_error` with it.
+
+The seed of plane \(k\) in round \(r\) is `seed + 4099 * k + 1000003 * r` (wrapping), so the planes are independent and a run is reproducible.
+
+### Zero-temperature tolerance
+
+The numerator and denominator in step 3 are energies in the engine's energy units, so their ratio and `zero_temperature_tol` are dimensionless. For \(\lvert\Delta E_0\rvert \ge E_{\mathrm{unit}}\) the check is relative to the endpoint energy change. Below one energy unit it instead bounds the absolute discrepancy to the effective tolerance times one engine energy unit.
+
+The value stored by `PafiConfig::default()` is \(2 (\pi^2 / 12) / 8^2 \approx 0.0257\), the value for the default 9 planes. When the field retains that value, changing `planes` makes the effective tolerance \(2 (\pi^2 / 12) / (\text{planes} - 1)^2\). An explicitly different value is used unchanged and does not scale with `planes`. This scaling follows the trapezoid error on a quarter-turn circular arc through a harmonic well, \(\pi^2 / (12 (\text{planes} - 1)^2)\). A path that turns through more than a quarter circle can need a larger explicit tolerance, which also weakens the guard against inconsistent forces and tangents.
+
+### Assumptions, units, and engine wiring
+
+- Assumes a smooth path of at least two images, with one coordinate per degree of freedom of the engine, whose thermal fluctuations on each plane stay inside the region where neighbouring planes do not intersect, so that \(\mathbf{n} \cdot \mathbf{X}' - (\mathbf{x} - \mathbf{X}) \cdot \mathbf{n}'\) stays positive.
+- Every plane starts at its anchor, so a plane whose thermal centre lies far from the anchor needs a long `burn_in_steps`. The free energy has to rise somewhere, otherwise the dividing plane is the first plane, \(Z_R\) is zero and the call returns `FluxError::InvalidConfig`.
+- Path images, masses and positions use the engine units \([L]\) and \([M]\); the arc length \(s\) is mass-weighted, \([M]^{1/2}[L]\), and equals a length for unit masses. `free_energy`, `standard_error`, `barrier`, `barrier_error`, `target_error` and \(k_{\mathrm{B}}T\) are in \([E]\), `time_step` in \([T]\), and `normalized_rate` in \([T]^{-1}\).
+- `pafi_profile` accepts any `E: DynamicsEngine + ?Sized`, and `pafi_profile_dyn` takes `&mut dyn DynamicsEngine`. The engine must report `StepReport::constraint_force` on constrained steps and implement `energy_and_forces` for the zero-temperature check.
+- Like the other samplers it restores positions, velocities, the periodic cell, the thermostat, and the constraint on return, including on errors. The stochastic stream is left where the last plane reseeded it.
+
+## Reactive-flux recrossing (`kappa` and `kappa::bennett_chandler`)
+
+Transition state theory overcounts the true transition rate whenever trajectories recross the dividing surface before thermalizing. In the Bennett-Chandler reactive-flux formalism cite:`goswamiEfficientExploration2025,goswamiAdaptivePruning2026,bennettMolecularDynamics1977,chandlerStatisticalMechanics1978,andersonStatisticalTheories1973,vanErpNovelPath2003`, trajectories launched from the dividing surface \(\sigma(\mathbf{x}) ` \mathbf{n} \cdot \mathbf{x} - c ` 0\) with initial normal velocity \(v_n(0) = \mathbf{n} \cdot \mathbf{v}(0)\) and post-launch side indicator \(\theta(s(t)) \in \{0, 1\}\) define the time-dependent transmission coefficient
+
+\[
+\kappa(t) = \frac{\langle v_n(0)\,\theta(s(t)) \rangle}{\langle v_n(0)\,\theta(v_n(0)) \rangle}.
+\]
+
+- `kappa::bennett_chandler::estimate_bennett_chandler` is completely engine-free: it evaluates \(\kappa(t)\) at every step over recorded `ReactiveTrajectory` slices, tests stationarity across the plateau window \([\lfloor f_{\mathrm{start}} T \rfloor, \lceil f_{\mathrm{end}} T \rceil)\) combining temporal batch-means variance with paired trajectory-ensemble early-minus-late shift variance, and computes the plateau standard error from linearized ratio influence values (automatically pairing antithetic \((+\mathbf{v}, -\mathbf{v})\) shots into even batch widths). Values of \(\kappa(t)\) and the plateau are never clamped into \([0, 1]\).
+- `kappa::bennett_chandler::shoot_bennett_chandler` clears any active hyperplane constraint on a `DynamicsEngine`, shoots trajectories (including antithetic pairs with independent Langevin noise streams when `ShootingConfig::antithetic` is `true`) from dividing-surface configurations retained by `sample_hyperplane`, restores the engine's constraint, and reduces the ensemble via `estimate_bennett_chandler`.
+- `kappa::kramers_transmission_coefficient` evaluates Kramers' analytical spatial-diffusion barrier-recrossing factor across a parabolic barrier of unstable frequency \(\omega_b > 0\) under Langevin friction \(\gamma \ge 0\) cite:`kramersBrownianMotion1940`:
+
+  \[
+  \kappa_{\mathrm{K}} ` \sqrt{1 + \alpha^2} - \alpha ` \frac{1}{\sqrt{1 + \alpha^2} + \alpha}, \qquad \alpha = \frac{\gamma}{2 \omega_b}.
+  \]
+
+## Correlated time-series diagnostics (`stats`)
+
+Correlated MD and Markov-chain observables underestimate uncertainty when treated as independent draws cite:`goswamiBayesianHierarchical2025,flyvbjergErrorEstimates1989`:
+
+- `stats::effective_sample_size` estimates the integrated autocorrelation time \(\tau_{\mathrm{int}}\) and statistical inefficiency \(g ` 2\tau_{\mathrm{int}} \ge 1\) via Geyer's initial positive and monotone sequence estimator cite:`geyerPracticalMcmc1992`, returning \(n_{\mathrm{eff}} ` n / g \in [1, n]\).
+- `stats::batch_means` partitions a series of length \(n\) into \(a\) non-overlapping batches of width \(b\) (automatically choosing \(\max(\lceil 2\tau_{\mathrm{int}} \rceil, \lfloor \sqrt{n} \rfloor)\) subject to `min_batches` when `batch_size` is `None`) cite:`flegalMcmcThirdSignificantFigure2008`. Series whose spread from the first sample lies within \(\text{SERIES\_FLAT\_TOL}\,(1 + |x_0|)\) return \(x_0\) directly with zero standard error so repeated non-dyadic IEEE-754 floats are never rounded to a neighboring value by summation.
+- `stats::check_stationarity` compares the leading `stationarity_first_fraction` (\(0.25\)) and trailing `stationarity_last_fraction` (\(0.50\)) sub-windows via Geweke's two-window \(z\)-score cite:`gewekeEvaluatingAccuracy1992,choderaAutomatedEquilibration2016` alongside the ordinary-least-squares linear drift slope.
+
+## Kinetic rate networks (`network`)
+
+`network` defines `NetworkConfig`, `RateTableConfig`, `RateEdge`, and `build_rate_table` for assembling elementary transition rates \(k_{i \to j}(T)\) cite:`vineyardFrequencyFactors1957,henkelmanLongTimeScale2001` into master-equation graphs and Bortz-Kalos-Lebowitz / Gillespie kinetic Monte Carlo (kMC) residence-time tables cite:`goswamiEfficientExploration2025,goswamiConcurrencyAkmc2025,eon2901,bortzNewAlgorithmMonteCarlo1975,gillespieGeneralMethod1976`. On `develop`, `RateEdge::new` validates finite non-negative rate constants while `build_rate_table` returns `FluxError::Unimplemented` as the graph reduction and kMC table builder migrate from `rgsaddle`.
+
+## Bibliography
+
+The method references are stored in ~docs/source/references.bib~.
+
+.. bibliography::
+   :all:
+
+## Contributing
+
+## System prerequisites
+
+- Current stable Rust with `clippy` and `rustfmt`.
+- `jq` and `rustup` for minimum supported Rust version (`rust-version ` "1.88"=) checks.
+- Python 3.12+ and Emacs 29+ (`emacs-nox`) when building the Sphinx documentation from `docs/orgmode`.
+
+## Build and test
+
+```sh
+cargo fmt --all -- --check
+cargo clippy --locked --all-targets --features rgpot,rgpot-session -- -D warnings
+cargo test --locked --features rgpot,rgpot-session
+cargo test --locked --doc --features rgpot,rgpot-session
+ci/check_rustdoc.sh
+python3 ci/check_dependency_pins.py
+python3 docs/check_paths.py
+python3 ci/check_links.py
+emacs --batch -l docs/export.el
+sphinx-build -b linkcheck -n -W --keep-going docs/source target/docs-linkcheck
+sphinx-build -b html -n -W --keep-going docs/source docs/build
+```
+
+When `liblammpc` is installed, also run `--all-features` clippy, tests, and rustdoc:
+
+```sh
+cargo clippy --locked --all-targets --all-features -- -D warnings
+cargo test --locked --all-features
+cargo test --locked --doc --all-features
+RUSTDOCFLAGS="-D warnings" cargo doc --locked --no-deps --all-features --document-private-items
+```
+
+## Dependency pins
+
+Every git dependency in `Cargo.toml` pins a full 40-hex commit `rev` with the exact crate version at that revision (for example `version ` "`0.5.0"`), never a branch or tag name. `ci/check_dependency_pins.py` verifies that `Cargo.lock` and `cargo tree -d --features rgpot,rgpot-session` resolve a single copy of `rgflux`, `rgsaddle`, `rgmin`, `rgpot-core`, `eindir-core`, `dlpk`, `linkcell` and `minimage`. The `lammpc` feature is left out because it links `liblammpc`.
+
+## Changelog fragments
+
+Add a newsfragment under `docs/newsfragments` named `+<slug>.<type>.org` matching one of the sections in `towncrier.toml`.
+
+## Contact
+
+Report issues at https://github.com/OmniPotentRPC/rgflux/issues. Maintainer: Rohit Goswami (rgoswami@ieee.org).
+
+## Changelog
+
+# towncrier release notes start
+
+## 0.1.0 (unreleased)
+
+### Added
+
+- `ffs::forward_flux_rate` computes direct Forward Flux Sampling transition rates across ordered reaction-coordinate interfaces over any `DynamicsEngine`, with batch-means initial escape flux uncertainty, cluster-variance conditional stage probabilities, and engine state restoration.
+- `hyperplane::sample_hyperplane` samples the mean holonomic constraint force and retained configurations of a plane, and `ohtst::optimize_hyperplane` places the offset of a fixed-normal plane on its stationary surface and returns the harmonic hyperplanar TST rate with a delta-method standard error.
+- `pafi::pafi_profile` and `pafi::pafi_profile_dyn` turn the images of a converged reaction path into a free-energy profile, barrier, dividing plane, and normalized rate with propagated standard errors. They sample hyperplanes orthogonal to a mass-metric spline through the images, check the path force against the zero-temperature energy change, add rounds of sampling until an optional target error is reached, and restore the engine on return.
+- Added an optional `lammpc` feature with `engine::lammpc::LammpcEngine`, a direct `DynamicsEngine` backend over `lammpc_session_*` for LAMMPS-driven trajectories.
+- Initial `rgflux` crate scaffold: the `DynamicsEngine` trait and native BAOAB/RATTLE reference backend, feature-gated `rgpot` static PES and `rgpot-session` MD session (`openmm`, `nblib`, `lammps`) adapters, batch-means and stationarity diagnostics in `stats`, the Bennett-Chandler reactive-flux estimator in `kappa::bennett_chandler`, and the `network` module layout.
+
+### Developer
+
+- The curved PAFI integration test now compares the last free-energy increment with the one from a path that continues past it, so natural spline endpoints fail the test. It runs 9 planes with the default time step and the default zero-temperature tolerance. `cargo test` builds with `opt-level ` 2` through `[profile.test]=, and the curved test takes 0.7 s instead of 44 s.
+
+### Changed
+
+- The value stored by default in `PafiConfig::zero_temperature_tol` is now about 2.6% instead of 1%. The check divides the path-force integral discrepancy by the larger of one engine energy unit and the endpoint energy change magnitude. While the field retains its default value, the effective tolerance scales as `2 (pi^2 / 12) / (planes - 1)^2`; an explicitly different value is used unchanged.
+
+### Fixed
+
+- `ffs::forward_flux_rate` restores positions, velocities, the periodic cell, the thermostat, and the holonomic constraint on return, and leaves the stochastic stream where the flux and trial reseeds put it. `ohtst::optimize_hyperplane` takes the flux mass from `rgsaddle::flux_mass`, keeps a length mismatch on `FluxError::Shape`, and keeps a non-positive mass on `FluxError::InvalidConfig`.
+- `stats::batch_means` returns the first sample as the mean of a series that is constant up to rounding, so identical non-dyadic samples are no longer averaged to a neighbouring float.
+- Correct PAFI mass-metric projection, spline geometry, adaptive sampling, profile integration, uncertainty propagation, and engine-state restoration.
