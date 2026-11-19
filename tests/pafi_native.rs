@@ -74,18 +74,6 @@ fn mass_weighted_circular_path(
     path
 }
 
-fn integrate_reactant_partition(arc_lengths: &[f64], free_energy: &[f64], kbt: f64) -> f64 {
-    let dividing = free_energy.len() - 1;
-    let mut zr_half = 0.0_f64;
-    for i in 1..=dividing {
-        let ds = arc_lengths[i] - arc_lengths[i - 1];
-        let w0 = (-free_energy[i - 1] / kbt).exp();
-        let w1 = (-free_energy[i] / kbt).exp();
-        zr_half += 0.5 * ds * (w0 + w1);
-    }
-    2.0 * zr_half
-}
-
 fn run_barrier_case(
     masses: Vec<f64>,
     seed: u64,
@@ -288,29 +276,36 @@ fn normalized_pafi_rate_matches_analytic_profile() {
     let dividing = profile.dividing_index;
     assert!(rate_error.is_finite() && rate_error >= 0.0);
     assert!(dividing > 0);
-    let reconstructed_zr =
-        integrate_reactant_partition(&profile.arc_lengths, &profile.free_energy, thermal);
+
+    // Reactant Hessian at x = -1: V_xx = 8 along the unit normal, mass 1.
+    let omega_0 = 8.0_f64.sqrt();
+    assert!((profile.reactant_frequency - omega_0).abs() <= 1.0e-6 * omega_0);
+    let gaussian_partition = (2.0 * PI * thermal).sqrt() / omega_0;
+    assert!((profile.reactant_partition - gaussian_partition).abs() <= 1.0e-6 * gaussian_partition);
     assert!(
-        (profile.reactant_partition - reconstructed_zr).abs() <= 1.0e-12,
-        "reactant partition mismatch: {:.16e} vs {:.16e}",
-        profile.reactant_partition,
-        reconstructed_zr
-    );
-    assert!(
-        (profile.reactant_log_partition - reconstructed_zr.ln()).abs() <= 1.0e-12,
+        (profile.reactant_log_partition - profile.reactant_partition.ln()).abs() <= 1.0e-12,
         "reactant log partition mismatch: {:.16e} vs {:.16e}",
         profile.reactant_log_partition,
-        reconstructed_zr.ln()
+        profile.reactant_partition.ln()
+    );
+    let formula = omega_0 / (2.0 * PI) * (-profile.barrier / thermal).exp();
+    assert!((rate - formula).abs() <= 1.0e-6 * formula);
+    assert!(
+        (profile.normalized_log_rate - rate.ln()).abs() <= 1.0e-12,
+        "normalized log rate mismatch: {:.16e} vs {:.16e}",
+        profile.normalized_log_rate,
+        rate.ln()
     );
 
     let intervals = 20_000usize;
-    let dx = 1.0 / (intervals as f64);
+    let lower = -2.5_f64;
+    let dx = (0.0 - lower) / (intervals as f64);
     let analytic_free_energy =
         |x: f64| (1.0 - x * x).powi(2) + 0.5 * thermal * (1.5 + 0.5 * x).ln();
     let reference = analytic_free_energy(-1.0);
     let mut partition_sum = 0.0_f64;
     for i in 0..=intervals {
-        let x = -1.0 + (i as f64) * dx;
+        let x = lower + (i as f64) * dx;
         let weight = if i == 0 || i == intervals {
             1.0
         } else if i % 2 == 0 {
@@ -320,10 +315,13 @@ fn normalized_pafi_rate_matches_analytic_profile() {
         };
         partition_sum += weight * (-(analytic_free_energy(x) - reference) / thermal).exp();
     }
-    let analytic_partition = 2.0 * dx * partition_sum / 3.0;
+    let analytic_partition = dx * partition_sum / 3.0;
     let analytic_barrier = analytic_free_energy(0.0) - reference;
     let analytic_rate =
         (thermal / (2.0 * PI)).sqrt() * (-analytic_barrier / thermal).exp() / analytic_partition;
+    // The Gaussian reactant normalization agrees with the exact full-line TST
+    // integral to O(kT); at kT = 0.2 that is a few percent. tests/pafi_bias.rs
+    // runs the replicate t-test at low temperature.
     let relative_error = (rate - analytic_rate).abs() / analytic_rate;
     eprintln!(
         "normalized rate={rate:.8e} se={rate_error:.8e} analytic={analytic_rate:.8e} relative error={relative_error:.4}",

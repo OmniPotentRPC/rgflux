@@ -296,16 +296,12 @@ fn assert_matches_references(well: Well, sampling: Sampling) {
     );
 }
 
-// Fails on develop: trapezoid bias in Delta F and a doubled half-well Z_R.
 #[test]
-#[should_panic(expected = "replicate t-test rejects PAFI")]
 fn pafi_matches_vineyard_and_exact_quadrature_on_the_anharmonic_well() {
     assert_matches_references(ANHARMONIC_2D, PRODUCTION);
 }
 
-// Fails on develop: the barrier is the highest sampled plane, not the maximum.
 #[test]
-#[should_panic(expected = "replicate t-test rejects PAFI")]
 fn an_even_plane_count_across_the_saddle_still_finds_the_barrier() {
     let across = Sampling {
         planes: 18,
@@ -333,9 +329,7 @@ fn a_deliberately_coarse_integral_is_rejected_by_the_t_test() {
     );
 }
 
-// Fails on develop: the trapezoid misses dE by h^2 at any temperature.
 #[test]
-#[should_panic(expected = "misses dE = 1 by")]
 fn zero_noise_quartic_reproduces_the_barrier_energy() {
     for kt in TEMPERATURES {
         let sampling = Sampling {
@@ -359,9 +353,7 @@ fn zero_noise_quartic_reproduces_the_barrier_energy() {
     }
 }
 
-// Fails on develop: Z_R is twice the half-well integral from the path start.
 #[test]
-#[should_panic(expected = "converged quadrature must give")]
 fn zero_noise_quartic_rate_is_the_projected_frequency_formula() {
     for kt in TEMPERATURES {
         let sampling = Sampling {

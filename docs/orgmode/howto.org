@@ -170,7 +170,7 @@ fn main() -> Result<(), rgflux::FluxError> {
 
 Projected Average Force Integration (PAFI) @@rst::cite:`goswamiEnhancedClimbingImage2026,goswamiReproducibleOrchestration2026,swinburneUnsupervisedCalculation2018`@@ takes the images of a converged minimum-energy path, for example from a nudged elastic band, and returns the free-energy profile \(F(s)\), the barrier \(\Delta F\), the dividing plane, and the normalized rate \(k\) through =pafi::pafi_profile=. The method is described under /Projected Average Force Integration/ in the explanation page and the defaults in the reference page.
 
-The example runs a straight path from the minimum \(x = -1\) to the saddle \(x = 0\) of the widening double well \(V(x, y) = (1 - x^2)^2 + \tfrac{1}{2}(1.5 + 0.5x)y^2\) at \(k_{\mathrm{B}}T = 0.2\), where the exact barrier is \(\Delta F = 1 + \tfrac{1}{2}k_{\mathrm{B}}T \ln 1.5\). It uses 33 planes. The trapezoid rule over the planes biases \(\Delta F\) low by about \(0.0156\,(8/(\text{planes} - 1))^2\) here, which is 0.025 with the default 9 planes (eight standard errors of this short run) and 0.0016 with 33, so the run checks the result within five standard errors.
+The example runs a straight path from the minimum \(x = -1\) to the saddle \(x = 0\) of the widening double well \(V(x, y) = (1 - x^2)^2 + \tfrac{1}{2}(1.5 + 0.5x)y^2\) at \(k_{\mathrm{B}}T = 0.2\), where the exact barrier is \(\Delta F = 1 + \tfrac{1}{2}k_{\mathrm{B}}T \ln 1.5\). It uses 33 planes. The fourth-order quadrature over the planes removes the fixed trapezoid bias in \(\Delta F\), so the run checks the result within five standard errors.
 
 #+begin_src rust
 use ndarray::{Array1, Array2, ArrayView1};

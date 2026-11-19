@@ -10,7 +10,7 @@
 | =kappa::bennett_chandler= | Engine-free reactive-flux estimator and =DynamicsEngine= trajectory shooter | Implemented |
 | =kappa= | Kramers analytical barrier-recrossing factor; surface-shooting quench classifiers and first-crossing estimators | =kramers_transmission_coefficient= and =KappaConfig= implemented; quench and first-crossing drivers move from =rgsaddle= |
 | =hyperplane= | Constrained hyperplane sampling (=sample_hyperplane=) and zero-variance control variates | Mean constraint force and configuration retention implemented; torque and control variates move from =rgsaddle= |
-| =pafi= | Projected Average Force Integration along reaction paths (=PafiConfig=, =FreeEnergyProfile=, =pafi_profile=, =pafi_profile_dyn=) | Implemented: mass-metric spline planes with not-a-knot ends, zero-temperature path-force check, burn-in and batch-means sampling per plane, adaptive rounds to a target error, log-stable reactant partition quadrature, trapezoid free-energy profile, barrier, and normalized rate with propagated errors; the engine is restored on return |
+| =pafi= | Projected Average Force Integration along reaction paths (=PafiConfig=, =FreeEnergyProfile=, =pafi_profile=, =pafi_profile_dyn=) | Implemented: mass-metric spline planes with not-a-knot ends, zero-temperature path-force check, burn-in and batch-means sampling per plane, adaptive rounds to a target error, fourth-order Hermite profile quadrature with an interpolated dividing plane, Gaussian reactant normalization from the projected reactant frequency =omega_0=, and normalized rate with propagated errors; the engine is restored on return |
 | =ohtst= | OH-TST with a fixed hyperplane normal (=optimize_hyperplane=) | Implemented for a fixed normal with =rgsaddle::flux_mass=; normal optimization moves from =rgsaddle= |
 | =ffs= | Forward Flux Sampling across ordered interfaces (=forward_flux_rate=) | Implemented: flux collection, staged trials, and uncertainty propagation. Exit restores positions, velocities, the periodic cell, the thermostat, and the constraint; the stochastic stream is left where the run put it |
 | =network= | Symmetry-resolved rate networks and kinetic Monte Carlo rate tables (=NetworkConfig=, =RateTableConfig=, =RateEdge=, =build_rate_table=) | =RateEdge::new= and configuration types implemented; =build_rate_table= moves from =rgsaddle= |
@@ -194,16 +194,19 @@ The value stored by =PafiConfig::default()= is the 9-plane value shown in the ta
 | Field | Type | Meaning |
 |---+---+---|
 | =arc_lengths= | =Vec<f64>= | Plane coordinates \(s_k\): the mass-weighted chord-length parameter of the spline, from 0 at the first image to the total path length at the last, at equal spacing. Not scaled to \([0, 1]\) |
-| =free_energy= | =Vec<f64>= | \(F(s_k) - F(s_0)\) by the trapezoid rule; the first entry is 0 |
+| =free_energy= | =Vec<f64>= | \(F(s_k) - F(s_0)\) by the fourth-order Hermite rule; the first entry is 0 |
 | =standard_error= | =Vec<f64>= | Standard error of =free_energy= from the batch-means errors of the plane forces; the first entry is 0 |
-| =barrier= | =f64= | \(\Delta F = \max_k F(s_k)\) |
+| =barrier= | =f64= | \(\Delta F = F(s^*) - F(s_0)\) at the maximum of the interpolated profile |
 | =barrier_error= | =f64= | Standard error of =barrier= |
-| =dividing_index= | =usize= | First plane where =barrier= is attained |
-| =reactant_partition= | =f64= | \(Z_R = 2 \int_0^{s^*} \exp(-F(s) / k_{\mathrm{B}}T)\,ds\) by the trapezoid rule, in units of \(s\) |
-| =reactant_log_partition= | =f64= | \(\ln Z_R\) from shifted log-sum-exp trapezoid quadrature |
-| =normalized_rate= | =f64= | \(k = \sqrt{k_{\mathrm{B}}T / (2\pi)}\,\exp(-F(s^*) / k_{\mathrm{B}}T) / Z_R\) in inverse engine time |
+| =dividing_index= | =usize= | Sampled plane with the highest \(F\), adjacent to \(s^*\) |
+| =dividing_arc= | =f64= | Arc length \(s^*\) of the dividing plane, not restricted to a sampled plane |
+| =reactant_frequency= | =f64= | Projected reactant frequency \(\omega_0 = (\mathbf{n}^T H^{-1} \mathbf{n})^{-1/2}\) from the mass-weighted reactant Hessian \(H\) and the unit path normal \(\mathbf{n}\) at the first image |
+| =reactant_partition= | =f64= | Gaussian reactant normalization \(Z_R = \sqrt{2\pi k_{\mathrm{B}}T} / \omega_0\), in units of \(s\) |
+| =reactant_log_partition= | =f64= | \(\ln Z_R\), formed directly in log space |
+| =normalized_rate= | =f64= | \(k = \sqrt{k_{\mathrm{B}}T / (2\pi)}\,\exp(-\Delta F / k_{\mathrm{B}}T) / Z_R = (\omega_0 / 2\pi)\,\exp(-\Delta F / k_{\mathrm{B}}T)\) in inverse engine time |
 | =normalized_log_rate= | =f64= | \(\ln k\) computed from \(\ln Z_R\) |
-| =normalized_rate_error= | =f64= | Delta-method standard error of =normalized_rate= from the plane force errors |
+| =normalized_rate_error= | =f64= | Standard error of =normalized_rate=; the reactant Hessian is deterministic, so only \(\Delta F\) contributes |
+| =quadrature_residual= | =f64= | Largest \(\lvert\)path-force integral \(- \Delta E\rvert\) over the planes at zero temperature, by the same quadrature as =barrier=: the deterministic discretization bias of the profile at this plane count |
 
 ** =network::NetworkConfig= and =RateTableConfig=
 
@@ -237,7 +240,7 @@ The value stored by =PafiConfig::default()= is the 9-plane value shown in the ta
 | =hyperplane::HyperplaneSample= | =plane=, =mean_force=, =standard_error=, =configurations= | Output of =hyperplane::sample_hyperplane(engine, plane, config)= |
 | =ohtst::OhtstEstimate= | =plane=, =rate=, =standard_error= | Output of =ohtst::optimize_hyperplane(engine, seed_plane, config)= |
 | =ffs::FfsEstimate= | =initial_flux=, =interface_probabilities=, =rate=, =standard_error= | Output of =ffs::forward_flux_rate(engine, order_param, config)= |
-| =pafi::FreeEnergyProfile= | =arc_lengths=, =free_energy=, =standard_error=, =barrier=, =barrier_error=, =dividing_index=, =reactant_partition=, =reactant_log_partition=, =normalized_rate=, =normalized_log_rate=, =normalized_rate_error= | Output of =pafi::pafi_profile(engine, path_images, config)= and =pafi::pafi_profile_dyn(engine, path_images, config)=; see the field table in the configuration section |
+| =pafi::FreeEnergyProfile= | =arc_lengths=, =free_energy=, =standard_error=, =barrier=, =barrier_error=, =dividing_index=, =dividing_arc=, =reactant_frequency=, =reactant_partition=, =reactant_log_partition=, =normalized_rate=, =normalized_log_rate=, =normalized_rate_error=, =quadrature_residual= | Output of =pafi::pafi_profile(engine, path_images, config)= and =pafi::pafi_profile_dyn(engine, path_images, config)=; see the field table in the configuration section |
 | =network::RateEdge= | =from=, =to=, =rate= (=RateEdge::new(from, to, rate)=) | Directed elementary transition edge in =network::build_rate_table= |
 
 * Error variants (=FluxError=)

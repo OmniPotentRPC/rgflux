@@ -145,19 +145,19 @@ Two limits anchor the estimator:
 - *Straight path (\(\mathbf{n}' = \mathbf{0}\))*: the Jacobian term vanishes and \(dF/ds\) is the Sprik-Ciccotti mean constraint force \(\langle \lambda \rangle\) that =hyperplane::sample_hyperplane= samples on a single plane @@rst::cite:`sprikFreeEnergyConstrained1998`@@. On the widening double well \(V(x, y) = (1 - x^2)^2 + \tfrac{1}{2}k(x)y^2\) with \(k(x) = 1.5 + 0.5x\), the profile from \(x = -1\) to \(x = 0\) ends at \(\Delta F(T) = \Delta E_0 + \tfrac{1}{2}k_{\mathrm{B}}T \ln(k(0)/k(-1))\). The integration tests reproduce this value within two standard errors, for unit and anisotropic masses.
 - *Zero temperature (\(T \to 0\))*: the sampled points collapse onto the anchor and the integral of \(dF/ds\) becomes the static line integral \(\int \nabla V(\mathbf{X}) \cdot \mathbf{X}'\,ds = \Delta E_0\). =pafi_profile= evaluates that trapezoid sum on the plane anchors before it samples anything and compares it with the end-to-end energy change, see the tolerance note below.
 
-The profile is the trapezoid integral of the plane means \(g_k\),
+The profile is the integral of the plane means \(g_k\) by a fourth-order Hermite rule. Each interval uses the cubic Hermite interpolant of \(g\) with Lagrange-window derivatives \(g'_k\),
 
 \[
-F(s_k) - F(s_0) = \sum_{j=1}^{k} \tfrac{1}{2}\,(g_{j-1} + g_j)\,(s_j - s_{j-1}),
+F(s_{k+1}) - F(s_k) = \tfrac{h}{2}\,(g_k + g_{k+1}) + \tfrac{h^2}{12}\,(g'_k - g'_{k+1}), \qquad h = s_{k+1} - s_k,
 \]
 
-the barrier is \(\Delta F = \max_k F(s_k)\) at the dividing plane \(s^*\), and the normalized rate is
+which is exact for cubic \(g\) and has \(O(h^4)\) global error. The barrier is \(\Delta F = F(s^*) - F(s_0)\) at the dividing plane \(s^*\), the maximum of the interpolated profile, and the normalized rate is
 
 \[
-k = \sqrt{\frac{k_{\mathrm{B}}T}{2\pi}}\;\frac{\exp(-F(s^*)/k_{\mathrm{B}}T)}{Z_R}, \qquad Z_R = 2\int_0^{s^*} \exp\!\left(-\frac{F(s)}{k_{\mathrm{B}}T}\right) ds,
+k = \sqrt{\frac{k_{\mathrm{B}}T}{2\pi}}\;\frac{\exp(-\Delta F/k_{\mathrm{B}}T)}{Z_R} = \frac{\omega_0}{2\pi}\,\exp(-\Delta F/k_{\mathrm{B}}T), \qquad Z_R = \frac{\sqrt{2\pi k_{\mathrm{B}}T}}{\omega_0},
 \]
 
-with \(Z_R\) also by the trapezoid rule.
+where \(\omega_0^2 = 1 / (\mathbf{n}^T H^{-1} \mathbf{n})\) uses the mass-weighted Hessian \(H\) at the first image and the unit path normal \(\mathbf{n}\) there.
 
 ** What =pafi_profile= does
 
@@ -165,7 +165,7 @@ with \(Z_R\) also by the trapezoid rule.
 2. *Planes*: =planes= planes sit at equal values of the parameter from the first to the last image. Each has an anchor \(\mathbf{X}(s_k)\), the normal \(\mathbf{n}\), and \(\mathbf{n}'\).
 3. *Zero-temperature check*: let \(I_T\) be the trapezoid sum of \(dV/ds\) over the anchors and \(\Delta E_0 = V(\mathbf{X}(s_{K-1})) - V(\mathbf{X}(s_0))\). The code compares \(\lvert I_T - \Delta E_0\rvert / \max(E_{\mathrm{unit}}, \lvert\Delta E_0\rvert)\) with the effective =zero_temperature_tol=, where \(E_{\mathrm{unit}}\) is one energy unit of the engine. A mismatch returns =FluxError::InvalidConfig= without sampling.
 4. *Sampling*: On each plane the engine gets the constraint, is placed at the anchor, receives Maxwell-Boltzmann velocities from the per-plane seed, runs =burn_in_steps= steps, and then =sample_steps= steps that each record \(\lambda\,(\mathbf{n} \cdot \mathbf{X}' - (\mathbf{x} - \mathbf{X}) \cdot \mathbf{n}')\). =stats::batch_means= turns each series into a mean and a standard error.
-5. *Integration*: The profile, barrier, dividing plane, \(Z_R\) and rate follow from the plane means. The plane errors are independent, so they propagate through the trapezoid weights; the rate error comes from the delta method over the profile and \(Z_R\).
+5. *Integration*: The profile, barrier, dividing plane, \(Z_R\) and rate follow from the plane means. The plane errors are independent, so they propagate through the linear quadrature weights; the reactant Hessian is deterministic, so the rate error comes from \(\Delta F\) alone.
 6. *Adaptive rounds*: With =target_error= set, steps 4 and 5 repeat for up to =max_rounds= rounds, each adding =sample_steps= samples to every plane, until =barrier_error= is at most the target. The result uses all samples. Missing the target is not an error, so compare =barrier_error= with it.
 
 The seed of plane \(k\) in round \(r\) is =seed + 4099 * k + 1000003 * r= (wrapping), so the planes are independent and a run is reproducible.
@@ -179,7 +179,7 @@ The value stored by =PafiConfig::default()= is \(2 (\pi^2 / 12) / 8^2 \approx 0.
 ** Assumptions, units, and engine wiring
 
 - Assumes a smooth path of at least two images, with one coordinate per degree of freedom of the engine, whose thermal fluctuations on each plane stay inside the region where neighbouring planes do not intersect, so that \(\mathbf{n} \cdot \mathbf{X}' - (\mathbf{x} - \mathbf{X}) \cdot \mathbf{n}'\) stays positive.
-- Every plane starts at its anchor, so a plane whose thermal centre lies far from the anchor needs a long =burn_in_steps=. The free energy has to rise somewhere, otherwise the dividing plane is the first plane, \(Z_R\) is zero and the call returns =FluxError::InvalidConfig=.
+- Every plane starts at its anchor, so a plane whose thermal centre lies far from the anchor needs a long =burn_in_steps=. The free energy has to rise somewhere, otherwise the dividing plane is the first plane, the reactant region has zero width and the call returns =FluxError::InvalidConfig=.
 - Path images, masses and positions use the engine units \([L]\) and \([M]\); the arc length \(s\) is mass-weighted, \([M]^{1/2}[L]\), and equals a length for unit masses. =free_energy=, =standard_error=, =barrier=, =barrier_error=, =target_error= and \(k_{\mathrm{B}}T\) are in \([E]\), =time_step= in \([T]\), and =normalized_rate= in \([T]^{-1}\).
 - =pafi_profile= accepts any =E: DynamicsEngine + ?Sized=, and =pafi_profile_dyn= takes =&mut dyn DynamicsEngine=. The engine must report =StepReport::constraint_force= on constrained steps and implement =energy_and_forces= for the zero-temperature check.
 - Like the other samplers it restores positions, velocities, the periodic cell, the thermostat, and the constraint on return, including on errors. The stochastic stream is left where the last plane reseeded it.

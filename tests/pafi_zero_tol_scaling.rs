@@ -50,5 +50,13 @@ fn default_tolerance_scales_with_planes_for_consistency_check() {
         .with_burn_in_steps(1)
         .with_sample_steps(2)
         .with_stats(StatsConfig::default().with_min_batches(2));
-    assert!(pafi_profile(&mut legacy_engine, path.view(), &legacy_like).is_ok());
+    // The 0.0257 tolerance passes the consistency check. The linear surface has
+    // no reactant curvature, so the run then stops at the reactant Hessian
+    // instead of the quadrature tolerance.
+    assert_eq!(
+        pafi_profile(&mut legacy_engine, path.view(), &legacy_like),
+        Err(FluxError::InvalidConfig(
+            "PAFI reactant Hessian is not positive definite along the path normal"
+        ))
+    );
 }
