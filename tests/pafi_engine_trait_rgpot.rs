@@ -5,7 +5,10 @@ mod pafi_support;
 use std::os::raw::c_void;
 
 use ndarray::{Array1, Array2, ArrayView1};
-use pafi_support::{assert_below, assert_coverage, block_stats, seed, widening_barrier_se_cap_at};
+use pafi_support::{
+    assert_below, assert_coverage, assert_sweep_within_budget, block_stats, offset_sweep, seed,
+    seed_with_offset, widening_barrier_se_cap_at,
+};
 use rgflux::engine::native::{NativeConfig, NativeEngine};
 use rgflux::engine::rgpot::{RgpotConfig, RgpotSurface};
 use rgflux::engine::{DynamicsEngine, ThermostatConfig};
@@ -216,6 +219,8 @@ const COVERAGE_TEMPERATURE: f64 = 0.02;
 const COVERAGE_SAMPLES: usize = 16_000;
 const COVERAGE_MASS_Y: f64 = 4.0;
 const COVERAGE_GAMMA: f64 = 1.3;
+/// Offsets of `PAFI_SEED_OFFSET` in the rgpot barrier standard-error sweep.
+const RGPOT_SWEEP_OFFSETS: u64 = 128;
 
 fn assert_close(lhs: f64, rhs: f64) {
     let tolerance = 1024.0 * f64::EPSILON * lhs.abs().max(rhs.abs()).max(1.0);
@@ -356,10 +361,11 @@ fn pafi_native_and_rgpot_profiles_agree_to_rounding() {
     assert_profiles_match(&native_profile, &rgpot_profile);
 }
 
-#[test]
-fn pafi_rgpot_barrier_covers_hermite_expectation() {
+const COVERAGE_SEED: u64 = 41;
+
+/// Profile of the rgpot-backed widening well, seeded by `seed_value` itself.
+fn coverage_rgpot_profile(seed_value: u64) -> FreeEnergyProfile {
     let path = path_x_only(-1.0, 0.0, COVERAGE_PLANES);
-    let seed_value = seed(41);
     let config = PafiConfig::default()
         .with_planes(COVERAGE_PLANES)
         .with_burn_in_steps(200)
@@ -368,20 +374,36 @@ fn pafi_rgpot_barrier_covers_hermite_expectation() {
         .with_stats(block_stats(COVERAGE_SAMPLES))
         .with_seed(seed_value);
     let mut rgpot = coverage_rgpot_engine(seed_value);
-    let profile = pafi_profile(&mut rgpot, path.view(), &config).expect("rgpot profile");
+    pafi_profile(&mut rgpot, path.view(), &config).expect("rgpot profile")
+}
+
+fn coverage_se_cap() -> f64 {
+    widening_barrier_se_cap_at(
+        COVERAGE_SAMPLES,
+        COVERAGE_MASS_Y,
+        COVERAGE_GAMMA,
+        COVERAGE_TEMPERATURE,
+    )
+}
+
+#[test]
+fn pafi_rgpot_barrier_covers_hermite_expectation() {
+    let profile = coverage_rgpot_profile(seed(COVERAGE_SEED));
     let last = profile.free_energy.len() - 1;
     let barrier = profile.free_energy[last];
     let se = profile.standard_error[last];
     let expected = hermite_barrier(COVERAGE_PLANES, COVERAGE_TEMPERATURE);
-    assert_below(
-        "rgpot barrier SE",
-        se,
-        widening_barrier_se_cap_at(
-            COVERAGE_SAMPLES,
-            COVERAGE_MASS_Y,
-            COVERAGE_GAMMA,
-            COVERAGE_TEMPERATURE,
-        ),
-    );
+    assert_below("rgpot barrier SE", se, coverage_se_cap());
     assert_coverage("rgpot barrier", barrier, se, expected);
+}
+
+#[test]
+#[ignore = "opt-in sweep of PAFI_SEED_OFFSET for the rgpot barrier standard-error cap"]
+fn rgpot_barrier_se_cap_offset_sweep() {
+    let cap = coverage_se_cap();
+    let report = offset_sweep(RGPOT_SWEEP_OFFSETS, 1, |offset| {
+        let profile = coverage_rgpot_profile(seed_with_offset(COVERAGE_SEED, offset));
+        vec![(profile.standard_error[COVERAGE_PLANES - 1], cap)]
+    });
+    assert_sweep_within_budget("rgpot barrier SE", &["barrier SE"], &report);
 }
