@@ -34,6 +34,9 @@
 //! cubic `g`, and the global error is `O(h^4)` for smoother `g`. The dividing
 //! plane `s*` is the global maximum of that interpolant, not the highest
 //! sampled plane. The barrier is `Delta F = F(s*) - F(s_0)`.
+//! The reported error at each plane, and at the dividing arc, is the
+//! batch-means error combined with the absolute difference between that
+//! Hermite integral and the trapezoid rule.
 //!
 //! The normalized rate uses the Gaussian reactant integral. With the first
 //! image at the reactant minimum, `F(s_0) = 0`, and `omega_0` the projected
@@ -72,8 +75,10 @@
 //!    mean force and its standard error on each plane.
 //! 5. The profile, barrier and rate follow from the plane means. The
 //!    standard errors of the planes are independent and propagate through the
-//!    Hermite weights. The reactant Hessian is deterministic, so the rate
-//!    error comes from the barrier alone, by the delta method.
+//!    Hermite weights, then combine with the absolute difference between the
+//!    Hermite integral and the trapezoid rule on the same nodes. The reactant
+//!    Hessian is deterministic, so the rate error comes from the barrier
+//!    alone, by the delta method.
 //! 6. With `target_error` set, steps 4 and 5 repeat for up to `max_rounds`
 //!    rounds, each adding `sample_steps` fresh samples to every plane, until
 //!    the standard error of the barrier is at most `target_error`. Without
@@ -363,14 +368,18 @@ pub struct FreeEnergyProfile {
     /// Integrated free energy `F(s_k) - F(s_0)` at each plane, so the first
     /// entry is `0`.
     pub free_energy: Vec<f64>,
-    /// Standard error of `free_energy` at each plane, propagated from the
-    /// batch-means errors of the plane forces through the Hermite weights.
-    /// The first entry is `0`.
+    /// Standard error of `free_energy` at each plane. The batch-means errors
+    /// of the plane forces are propagated through the Hermite weights and
+    /// combined, by `hypot`, with the absolute difference between the Hermite
+    /// integral and the trapezoid rule on the same nodes. The first entry is
+    /// `0`. A zero entry means those two contributions are both zero.
     pub standard_error: Vec<f64>,
     /// Free-energy barrier `Delta F = F(s*) - F(s_0)` at the dividing plane,
     /// the global maximum of the interpolated profile.
     pub barrier: f64,
-    /// Standard error of [`Self::barrier`].
+    /// Standard error of [`Self::barrier`]. The propagated plane-force error
+    /// at `s*` is combined, by `hypot`, with the absolute difference between
+    /// the Hermite barrier and the trapezoid integral at the same arc.
     pub barrier_error: f64,
     /// Index of the first sampled plane whose free energy is the largest.
     /// [`Self::dividing_arc`] can lie in an interval that does not touch this
@@ -976,6 +985,166 @@ impl Quadrature {
     }
 }
 
+/// Cumulative integral of a mean force, with the truncation the rule itself
+/// can see.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct IntegralEstimate {
+    /// Integral from the first node to each node. The first entry is `0`.
+    pub values: Vec<f64>,
+    /// Truncation at each node: the absolute difference against an embedded
+    /// lower-order rule on the same nodes. The first entry is `0`. A later
+    /// zero means the two rules agree there.
+    pub error: Vec<f64>,
+}
+
+/// Integrates plane mean forces and reports a truncation taken from the rule.
+///
+/// A backend implements this for its own nodes and weights. The profile uses
+/// [`HermiteIntegral`]. This crate does not provide a Gaussian-process rule.
+pub trait MeanForceIntegral {
+    /// Cumulative integral of `gradients` along strictly increasing `arcs`.
+    ///
+    /// `arcs` and `gradients` have the same length, at least 2.
+    fn cumulative(&self, arcs: &[f64], gradients: &[f64]) -> Result<IntegralEstimate, FluxError>;
+}
+
+/// Cubic Hermite integral of the mean force.
+///
+/// The point values are the profile quadrature. The truncation is the
+/// absolute difference from the trapezoid rule on the same nodes.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct HermiteIntegral;
+
+/// Composite Simpson integral of the mean force.
+///
+/// Each pair of intervals uses the quadratic interpolant of the three plane
+/// values, including unequal spacing. An even plane count has an odd number
+/// of intervals and is rejected, rather than integrated by another rule. The
+/// truncation is the absolute difference from the trapezoid rule.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SimpsonIntegral;
+
+fn same_length(arcs: &[f64], gradients: &[f64]) -> Result<(), FluxError> {
+    if arcs.len() != gradients.len() {
+        return Err(FluxError::Shape {
+            expected: arcs.len(),
+            got: gradients.len(),
+            context: "PAFI mean-force integral",
+        });
+    }
+    Ok(())
+}
+
+fn trapezoid_to(arcs: &[f64], gradients: &[f64], arc: f64) -> f64 {
+    let mut accumulated = 0.0_f64;
+    for k in 0..arcs.len() - 1 {
+        let left = arcs[k];
+        if arc <= left {
+            break;
+        }
+        let width = arcs[k + 1] - left;
+        let fraction = ((arc.min(arcs[k + 1]) - left) / width).clamp(0.0, 1.0);
+        let slope = gradients[k + 1] - gradients[k];
+        accumulated += width * (gradients[k] * fraction + slope * fraction * fraction / 2.0);
+        if arc <= arcs[k + 1] {
+            break;
+        }
+    }
+    accumulated
+}
+
+fn trapezoid_cumulative(arcs: &[f64], gradients: &[f64]) -> Vec<f64> {
+    let mut values = vec![0.0_f64; arcs.len()];
+    for k in 0..arcs.len() - 1 {
+        values[k + 1] = trapezoid_to(arcs, gradients, arcs[k + 1]);
+    }
+    values
+}
+
+/// Integral of the quadratic through `(x0, g0)`, `(x1, g1)`, `(x2, g2)` from
+/// `x0` to `end`.
+fn quadratic_integral(x0: f64, x1: f64, x2: f64, g0: f64, g1: f64, g2: f64, end: f64) -> f64 {
+    let left = x1 - x0;
+    let right = x2 - x1;
+    let divided_left = (g1 - g0) / left;
+    let divided_right = (g2 - g1) / right;
+    let second = (divided_right - divided_left) / (x2 - x0);
+    let h = end - x0;
+    g0 * h + divided_left * h * h / 2.0 + second * (h * h * h / 3.0 - left * h * h / 2.0)
+}
+
+impl MeanForceIntegral for HermiteIntegral {
+    fn cumulative(&self, arcs: &[f64], gradients: &[f64]) -> Result<IntegralEstimate, FluxError> {
+        same_length(arcs, gradients)?;
+        let quadrature = Quadrature::new(arcs)?;
+        let values = quadrature.integrate(gradients);
+        let lower = trapezoid_cumulative(arcs, gradients);
+        let error = values
+            .iter()
+            .zip(&lower)
+            .map(|(value, trapezoid)| (value - trapezoid).abs())
+            .collect();
+        Ok(IntegralEstimate { values, error })
+    }
+}
+
+impl MeanForceIntegral for SimpsonIntegral {
+    fn cumulative(&self, arcs: &[f64], gradients: &[f64]) -> Result<IntegralEstimate, FluxError> {
+        same_length(arcs, gradients)?;
+        let n = arcs.len();
+        if n < 3 || n.is_multiple_of(2) {
+            return Err(FluxError::InvalidConfig(
+                "Simpson mean-force integration needs an odd number of planes, at least 3",
+            ));
+        }
+        for pair in arcs.windows(2) {
+            let ds = pair[1] - pair[0];
+            if !ds.is_finite() || ds <= 0.0 {
+                return Err(FluxError::InvalidConfig(
+                    "PAFI arc lengths must strictly increase",
+                ));
+            }
+        }
+        if gradients.iter().any(|gradient| !gradient.is_finite()) {
+            return Err(FluxError::NonFinite("PAFI Simpson mean force"));
+        }
+        let mut values = vec![0.0_f64; n];
+        let mut accumulated = 0.0_f64;
+        for pair in 0..(n - 1) / 2 {
+            let i = pair * 2;
+            let to_middle = quadratic_integral(
+                arcs[i],
+                arcs[i + 1],
+                arcs[i + 2],
+                gradients[i],
+                gradients[i + 1],
+                gradients[i + 2],
+                arcs[i + 1],
+            );
+            let to_end = quadratic_integral(
+                arcs[i],
+                arcs[i + 1],
+                arcs[i + 2],
+                gradients[i],
+                gradients[i + 1],
+                gradients[i + 2],
+                arcs[i + 2],
+            );
+            values[i + 1] = accumulated + to_middle;
+            accumulated += to_end;
+            values[i + 2] = accumulated;
+        }
+        let lower = trapezoid_cumulative(arcs, gradients);
+        let error = values
+            .iter()
+            .zip(&lower)
+            .map(|(value, trapezoid)| (value - trapezoid).abs())
+            .collect();
+        Ok(IntegralEstimate { values, error })
+    }
+}
+
 fn integrate_profile(
     quadrature: &Quadrature,
     gradients: &[f64],
@@ -1008,8 +1177,11 @@ fn integrate_profile(
             "PAFI reactant curvature must be finite and positive",
         ));
     }
-    let free_energy = quadrature.integrate(gradients);
-    if free_energy.iter().any(|value| !value.is_finite()) {
+    let estimate = HermiteIntegral.cumulative(&quadrature.arcs, gradients)?;
+    let free_energy = estimate.values;
+    if free_energy.iter().any(|value| !value.is_finite())
+        || estimate.error.iter().any(|value| !value.is_finite())
+    {
         return Err(FluxError::NonFinite("PAFI integrated free energy"));
     }
     let dividing = quadrature.dividing_plane(gradients, &free_energy);
@@ -1024,10 +1196,15 @@ fn integrate_profile(
     let standard_error: Vec<f64> = quadrature
         .cumulative
         .iter()
-        .map(|weights| propagate(weights))
+        .zip(&estimate.error)
+        .map(|(weights, truncation)| propagate(weights).hypot(*truncation))
         .collect();
     let barrier = dividing.free_energy;
-    let barrier_error = propagate(&dividing.weights);
+    let lower_barrier = trapezoid_to(&quadrature.arcs, gradients, dividing.arc);
+    if !lower_barrier.is_finite() {
+        return Err(FluxError::NonFinite("PAFI trapezoid barrier"));
+    }
+    let barrier_error = propagate(&dividing.weights).hypot((barrier - lower_barrier).abs());
     if !barrier.is_finite() || !barrier_error.is_finite() || barrier_error < 0.0 {
         return Err(FluxError::NonFinite("PAFI barrier"));
     }
@@ -1521,8 +1698,15 @@ mod tests {
         assert_eq!(profile.dividing_index, 1);
         assert_abs_diff_eq!(profile.dividing_arc, 1.0, epsilon = 1.0e-12);
         assert_abs_diff_eq!(profile.barrier, 13.0 / 12.0, epsilon = 1.0e-12);
-        assert_eq!(profile.barrier_error, 0.0);
-        assert_eq!(profile.normalized_rate_error, 0.0);
+        let trapezoid_barrier = 0.5 * (gradients[0] + gradients[1]);
+        let truncation = (profile.barrier - trapezoid_barrier).abs();
+        assert!(truncation > 0.0);
+        assert_abs_diff_eq!(profile.barrier_error, truncation, epsilon = 1.0e-12);
+        assert_abs_diff_eq!(
+            profile.normalized_rate_error,
+            profile.normalized_rate * profile.barrier_error,
+            epsilon = 1.0e-12
+        );
         let frequency = 4.0_f64.sqrt();
         let log_partition = 0.5 * (TAU * 1.0).ln() - frequency.ln();
         assert_abs_diff_eq!(
@@ -1535,6 +1719,35 @@ mod tests {
             frequency.ln() - TAU.ln() - profile.barrier,
             epsilon = 1.0e-12
         );
+    }
+
+    #[test]
+    fn simpson_rejects_an_even_plane_count_and_integrates_cubics() {
+        let even = SimpsonIntegral
+            .cumulative(&[0.0, 1.0, 2.0, 3.0], &[0.0, 1.0, 2.0, 3.0])
+            .expect_err("even plane count");
+        assert_eq!(
+            even,
+            FluxError::InvalidConfig(
+                "Simpson mean-force integration needs an odd number of planes, at least 3"
+            )
+        );
+
+        let arcs: Vec<f64> = (0..5).map(|k| 0.5 * f64::from(k)).collect();
+        let cubic = |s: f64| 1.0 - 2.0 * s + 0.5 * s * s + 0.75 * s * s * s;
+        let integral = |s: f64| s - s * s + s * s * s / 6.0 + 0.1875 * s * s * s * s;
+        let gradients: Vec<f64> = arcs.iter().map(|&s| cubic(s)).collect();
+        let estimate = SimpsonIntegral
+            .cumulative(&arcs, &gradients)
+            .expect("simpson");
+        for (k, (value, &s)) in estimate.values.iter().zip(&arcs).enumerate() {
+            if k % 2 == 0 {
+                assert_abs_diff_eq!(*value, integral(s), epsilon = 1.0e-12);
+            }
+        }
+        assert_eq!(estimate.error[0], 0.0);
+        assert!(estimate.error[4] > 0.0);
+        assert!(estimate.error.iter().all(|error| error.is_finite()));
     }
 
     fn quartic_gradient_slope(x: f64) -> f64 {
