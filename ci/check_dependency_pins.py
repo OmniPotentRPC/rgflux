@@ -74,6 +74,56 @@ def check_lock(where: Path, label: str) -> list[str]:
     return errors
 
 
+def patch_git_source(url: str, rev: str) -> str:
+    return f"git+{url}?rev={rev}"
+
+
+def check_patch_crates_io(
+    patches: dict,
+    locked: dict[tuple[str, str], str],
+    reqs: dict[str, str],
+    manifest: str,
+) -> tuple[list[str], dict[str, set[tuple[str, str]]]]:
+    errors: list[str] = []
+    seen: dict[str, set[tuple[str, str]]] = {}
+    for name, spec in sorted(patches.items()):
+        if not isinstance(spec, dict):
+            continue
+        git = spec.get("git")
+        if git is None:
+            continue
+        what = f"{manifest}: {name} [patch.crates-io]"
+        rev = spec.get("rev")
+        if rev is None or not SHA.fullmatch(rev):
+            bits = []
+            for key in ("branch", "tag"):
+                if key in spec:
+                    bits.append(f"{key}={spec[key]}")
+            if rev is not None:
+                bits.append(f"rev={rev}")
+            shown = ", ".join(bits) if bits else "the default branch"
+            errors.append(f"{what} follows {shown}; pin rev to a full 40-hex commit")
+            continue
+        if "branch" in spec or "tag" in spec:
+            bits = [f"{key}={spec[key]}" for key in ("branch", "tag") if key in spec]
+            errors.append(
+                f"{what} sets {', '.join(bits)} with rev; "
+                "patch overrides must name only rev"
+            )
+        source = patch_git_source(git, rev)
+        req = reqs.get(name)
+        version = locked.get((name, source))
+        if version is None:
+            errors.append(f"{what} from {source} is not in Cargo.lock")
+        elif req is not None and req != f"={version}":
+            errors.append(
+                f"{what} replaces a crate versioned {req!r}, but the commit is "
+                f"{version}; use '={version}' in [dependencies]"
+            )
+        seen.setdefault(name, set()).add((git, rev))
+    return errors, seen
+
+
 def check_manifests(where: Path, label: str) -> list[str]:
     errors = []
     meta = json.loads(cargo(["metadata", "--no-deps", "--format-version", "1"], where))
@@ -82,9 +132,24 @@ def check_manifests(where: Path, label: str) -> list[str]:
         for pkg in lock_packages(where)
         if pkg.get("source", "").startswith("git+")
     }
+    reqs: dict[str, str] = {}
+    for member in meta["packages"]:
+        for dep in member["dependencies"]:
+            reqs.setdefault(dep["name"], dep["req"])
     seen: dict[str, set[tuple[str, str]]] = {}
     for member in meta["packages"]:
-        manifest = Path(member["manifest_path"]).relative_to(ROOT)
+        manifest_path = Path(member["manifest_path"])
+        rel_manifest = manifest_path.relative_to(ROOT)
+        with open(manifest_path, "rb") as fh:
+            patch_table = tomllib.load(fh).get("patch", {}).get("crates-io") or {}
+        if patch_table:
+            patch_errors, patch_seen = check_patch_crates_io(
+                patch_table, locked, reqs, str(rel_manifest)
+            )
+            errors.extend(patch_errors)
+            for crate, sources in patch_seen.items():
+                seen.setdefault(crate, set()).update(sources)
+        manifest = rel_manifest
         for dep in member["dependencies"]:
             source = dep.get("source") or ""
             if not source.startswith("git+"):

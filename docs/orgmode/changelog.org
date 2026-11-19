@@ -28,7 +28,7 @@
 - =stats::batch_means= returns the first sample as the mean of a series that is constant up to rounding, so identical non-dyadic samples are no longer averaged to a neighbouring float.
 - Compute the PAFI reactant partition in log space with shifted
   log-sum-exp trapezoid quadrature so deep free-energy wells no longer
-  overflow the partition integral. Propagate `ln Z_R` through normalized
+  overflow the partition integral. Propagate =ln Z_R= through normalized
   rate evaluation and uncertainty propagation while retaining legacy
   linear-rate and partition fields for compatibility.
 - Correct PAFI mass-metric projection, spline geometry, adaptive sampling, profile integration, uncertainty propagation, and engine-state restoration.
