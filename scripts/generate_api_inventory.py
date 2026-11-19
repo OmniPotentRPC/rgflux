@@ -13,7 +13,21 @@ ROOT = Path(__file__).resolve().parents[1]
 REFERENCE = ROOT / "docs" / "orgmode" / "reference.org"
 BEGIN = "# BEGIN GENERATED PUBLIC API"
 END = "# END GENERATED PUBLIC API"
-PATH_RE = re.compile(r"rgflux(?:::[A-Za-z_][A-Za-z0-9_]*(?:<[^>]+>)?)+")
+# A path is a whole identifier. Do not match the rgflux suffix of a longer name.
+PATH_RE = re.compile(
+    r"(?<![A-Za-z0-9_])rgflux(?:::[A-Za-z_][A-Za-z0-9_]*(?:<[^>]+>)?)+(?![A-Za-z0-9_])"
+)
+
+
+def item_path(line: str) -> str | None:
+    """Return the qualified rgflux path on one cargo-public-api line."""
+    stripped = line.removeprefix("#[non_exhaustive] ").strip()
+    if not stripped.startswith("pub "):
+        return None
+    match = PATH_RE.search(stripped)
+    if match is None:
+        return None
+    return re.sub(r"<[^>]+>", "", match.group(0))
 
 
 def public_items() -> list[str]:
@@ -32,12 +46,9 @@ def public_items() -> list[str]:
     output = subprocess.check_output(command, cwd=ROOT, env=env, text=True)
     items: set[str] = set()
     for line in output.splitlines():
-        stripped = line.removeprefix("#[non_exhaustive] ").strip()
-        if not stripped.startswith("pub "):
-            continue
-        match = PATH_RE.search(stripped)
-        if match:
-            items.add(re.sub(r"<[^>]+>", "", match.group(0)))
+        path = item_path(line)
+        if path:
+            items.add(path)
     return sorted(items)
 
 

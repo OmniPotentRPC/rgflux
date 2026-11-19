@@ -15,7 +15,12 @@ FULL_PATH = ROOT / "llms-full.txt"
 TITLE_RE = re.compile(r"^#\+TITLE:\s*(.+)$", re.IGNORECASE)
 HEADING_RE = re.compile(r"^(\*+)\s+(.+)$")
 LINK_RE = re.compile(r"\[\[([^\]]+)\]\[([^\]]+)\]\]")
-CODE_RE = re.compile(r"=([^=\n]+)=")
+# Verbatim spans may contain " = ". Open only at a boundary so HTML
+# attributes (attr="value") and math equals are left untouched.
+CODE_RE = re.compile(
+    r"(?:^|(?<=[^A-Za-z0-9_]))=(?!\s)"
+    r"((?:[^=\n]|=(?=\s))*?[^\s=])=(?![A-Za-z0-9_])"
+)
 VERBATIM_RE = re.compile(r"~([^~\n]+)~")
 SRC_BEGIN_RE = re.compile(r"^#\+begin_src\s+(\S+)", re.IGNORECASE)
 SRC_END_RE = re.compile(r"^#\+end_src", re.IGNORECASE)
@@ -64,10 +69,12 @@ def summary(path: Path) -> str:
     paragraphs: list[str] = []
     in_export = False
     in_source = False
+    in_list = False
     for line in path.read_text(encoding="utf-8").splitlines():
         stripped = line.strip()
         if SRC_BEGIN_RE.match(stripped):
             in_source = True
+            in_list = False
             continue
         if SRC_END_RE.match(stripped):
             in_source = False
@@ -76,6 +83,7 @@ def summary(path: Path) -> str:
             continue
         if stripped.lower().startswith("#+begin_export"):
             in_export = True
+            in_list = False
             continue
         if stripped.lower().startswith("#+end_export"):
             in_export = False
@@ -85,9 +93,15 @@ def summary(path: Path) -> str:
         if not stripped:
             if paragraphs:
                 break
+            in_list = False
             continue
         if stripped.startswith(("#", "*", "|", ":", "-", "..")):
+            in_list = stripped.startswith("-")
             continue
+        # Org wraps a bullet by indenting the following lines.
+        if in_list and (line.startswith(" ") or line.startswith("\t")):
+            continue
+        in_list = False
         paragraphs.append(stripped)
     prose = clean_inline(" ".join(paragraphs))
     if not prose:

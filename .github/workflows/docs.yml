@@ -49,6 +49,7 @@ jobs:
         run: python3 docs/check_paths.py
       - name: Verify public API documentation and generated indexes
         run: |
+          python3 -m unittest discover -s scripts -p 'test_*.py'
           python3 ci/check_public_api_docs.py
           python3 scripts/generate_llms.py --check
       - name: Verify documentation structure, stubs, and DOIs
