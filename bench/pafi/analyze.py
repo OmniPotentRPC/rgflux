@@ -5,6 +5,7 @@ import math
 import pathlib
 import statistics
 import sys
+import tarfile
 
 REACTANT_PARTITION_ERROR = (
     "invalid configuration: PAFI reactant partition must be finite and positive"
@@ -101,19 +102,50 @@ def load_metadata(path):
     return read_required_json(path, "metadata.json")
 
 
+def campaign_reader(raw_dir):
+    raw_dir = pathlib.Path(raw_dir)
+    if raw_dir.is_dir():
+
+        def read_directory(name):
+            path = raw_dir / name
+            return path.read_text() if path.is_file() else None
+
+        return read_directory
+    archive = raw_dir.parent / f"{raw_dir.name}.tar.xz"
+    if not archive.is_file():
+        return lambda name: None
+    with tarfile.open(archive, "r:xz") as bundle:
+        texts = {
+            member.name: bundle.extractfile(member).read().decode()
+            for member in bundle
+            if member.isfile()
+        }
+    return texts.get
+
+
 def load_campaign_entries(raw_dir):
     raw_dir = pathlib.Path(raw_dir)
+    read = campaign_reader(raw_dir)
     manifest_path = raw_dir / "manifest.json"
-    manifest = read_required_json(manifest_path, "campaign manifest")
+    manifest_text = read("manifest.json")
+    if manifest_text is None:
+        raise AnalysisError(f"campaign manifest is missing: {manifest_path}")
+    try:
+        manifest = json.loads(manifest_text)
+    except json.JSONDecodeError as error:
+        raise AnalysisError(
+            f"campaign manifest is not valid JSON: {manifest_path}"
+        ) from error
     if not isinstance(manifest, list):
         raise AnalysisError(f"campaign manifest is not a list: {manifest_path}")
     entries = []
     for item in manifest:
         record_path = raw_dir / item["record"]
-        if not record_path.is_file():
+        record_text = read(item["record"])
+        if record_text is None:
             raise AnalysisError(f"raw record is missing: {record_path}")
         try:
-            record = json.loads(record_path.read_text())
+            record = json.loads(record_text)
         except json.JSONDecodeError as error:
             raise AnalysisError(
                 f"raw record is not valid JSON: {record_path}"

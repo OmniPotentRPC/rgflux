@@ -139,7 +139,7 @@ python3 bench/pafi/run_campaign.py \
   --high-core-set <four-cores>
 ```
 
-Raw logs and per-run work directories are scratch. Each raw record, `manifest.json`, and `metadata.json` are written under `bench/pafi/raw`, which is the directory `analyze.py` reads by default. Aggregate the completed campaign:
+Raw logs and per-run work directories are scratch. Each raw record, `manifest.json`, and `metadata.json` are written under `bench/pafi/raw`, which is the directory `analyze.py` reads by default. The committed tree keeps each campaign's manifest and records as one archive, `bench/pafi/raw/dimer.tar.xz` and `bench/pafi/raw/vacancy.tar.xz`, made by `python3 bench/pafi/pack_raw.py --raw-dir bench/pafi/raw/<campaign> --output bench/pafi/raw/<campaign>.tar.xz`. The archive is deterministic and holds no logs or work files. `analyze.py` reads `bench/pafi/raw/<campaign>` when that directory exists and the archive otherwise. Aggregate the completed campaign:
 
 ```sh
 python3 bench/pafi/analyze.py \
@@ -223,4 +223,8 @@ python3 bench/pafi/compare_vacancy_static.py \
 
 The campaign scripts write `bench/pafi/raw/metadata.json`. It records the `rgflux`, `rgpot`, `rgsaddle`, `rgmin`, LAMMPS, and PAFI commits when those checkouts are passed, the pinned native crate versions, importable package versions, the host, the seeds, and the command lines. Each reference run also writes `metadata.json` in its work directory before the engine starts. Dimer records land in `bench/pafi/raw/dimer/records` and vacancy records land in `bench/pafi/raw/vacancy/records`, with `manifest.json` beside each set.
 
-Published `results.json` reports 2016 planned executions. Summing each published cell's median wall time multiplied by its successful-run count gives 626.5859146209943 seconds over 1655 successful runs. Rejected runs have no wall time in that aggregate. The figure does not include building rgflux, rgpot, LAMMPS, or the PAFI driver. This change does not rerun the campaign and does not alter `results.json` or `results.md`.
+`bench/pafi/raw/dimer.tar.xz` (509024 bytes, 1728 records and the manifest), `bench/pafi/raw/vacancy.tar.xz` (132088 bytes, 288 records and the manifest), `bench/pafi/raw/metadata.json` (19765 bytes), `bench/pafi/raw/python-lock.txt` and `bench/pafi/raw/toolchain.txt` are the inputs of the committed `results.json` and `results.md`. `analyze.py` with its default paths rewrites both files byte for byte, and `test_analyze.py` checks that. `metadata.json` keeps the two campaign command lines with local directories replaced by the placeholders used in this file; the per run commands follow from the campaign options, the manifest and the seed rule, and are not repeated.
+
+The campaigns were rerun in full from the recorded sources and toolchain. They gave the same 2016 executions, the same 1655 accepted runs and the same 361 retained rgflux rejections as the earlier results, and every value in `results.json` outside the metadata, wall time, potential time, overhead and wall time p-value fields is unchanged. Those fields differ from the earlier run. Rerunning the static comparator and the pathway generator reproduced `bench/pafi/raw/vacancy-static.json` and `bench/pafi/raw/vacancy-path.json` byte for byte.
+
+Summing each cell's median wall time multiplied by its successful-run count gives 632.3040078509895 seconds over 1655 successful runs. Rejected runs have no wall time in that aggregate. The figure does not include building rgflux, rgpot, LAMMPS, or the PAFI driver.
