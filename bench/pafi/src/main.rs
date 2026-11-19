@@ -286,7 +286,7 @@ mod tests {
         let expected = "invalid configuration: PAFI reactant partition must be finite and positive";
         assert!(
             record.contains("\"status\":\"rejected\"") && record.contains(expected),
-            "zero-width reactant partition at dividing plane index 0 was not reproduced: {record}"
+            "the retained reactant partition rejection was not reproduced: {record}"
         );
     }
 }

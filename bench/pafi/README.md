@@ -149,7 +149,7 @@ python3 bench/pafi/analyze.py \
 
 `analyze.py` reads `bench/pafi/raw/dimer`, `bench/pafi/raw/vacancy`, `bench/pafi/raw/vacancy-path.json`, `bench/pafi/raw/vacancy-static.json`, and `bench/pafi/raw/metadata.json` unless those paths are overridden. If `metadata.json` or a raw record named by `manifest.json` is absent, it exits with `metadata.json is missing` or `raw record is missing` and does not write a traceback.
 
-The retained campaign exposed a zero-width reactant region: seed 1036330 selects dividing plane index zero, so no reactant integration interval exists and the finite partition is zero. The release harness includes this regression as a cargo test:
+The retained campaign rejected the curved, 17 plane, `k_B T=0.05`, 64 sample run with seed 1036330 and the error `PAFI reactant partition must be finite and positive`. The cargo test below and the wrapper after it are guard tests of that existing behaviour. They exercise unchanged rgflux library code, pass on the sources from before this benchmark existed, and check only the rejection status and error string. They are not a regression test for a source change. The quadrature has no reactant interval when the dividing plane is index zero, which would give a partition of zero, but the guards do not observe the dividing index. The release harness includes the cargo test:
 
 ```sh
 cargo test --release --locked \
@@ -157,7 +157,7 @@ cargo test --release --locked \
   reproduces_zero_width_reactant_partition
 ```
 
-The command-line wrapper checks the same retained seed:
+The command-line wrapper guards the same retained seed:
 
 ```sh
 python3 bench/pafi/repro_zero_width_reactant_partition.py \
