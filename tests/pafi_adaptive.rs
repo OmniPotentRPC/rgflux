@@ -9,7 +9,8 @@ use rgflux::engine::ThermostatConfig;
 use rgflux::engine::native::{NativeConfig, NativeEngine};
 use rgflux::pafi::{
     AdaptivePafiConfig, EquidistributionMap, MonitorInputs, MonitorKind, PafiConfig,
-    estimate_spectral_tail, pafi_profile, pafi_profile_adaptive, size_window_from_tau_int,
+    estimate_spectral_tail, pafi_profile, pafi_profile_adaptive, pool_pafi_replicates,
+    size_window_from_tau_int,
 };
 use rgflux::stats::StatsConfig;
 
@@ -573,4 +574,164 @@ fn tau_int_window_sizing_scales_with_autocorrelation_and_batches() {
     // g = ceil(2 * 12.5) = 25; sample >= 16 * 25 = 400; burn >= 8 * 25 = 200.
     assert_eq!(sample, 400);
     assert_eq!(burn, 200);
+}
+
+/// 2D analytic double-well with linear transverse coupling:
+/// `V(x, y) = (1 - x^2)^2 + alpha * x * y + 0.5 * k_y * y^2`.
+///
+/// On each plane `x = const`, `y ~ N(-alpha * x / k_y, k_B T / k_y)`, so the exact
+/// analytical mean constraint force is `g_exact(x) = -4 * x * (1 - x^2) - (alpha^2 / k_y) * x`
+/// and the instantaneous force carries Gaussian thermal variance `alpha^2 * k_B T / k_y`.
+struct CoupledDoubleWell2D {
+    alpha: f64,
+    k_y: f64,
+}
+
+impl CoupledDoubleWell2D {
+    fn exact_mean_gradient(&self, x: f64) -> f64 {
+        -4.0 * x * (1.0 - x * x) - (self.alpha * self.alpha / self.k_y) * x
+    }
+}
+
+impl rgsaddle::PointSurface for CoupledDoubleWell2D {
+    fn eval(&self, r: ArrayView1<'_, f64>) -> Result<(f64, Array1<f64>), rgsaddle::SaddleError> {
+        let x = r[0];
+        let y = r[1];
+        let u = 1.0 - x * x;
+        let energy = u * u + self.alpha * x * y + 0.5 * self.k_y * y * y;
+        let gx = -4.0 * x * u + self.alpha * y;
+        let gy = self.alpha * x + self.k_y * y;
+        Ok((energy, Array1::from_vec(vec![gx, gy])))
+    }
+}
+
+/// Exact 1D potential of mean force obtained by analytically integrating out `y`
+/// in [`CoupledDoubleWell2D`]: `F(x) = (1 - x^2)^2 + 0.5 * (alpha^2 / k_y) * (1 - x^2)`.
+struct ExactCoupledPmf1D {
+    quad_coeff: f64,
+}
+
+impl rgsaddle::PointSurface for ExactCoupledPmf1D {
+    fn eval(&self, r: ArrayView1<'_, f64>) -> Result<(f64, Array1<f64>), rgsaddle::SaddleError> {
+        let x = r[0];
+        let u = 1.0 - x * x;
+        Ok((
+            u * u + 0.5 * self.quad_coeff * u,
+            Array1::from_vec(vec![-4.0 * x * u - self.quad_coeff * x]),
+        ))
+    }
+}
+
+#[test]
+fn pooled_rate_eliminates_jensen_bias_on_analytic_double_well() {
+    let surface = CoupledDoubleWell2D {
+        alpha: 1.1,
+        k_y: 1.0,
+    };
+    let kbt = 0.12_f64;
+    let planes = 15usize;
+    let n_replicates = 80usize;
+
+    let mut path_2d = Array2::zeros((17, 2));
+    for i in 0..17 {
+        path_2d[[i, 0]] = -1.0 + 2.0 * (i as f64) / 16.0;
+    }
+
+    let mut replicates = Vec::with_capacity(n_replicates);
+    for rep in 0..n_replicates {
+        let mut engine = NativeEngine::new(
+            CoupledDoubleWell2D {
+                alpha: surface.alpha,
+                k_y: surface.k_y,
+            },
+            NativeConfig::default()
+                .with_masses(Array1::from_vec(vec![1.0, 1.0]))
+                .with_thermostat(
+                    ThermostatConfig::default()
+                        .with_gamma(1.5)
+                        .with_temperature(kbt),
+                )
+                .with_seed(10_000 + (rep as u64) * 7_919),
+        )
+        .expect("coupled 2d engine");
+        let cfg = PafiConfig::default()
+            .with_planes(planes)
+            .with_burn_in_steps(100)
+            .with_sample_steps(12)
+            .with_time_step(0.08)
+            .with_zero_temperature_tol(0.25)
+            .with_stats(StatsConfig::default().with_min_batches(3))
+            .with_seed(50_000 + (rep as u64) * 104_729);
+        let prof = pafi_profile(&mut engine, path_2d.view(), &cfg).expect("replicate profile");
+        replicates.push(prof);
+    }
+
+    // Build the exact infinite-sample reference profile on the same 15-plane knot grid.
+    let path_1d_pmf = path_1d(-1.0, 1.0, 17);
+    let mut exact_engine = NativeEngine::new(
+        ExactCoupledPmf1D {
+            quad_coeff: (surface.alpha * surface.alpha) / surface.k_y,
+        },
+        NativeConfig::default()
+            .with_masses(Array1::from_vec(vec![1.0]))
+            .with_thermostat(ThermostatConfig::default().with_temperature(kbt)),
+    )
+    .expect("exact 1d pmf engine");
+    let exact_profile = pafi_profile(
+        &mut exact_engine,
+        path_1d_pmf.view(),
+        &PafiConfig::default()
+            .with_planes(planes)
+            .with_burn_in_steps(2)
+            .with_sample_steps(8)
+            .with_zero_temperature_tol(0.25)
+            .with_stats(StatsConfig::default().with_min_batches(2)),
+    )
+    .expect("exact profile");
+    for (g_ref, &s) in exact_profile
+        .gradients()
+        .iter()
+        .zip(&exact_profile.arc_lengths)
+    {
+        assert_abs_diff_eq!(
+            *g_ref,
+            surface.exact_mean_gradient(s - 1.0),
+            epsilon = 1.0e-12
+        );
+    }
+    let exact_rate = exact_profile.normalized_rate;
+
+    // 1. Per-replicate arithmetic mean of k^(r) is inflated by positive Jensen bias
+    //    E[exp(-F* / kT)] > exp(-E[F*] / kT) and MUST fail a 2.5-SE consistency check.
+    let n_f64 = n_replicates as f64;
+    let arith_mean_rate: f64 = replicates.iter().map(|p| p.normalized_rate).sum::<f64>() / n_f64;
+    let arith_var: f64 = replicates
+        .iter()
+        .map(|p| {
+            let d = p.normalized_rate - arith_mean_rate;
+            d * d
+        })
+        .sum::<f64>()
+        / (n_f64 - 1.0);
+    let arith_se = (arith_var / n_f64).sqrt();
+    let arith_z = (arith_mean_rate - exact_rate) / arith_se;
+
+    // 2. Pooled estimator integrates the replicate-averaged plane forces before exponentiating
+    //    and MUST pass within 2 SE of the exact rate.
+    let pooled = pool_pafi_replicates(&replicates, kbt, false).expect("pooled profile");
+    let pooled_z = (pooled.normalized_rate - exact_rate).abs() / pooled.normalized_rate_error;
+
+    eprintln!(
+        "Analytic 2D double-well Jensen check: exact_k={exact_rate:.6e}, arith_mean_k={arith_mean_rate:.6e} +- {arith_se:.6e} (z=+{arith_z:.2}), pooled_k={:.6e} +- {:.6e} (|z|={pooled_z:.2})",
+        pooled.normalized_rate, pooled.normalized_rate_error
+    );
+
+    assert!(
+        arith_mean_rate > exact_rate && arith_z > 3.0,
+        "per-replicate arithmetic mean must exhibit significant positive Jensen bias (z > 3), got z = {arith_z:.3}"
+    );
+    assert!(
+        pooled_z <= 2.0,
+        "pooled rate must agree with exact analytical rate within 2 SE, got |z| = {pooled_z:.3}"
+    );
 }

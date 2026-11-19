@@ -1290,12 +1290,12 @@ impl<'a> MonitorInputs<'a> {
 /// Monotone arc-length reparametrization `s -> sigma(s)` in `[0, 1]` that
 /// equidistributes a regularized positive monitor function.
 ///
-/// Following the equal-measure defensive-mixture principle (de Boor 1973;
-/// Goodson, Goswami, Rabitz, and Warren 2000), the monitor floor is set equal
-/// to the path-average monitor `w_bar = (1 / L) \int_0^L w(s) ds`. Half of the
-/// total coordinate measure `sigma` comes from uniform arc length `ds / L` and
-/// half from the normalized monitor `w(s) ds / (w_bar L)` (reducing to pure
-/// uniform arc length when `w_bar == 0`).
+/// Following the equal-measure defensive-mixture principle (de Boor 1973),
+/// the monitor floor is set equal to the path-average monitor
+/// `w_bar = (1 / L) \int_0^L w(s) ds`. Half of the total coordinate measure
+/// `sigma` comes from uniform arc length `ds / L` and half from the normalized
+/// monitor `w(s) ds / (w_bar L)` (reducing to pure uniform arc length when
+/// `w_bar == 0`).
 #[derive(Clone, Debug, PartialEq)]
 pub struct EquidistributionMap {
     knots: Vec<f64>,
@@ -2535,6 +2535,173 @@ pub fn pafi_profile_adaptive_dyn(
     config: &AdaptivePafiConfig,
 ) -> Result<AdaptiveFreeEnergyProfile, FluxError> {
     pafi_profile_adaptive(engine, path_images, config)
+}
+
+/// Pool `replicates` (`>= 2`) [`FreeEnergyProfile`] estimates at thermal energy
+/// `kbt` by averaging per-plane mean constraint forces across replicates before
+/// integrating `F(s)` and evaluating `exp(-F(s*) / k_B T) / Z_R`.
+///
+/// Averaging per-replicate rates `k^(r) \propto exp(-F*^(r) / k_B T)` introduces
+/// positive Jensen bias `E[exp(-F* / k_B T)] > exp(-E[F*] / k_B T)` when
+/// per-replicate barrier noise `sd(F*)` is not negligible compared to `k_B T`.
+/// Pooling the per-plane mean forces `g_k^(r)` across replicates first produces
+/// a consistent estimator of `F(s)` and `k_TST`, with between-replicate standard
+/// errors `SE(\bar{g}_k) = sqrt(\sum_r (g_k^(r) - \bar{g}_k)^2 / (n (n - 1)))`
+/// propagated to `barrier_error` and `normalized_rate_error` by the delta method.
+///
+/// When all replicates share the same `arc_lengths` knots (within floating-point
+/// tolerance), per-plane gradients are averaged directly at each knot. When
+/// adaptive replicates have distinct knot vectors, each replicate's gradient is
+/// evaluated on the modal reference knot grid via piecewise cubic Hermite
+/// interpolation before pooling. Setting `spectral` to `true` integrates the
+/// pooled profile with [`integrate_spectral_profile`]; `false` uses the
+/// trapezoid integrator of [`pafi_profile`].
+///
+/// # Errors
+///
+/// Returns [`FluxError::InvalidConfig`] when `replicates.len() < 2`, `kbt <= 0`
+/// or non-finite, any replicate has fewer than 2 knots, non-increasing knots,
+/// or mismatched path endpoints. Returns [`FluxError::Shape`] when a replicate's
+/// `gradients` length does not match its `arc_lengths` length, and
+/// [`FluxError::NonFinite`] when any knot or gradient is non-finite.
+pub fn pool_pafi_replicates(
+    replicates: &[FreeEnergyProfile],
+    kbt: f64,
+    spectral: bool,
+) -> Result<FreeEnergyProfile, FluxError> {
+    let n_rep = replicates.len();
+    if n_rep < 2 {
+        return Err(FluxError::InvalidConfig(
+            "pool_pafi_replicates requires at least 2 replicates",
+        ));
+    }
+    if !kbt.is_finite() || kbt <= 0.0 {
+        return Err(FluxError::InvalidConfig(
+            "PAFI requires positive thermal energy",
+        ));
+    }
+
+    let first_arcs = &replicates[0].arc_lengths;
+    if first_arcs.len() < 2 {
+        return Err(FluxError::InvalidConfig(
+            "pool_pafi_replicates requires at least 2 planes per replicate",
+        ));
+    }
+    let s0_ref = first_arcs[0];
+    let s_end_ref = first_arcs[first_arcs.len() - 1];
+    let span_ref = s_end_ref - s0_ref;
+    if !span_ref.is_finite() || span_ref <= 0.0 {
+        return Err(FluxError::InvalidConfig(
+            "pool_pafi_replicates requires positive total arc length",
+        ));
+    }
+    let knot_tol = 64.0 * f64::EPSILON * (1.0 + s0_ref.abs() + s_end_ref.abs());
+
+    for rep in replicates {
+        let m = rep.arc_lengths.len();
+        if m < 2 {
+            return Err(FluxError::InvalidConfig(
+                "pool_pafi_replicates requires at least 2 planes per replicate",
+            ));
+        }
+        if rep.gradients.len() != m {
+            return Err(FluxError::Shape {
+                expected: m,
+                got: rep.gradients.len(),
+                context: "pool_pafi_replicates replicate gradients versus arc_lengths",
+            });
+        }
+        for i in 0..m {
+            if !rep.arc_lengths[i].is_finite() {
+                return Err(FluxError::NonFinite("pool_pafi_replicates arc_lengths"));
+            }
+            if i > 0 && rep.arc_lengths[i] <= rep.arc_lengths[i - 1] {
+                return Err(FluxError::InvalidConfig(
+                    "pool_pafi_replicates arc_lengths must strictly increase",
+                ));
+            }
+            if !rep.gradients[i].is_finite() {
+                return Err(FluxError::NonFinite("pool_pafi_replicates gradients"));
+            }
+        }
+        if (rep.arc_lengths[0] - s0_ref).abs() > knot_tol
+            || (rep.arc_lengths[m - 1] - s_end_ref).abs() > knot_tol
+        {
+            return Err(FluxError::InvalidConfig(
+                "pool_pafi_replicates replicates must share path endpoints",
+            ));
+        }
+    }
+
+    let knots_match = |a: &[f64], b: &[f64]| -> bool {
+        a.len() == b.len()
+            && a.iter()
+                .zip(b.iter())
+                .all(|(&sa, &sb)| (sa - sb).abs() <= knot_tol)
+    };
+
+    // Select the modal knot vector across replicates (breaking ties by larger knot count).
+    let mut best_idx = 0usize;
+    let mut best_count = 0usize;
+    let mut best_len = 0usize;
+    for (i, cand) in replicates.iter().enumerate() {
+        let count = replicates
+            .iter()
+            .filter(|other| knots_match(&cand.arc_lengths, &other.arc_lengths))
+            .count();
+        let len = cand.arc_lengths.len();
+        if count > best_count || (count == best_count && len > best_len) {
+            best_idx = i;
+            best_count = count;
+            best_len = len;
+        }
+    }
+    let ref_arcs = &replicates[best_idx].arc_lengths;
+    let m = ref_arcs.len();
+
+    let mut replicate_grads_on_ref: Vec<Vec<f64>> = Vec::with_capacity(n_rep);
+    for rep in replicates {
+        if knots_match(&rep.arc_lengths, ref_arcs) {
+            replicate_grads_on_ref.push(rep.gradients.clone());
+        } else {
+            let d_basis = hermite_slope_basis(&rep.arc_lengths);
+            let slopes: Vec<f64> = (0..rep.arc_lengths.len())
+                .map(|i| {
+                    (0..rep.arc_lengths.len())
+                        .map(|j| d_basis[i][j] * rep.gradients[j])
+                        .sum()
+                })
+                .collect();
+            let interp: Vec<f64> = ref_arcs
+                .iter()
+                .map(|&s| eval_hermite_1d(&rep.arc_lengths, &rep.gradients, &slopes, s))
+                .collect();
+            replicate_grads_on_ref.push(interp);
+        }
+    }
+
+    let n_f64 = n_rep as f64;
+    let mut mean_gradients = vec![0.0_f64; m];
+    let mut se_gradients = vec![0.0_f64; m];
+    for k in 0..m {
+        let mean = replicate_grads_on_ref.iter().map(|g| g[k]).sum::<f64>() / n_f64;
+        let var_sum: f64 = replicate_grads_on_ref
+            .iter()
+            .map(|g| {
+                let diff = g[k] - mean;
+                diff * diff
+            })
+            .sum();
+        let se = (var_sum / (n_f64 * (n_f64 - 1.0))).sqrt();
+        mean_gradients[k] = mean;
+        se_gradients[k] = se;
+    }
+
+    if spectral {
+        integrate_spectral_profile(ref_arcs, &mean_gradients, &se_gradients, kbt)
+    } else {
+        integrate_profile(ref_arcs, &mean_gradients, &se_gradients, kbt)
+    }
 }
 
 #[cfg(test)]
