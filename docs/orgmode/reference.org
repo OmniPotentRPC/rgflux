@@ -7,8 +7,8 @@
 |---+---+---|
 | =engine= | =DynamicsEngine= trait, =ForceSurface=, =EindirSurface=, =HyperplaneConstraint=, =ThermostatConfig=, =SurfaceVelocityPolicy=, =StepReport=, =native= BAOAB/RATTLE backend, optional direct =lammpc= backend, =rgpot= static PES wrapper, and =rgpot-session= MD session skeleton (=openmm=, =nblib=, =lammps=) | Implemented (=native=, =lammpc=, =rgpot=) and =rgpot-session= skeleton |
 | =stats= | Batch means, effective sample size =n_eff=, and stationarity diagnostics | Implemented; spline-propagated profile covariance helpers are not yet implemented |
-| =kappa::bennett_chandler= | Engine-free reactive-flux estimator and =DynamicsEngine= trajectory shooter | Implemented |
-| =kappa= | Kramers analytical barrier-recrossing factor; surface-shooting quench classifiers and first-crossing estimators | =kramers_transmission_coefficient= and =KappaConfig= implemented; the quench and first-crossing drivers are not yet implemented |
+| =kappa::bennett_chandler= | Engine-free reactive-flux estimator and =DynamicsEngine= trajectory shooter | Implemented (including =KappaConfig::commit_checkpoints= early-commitment stopping) |
+| =kappa= | Kramers analytical barrier-recrossing factor; surface-shooting quench classifiers and first-crossing estimators | =kramers_transmission_coefficient= and =KappaConfig::commit_checkpoints= implemented; the quench and first-crossing drivers are not yet implemented |
 | =hyperplane= | Constrained hyperplane sampling (=sample_hyperplane=) and zero-variance control variates | Mean constraint force and configuration retention implemented; the in-plane virial, torque, and control variates are not yet implemented |
 | =pafi= | Projected Average Force Integration along reaction paths (=PafiConfig=, =FreeEnergyProfile=, =pafi_profile=, =pafi_profile_dyn=) | Implemented: mass-metric spline planes with not-a-knot ends, zero-temperature trapezoid path-force check, burn-in and batch-means sampling per plane, adaptive rounds to a target error, cubic Hermite free-energy profile, global interpolant maximum, projected-frequency reactant partition, barrier, and normalized rate with propagated errors; the engine is restored on return |
 | =ohtst= | OH-TST with a fixed hyperplane normal (=optimize_hyperplane=) | Implemented for a fixed normal with =rgsaddle::flux_mass=; normal optimization is not yet implemented |
@@ -127,9 +127,9 @@ Constructors and methods: =HyperplaneConstraint::new(normal, offset)=, =from_dir
 
 | Field | Type | Default | Constraint / Meaning |
 |---+---+---+---|
-| =commit_checkpoints= | =usize= | =4= | Consecutive basin-commitment checkpoints required to stop a half-trajectory |
-| =quench_force_tol= | =f64= | =0.001= | Steepest-descent force tolerance when assigning end states by quenching |
-| =quench_max_steps= | =usize= | =2_000= | Maximum quench steps per trajectory endpoint |
+| =commit_checkpoints= | =usize= | =4= (=DEFAULT_COMMIT_CHECKPOINTS=) | Consecutive basin-commitment checkpoints on a committed side (\(s < 0\) or \(s > 0\)) required to stop a half-trajectory and copy that side into later checkpoints (\(\le \text{steps}\); =0= runs every half to =steps=) |
+| =quench_force_tol= | =f64= | =0.001= | Steepest-descent force tolerance when assigning end states by quenching (not yet implemented) |
+| =quench_max_steps= | =usize= | =2_000= | Maximum quench steps per trajectory endpoint (not yet implemented) |
 
 ** =kappa::bennett_chandler::BennettChandlerConfig= and =ShootingConfig=
 
@@ -143,6 +143,7 @@ Constructors and methods: =HyperplaneConstraint::new(normal, offset)=, =from_dir
 | =ShootingConfig= | =antithetic= | =bool= | =true= | Shoot antithetic \((+\mathbf{v}, -\mathbf{v})\) pairs from each configuration |
 | =ShootingConfig= | =seed= | =u64= | =1= | Deterministic base PRNG seed |
 | =ShootingConfig= | =estimator= | =BennettChandlerConfig= | =BennettChandlerConfig::default()= | Plateau estimator configuration |
+| =ShootingConfig= | =kappa= | =KappaConfig= | =KappaConfig::default()= | Basin-commitment configuration (=commit_checkpoints <= steps=; also settable via =ShootingConfig::with_commit_checkpoints=) |
 
 ** =hyperplane::HyperplaneConfig=
 
@@ -251,7 +252,9 @@ The value stored by =PafiConfig::default()= is the 9-plane value shown in the ta
 | =stats::BatchEstimate= | =mean=, =standard_error=, =variance=, =batch_count=, =batch_size=, =n_samples=, =n_eff=, =tau_int= | Output of =stats::batch_means(samples, config)= |
 | =stats::StationarityReport= | =is_stationary=, =z_score=, =max_z_score=, =drift_slope=, =first_mean=, =second_mean= | Output of =stats::check_stationarity(samples, config)= |
 | =stats::effective_sample_size= | =(samples) -> Result<f64, FluxError>= | Geyer initial-monotone-sequence effective sample size \(n_{\mathrm{eff}}\) |
+| =kappa::DEFAULT_COMMIT_CHECKPOINTS= | =4= | Default consecutive basin-commitment checkpoints in =KappaConfig= |
 | =kappa::kramers_transmission_coefficient= | =(gamma, barrier_frequency) -> Result<f64, FluxError>= | Kramers spatial-diffusion factor \(\kappa_{\mathrm{K}} = \sqrt{1 + \alpha^2} - \alpha\) |
+| =kappa::bennett_chandler::Side::committed_from_signed_distance= | =(signed_distance) -> Option<Side>= | Classifies \(s < 0\) as =Some(Side::Reactant)=, \(s > 0\) as =Some(Side::Product)=, and \(s = 0\) on the dividing plane as =None= |
 | =kappa::bennett_chandler::BennettChandlerEstimate= | =kappa_t=, =plateau=, =standard_error=, =n_eff=, =plateau_window=, =stationarity=, =positive_flux_count= | Output of =estimate_bennett_chandler= and =shoot_bennett_chandler= |
 | =hyperplane::HyperplaneSample= | =plane=, =mean_force=, =standard_error=, =configurations= | Output of =hyperplane::sample_hyperplane(engine, plane, config)= |
 | =ohtst::OhtstEstimate= | =plane=, =rate=, =standard_error= | Output of =ohtst::optimize_hyperplane(engine, seed_plane, config)= |
