@@ -370,6 +370,15 @@ pub struct FreeEnergyProfile {
     pub normalized_log_rate: f64,
     /// Propagated standard error of [`Self::normalized_rate`].
     pub normalized_rate_error: f64,
+    gradients: Vec<f64>,
+}
+
+impl FreeEnergyProfile {
+    /// Sampled mean free-energy gradients `dF/ds` at each hyperplane in [`Self::arc_lengths`].
+    #[must_use]
+    pub fn gradients(&self) -> &[f64] {
+        &self.gradients
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -903,6 +912,7 @@ fn integrate_profile(
         normalized_rate,
         normalized_log_rate,
         normalized_rate_error,
+        gradients: gradients.to_vec(),
     })
 }
 
@@ -1831,6 +1841,7 @@ fn integrate_spectral_profile(
         normalized_rate,
         normalized_log_rate,
         normalized_rate_error,
+        gradients: gradients.to_vec(),
     })
 }
 
@@ -2440,7 +2451,9 @@ pub fn pafi_profile_adaptive<E: DynamicsEngine + ?Sized>(
 
                     // If the interval brackets a downward zero-crossing of the force (a barrier peak),
                     // bisect the spline root and clamp inside the middle half of the sigma interval.
-                    let s_candidate = if gradients[k] > 0.0 && gradients[k + 1] < 0.0 {
+                    let s_candidate = if gradients[k] > 2.0 * errors[k]
+                        && gradients[k + 1] < -2.0 * errors[k + 1]
+                    {
                         let mut left = sa;
                         let mut right = sb;
                         for _ in 0..40 {
