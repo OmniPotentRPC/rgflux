@@ -1,0 +1,1 @@
+Record the PAFI zero-temperature-tolerance scaling once in the next release notes without altering the released 0.1.0 changelog.

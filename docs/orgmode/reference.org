@@ -206,7 +206,7 @@ Here \(I_T\) is the trapezoid integral of \(dV/ds\) over the plane anchors and \
 | =normalized_rate= | =f64= | \(k = (\omega_0 / 2\pi) \exp(-\Delta F / k_{\mathrm{B}}T)\) in inverse engine time |
 | =normalized_log_rate= | =f64= | \(\ln k = \ln \omega_0 - \ln(2\pi) - \Delta F / k_{\mathrm{B}}T\), finite when the exponential in =normalized_rate= underflows |
 | =normalized_rate_error= | =f64= | Delta-method standard error \(k\,\sigma_{\Delta F} / k_{\mathrm{B}}T\). \(Z_R\) is a property of the reactant Hessian, so its sampling sensitivity is zero |
-| =quadrature_residual= | =f64= | Largest absolute gap between the Hermite integral of \(dV/ds\) and the endpoint energy change. The acceptance check remains the trapezoid comparison in =PafiConfig::zero_temperature_tol= |
+| =quadrature_residual= | =f64= | Maximum, over all planes, of the absolute gap between the Hermite free-energy change and the anchor energy change measured from plane 0. The acceptance check remains the trapezoid comparison in =PafiConfig::zero_temperature_tol= |
 
 ** =network::NetworkConfig= and =RateTableConfig=
 
