@@ -1,17 +1,38 @@
 #![cfg(feature = "rgpot")]
+//! PAFI parity and analytic checks across native and `rgpot` engines.
+//!
+//! The parity checks are deterministic. The analytic barrier check is
+//! statistical and uses the budget derived in `tests/pafi_support/mod.rs`.
+//! Reproducible with
+//! `cargo test --features rgpot --test pafi_engine_trait_rgpot -- --nocapture`;
+//! set `PAFI_SEED_OFFSET` to draw an independent suite.
+
+mod pafi_support;
 
 use std::os::raw::c_void;
 
 use ndarray::{Array1, Array2, ArrayView1};
+use pafi_support::{assert_below, assert_coverage, block_stats, se_cap, seed};
 use rgflux::engine::native::{NativeConfig, NativeEngine};
 use rgflux::engine::rgpot::{RgpotConfig, RgpotSurface};
 use rgflux::engine::{DynamicsEngine, ThermostatConfig};
-use rgflux::pafi::{PafiConfig, pafi_profile, pafi_profile_dyn};
+use rgflux::pafi::{FreeEnergyProfile, PafiConfig, pafi_profile, pafi_profile_dyn};
 use rgflux::stats::StatsConfig;
 use rgpot_core::potential::PotentialImpl;
 use rgpot_core::status::rgpot_status_t;
 use rgpot_core::tensor::rgpot_tensor_cpu_f64_2d;
 use rgpot_core::types::{rgpot_force_input_t, rgpot_force_out_t};
+
+const PLANES: usize = 21;
+const TEMPERATURE: f64 = 0.02;
+const TIME_STEP: f64 = 0.05;
+const BURN_IN: usize = 200;
+const SAMPLES: usize = 16_000;
+const MASSES: [f64; 3] = [1.0, 4.0, 2.0];
+
+// Reported barrier SE cap: `se_cap(mean, cv)` with the mean and coefficient of
+// variation of the SE measured over 4096 seeds of this configuration.
+const BARRIER_SE_CAP: f64 = se_cap(9.62e-5, 0.051);
 
 struct ThreeDWell;
 
@@ -85,65 +106,38 @@ fn path_x_only(start: f64, end: f64, planes: usize) -> Array2<f64> {
     path
 }
 
-fn pafi_config(seed: u64) -> PafiConfig {
+fn pafi_config(seed_base: u64, burn_in: usize, samples: usize, stats: StatsConfig) -> PafiConfig {
     PafiConfig::default()
-        .with_planes(61)
-        .with_burn_in_steps(20_000)
-        .with_sample_steps(64)
-        .with_time_step(0.001)
-        .with_stats(StatsConfig::default().with_min_batches(2))
-        .with_seed(seed)
+        .with_planes(PLANES)
+        .with_burn_in_steps(burn_in)
+        .with_sample_steps(samples)
+        .with_time_step(TIME_STEP)
+        .with_stats(stats)
+        .with_seed(seed(seed_base))
 }
 
-#[test]
-fn pafi_trait_object_matches_generic_on_native_engine() {
-    let path = path_x_only(-1.0, 0.0, 61);
-    let config = pafi_config(77);
+fn native_engine(seed_base: u64) -> NativeEngine<ThreeDWell> {
+    let seed_value = seed(seed_base);
     let mut engine = NativeEngine::new(
         ThreeDWell,
         NativeConfig::default()
-            .with_masses(Array1::from_vec(vec![1.0, 4.0, 2.0]))
-            .with_seed(77)
+            .with_masses(Array1::from_vec(MASSES.to_vec()))
+            .with_seed(seed_value)
             .with_thermostat(
                 ThermostatConfig::default()
                     .with_gamma(1.3)
-                    .with_temperature(0.02)
+                    .with_temperature(TEMPERATURE)
                     .with_boltzmann(1.0),
             ),
     )
     .expect("native engine");
-    engine.shoot_velocities(77).expect("initial velocities");
-    let generic = pafi_profile(&mut engine, path.view(), &config).expect("generic profile");
-    let dyn_engine: &mut dyn DynamicsEngine = &mut engine;
-    let dynamic = pafi_profile_dyn(dyn_engine, path.view(), &config).expect("dynamic profile");
-    assert_eq!(generic.dividing_index, dynamic.dividing_index);
-    assert!((generic.barrier - dynamic.barrier).abs() <= 1.0e-12);
-    assert!((generic.normalized_rate - dynamic.normalized_rate).abs() <= 1.0e-12);
+    engine
+        .shoot_velocities(seed_value)
+        .expect("initial velocities");
+    engine
 }
 
-#[test]
-fn pafi_runs_unchanged_on_native_and_rgpot_backed_engines() {
-    let path = path_x_only(-1.0, 0.0, 61);
-    let config = pafi_config(9);
-
-    let mut native = NativeEngine::new(
-        ThreeDWell,
-        NativeConfig::default()
-            .with_masses(Array1::from_vec(vec![1.0, 4.0, 2.0]))
-            .with_seed(9)
-            .with_thermostat(
-                ThermostatConfig::default()
-                    .with_gamma(1.3)
-                    .with_temperature(0.02)
-                    .with_boltzmann(1.0),
-            ),
-    )
-    .expect("native engine");
-    native
-        .shoot_velocities(9)
-        .expect("native initial velocities");
-    let native_profile = pafi_profile_dyn(&mut native, path.view(), &config).expect("native pafi");
-
+fn rgpot_engine(seed_base: u64) -> NativeEngine<RgpotSurface> {
     let state = Box::new(CallbackState {
         forces: vec![0.0; 3],
     });
@@ -152,55 +146,102 @@ fn pafi_runs_unchanged_on_native_and_rgpot_backed_engines() {
         Box::into_raw(state).cast::<c_void>(),
         Some(drop_state),
     );
-    let rgpot_surface = RgpotSurface::new(
+    let surface = RgpotSurface::new(
         potential,
         RgpotConfig::default().with_atomic_numbers(vec![29]),
     )
     .expect("rgpot surface");
-    let mut rgpot_engine = NativeEngine::new(
-        rgpot_surface,
+    let seed_value = seed(seed_base);
+    let mut engine = NativeEngine::new(
+        surface,
         NativeConfig::default()
-            .with_masses(Array1::from_vec(vec![1.0, 4.0, 2.0]))
-            .with_seed(9)
+            .with_masses(Array1::from_vec(MASSES.to_vec()))
+            .with_seed(seed_value)
             .with_thermostat(
                 ThermostatConfig::default()
                     .with_gamma(1.3)
-                    .with_temperature(0.02)
+                    .with_temperature(TEMPERATURE)
                     .with_boltzmann(1.0),
             ),
     )
     .expect("rgpot-backed native engine");
-    rgpot_engine
-        .shoot_velocities(9)
+    engine
+        .shoot_velocities(seed_value)
         .expect("rgpot initial velocities");
-    let rgpot_profile =
-        pafi_profile_dyn(&mut rgpot_engine, path.view(), &config).expect("rgpot pafi");
+    engine
+}
 
-    let barrier_sigma =
-        (native_profile.barrier_error.powi(2) + rgpot_profile.barrier_error.powi(2)).sqrt();
-    let z_barrier = (native_profile.barrier - rgpot_profile.barrier).abs() / barrier_sigma;
+/// Expectation of `FreeEnergyProfile::free_energy` at the last plane: the
+/// trapezoid sum of the exact mean force on the same planes.
+fn expected_barrier(planes: usize, thermal: f64) -> f64 {
+    let h = 1.0 / ((planes - 1) as f64);
+    let mean_force = |x: f64| -4.0 * x * (1.0 - x * x) + 0.25 * thermal / (1.5 + 0.5 * x);
+    let mut sum = 0.0_f64;
+    for i in 1..planes {
+        let x0 = -1.0 + ((i - 1) as f64) * h;
+        let x1 = -1.0 + (i as f64) * h;
+        sum += 0.5 * h * (mean_force(x0) + mean_force(x1));
+    }
+    sum
+}
+
+/// Identical arithmetic and seeds give identical profiles up to rounding.
+fn assert_close(lhs: f64, rhs: f64) {
+    let tolerance = 1024.0 * f64::EPSILON * lhs.abs().max(rhs.abs()).max(1.0);
     assert!(
-        z_barrier <= 2.0,
-        "barrier native {:.8} ± {:.8}, rgpot {:.8} ± {:.8}, z={:.4}",
-        native_profile.barrier,
-        native_profile.barrier_error,
-        rgpot_profile.barrier,
-        rgpot_profile.barrier_error,
-        z_barrier
+        (lhs - rhs).abs() <= tolerance,
+        "parity violated: {lhs:.16e} vs {rhs:.16e}"
     );
+}
 
-    let rate_sigma = (native_profile.normalized_rate_error.powi(2)
-        + rgpot_profile.normalized_rate_error.powi(2))
-    .sqrt();
-    let z_rate =
-        (native_profile.normalized_rate - rgpot_profile.normalized_rate).abs() / rate_sigma;
-    assert!(
-        z_rate <= 2.0,
-        "rate native {:.8e} ± {:.8e}, rgpot {:.8e} ± {:.8e}, z={:.4}",
-        native_profile.normalized_rate,
-        native_profile.normalized_rate_error,
-        rgpot_profile.normalized_rate,
-        rgpot_profile.normalized_rate_error,
-        z_rate
+fn assert_profiles_match(lhs: &FreeEnergyProfile, rhs: &FreeEnergyProfile) {
+    assert_eq!(lhs.dividing_index, rhs.dividing_index);
+    assert_close(lhs.barrier, rhs.barrier);
+    assert_close(lhs.barrier_error, rhs.barrier_error);
+    assert_close(lhs.reactant_partition, rhs.reactant_partition);
+    assert_close(lhs.normalized_rate, rhs.normalized_rate);
+    assert_close(lhs.normalized_rate_error, rhs.normalized_rate_error);
+    for (a, b) in lhs.arc_lengths.iter().zip(&rhs.arc_lengths) {
+        assert_close(*a, *b);
+    }
+    for (a, b) in lhs.free_energy.iter().zip(&rhs.free_energy) {
+        assert_close(*a, *b);
+    }
+    for (a, b) in lhs.standard_error.iter().zip(&rhs.standard_error) {
+        assert_close(*a, *b);
+    }
+}
+
+#[test]
+fn pafi_trait_object_matches_generic_on_native_engine() {
+    let path = path_x_only(-1.0, 0.0, PLANES);
+    let config = pafi_config(77, 100, 300, StatsConfig::default().with_min_batches(2));
+    let mut engine = native_engine(77);
+    let generic = pafi_profile(&mut engine, path.view(), &config).expect("generic profile");
+    let dyn_engine: &mut dyn DynamicsEngine = &mut engine;
+    let dynamic = pafi_profile_dyn(dyn_engine, path.view(), &config).expect("dynamic profile");
+    assert_profiles_match(&generic, &dynamic);
+}
+
+#[test]
+fn pafi_runs_unchanged_on_native_and_rgpot_backed_engines() {
+    let path = path_x_only(-1.0, 0.0, PLANES);
+    let config = pafi_config(9, BURN_IN, SAMPLES, block_stats(SAMPLES));
+
+    let mut native = native_engine(9);
+    let native_profile = pafi_profile_dyn(&mut native, path.view(), &config).expect("native pafi");
+    let mut rgpot = rgpot_engine(9);
+    let rgpot_profile = pafi_profile_dyn(&mut rgpot, path.view(), &config).expect("rgpot pafi");
+    assert_profiles_match(&native_profile, &rgpot_profile);
+
+    let last = PLANES - 1;
+    let barrier = rgpot_profile.free_energy[last];
+    let se = rgpot_profile.standard_error[last];
+    assert_below("rgpot barrier SE", se, BARRIER_SE_CAP);
+    assert_coverage(
+        "rgpot barrier",
+        barrier,
+        se,
+        expected_barrier(PLANES, TEMPERATURE),
     );
 }
