@@ -9,7 +9,13 @@ struct InconsistentLinearGradient;
 
 impl rgsaddle::PointSurface for InconsistentLinearGradient {
     fn eval(&self, x: ArrayView1<'_, f64>) -> Result<(f64, Array1<f64>), rgsaddle::SaddleError> {
-        Ok((x[0], Array1::from_vec(vec![0.98])))
+        // The energy rises by 1. A constant gradient of 0.98 leaves a
+        // discrepancy of 0.02. Adding that same shortfall as a slope
+        // recenters the gradient so the trapezoid integral is still 0.98,
+        // and it keeps the reactant curvature positive once the check passes.
+        let shortfall = 0.02;
+        let gradient = (1.0 - shortfall) + shortfall * (x[0] - 0.5);
+        Ok((x[0], Array1::from_vec(vec![gradient])))
     }
 }
 
