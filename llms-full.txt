@@ -13,7 +13,7 @@ potential energy surfaces and molecular dynamics engines.
 
      <div class="vi-hero">
        <div class="vi-hero-brand">
-         <img class`"vi-hero-mark" src`"_static/mark.svg" width`"64" height`"64" alt="" />
+         <img class="vi-hero-mark" src="_static/mark.svg" width="64" height="64" alt="" />
          <div>
            <p class="vi-hero-name">rgflux</p>
            <p class="vi-hero-tag">Rare-event kinetics over rgsaddle and rgmin</p>
@@ -26,8 +26,8 @@ potential energy surfaces and molecular dynamics engines.
          <span>BAOAB + RATTLE reference</span>
        </div>
        <div class="vi-hero-actions">
-         <a class`"vi-btn vi-btn-gold" href`"getting-started.html">Get started</a>
-         <a class`"vi-btn vi-btn-ghost" href`"reference.html">Reference</a>
+         <a class="vi-btn vi-btn-gold" href="getting-started.html">Get started</a>
+         <a class="vi-btn vi-btn-ghost" href="reference.html">Reference</a>
        </div>
      </div>
 
@@ -50,21 +50,21 @@ potential energy surfaces and molecular dynamics engines.
 
 ## Install
 
-Add `rgflux` (alongside `ndarray` and `rgsaddle` when defining custom potential surfaces) from the repository while initial kinetics modules migrate from `rgsaddle` cite:`goswamiEfficientExploration2025`:
+Add `rgflux` from crates.io (alongside `ndarray` and `rgsaddle` when defining custom potential surfaces) cite:`goswamiEfficientExploration2025`:
 
 ```console
-$ cargo add --git https://github.com/OmniPotentRPC/rgflux --branch develop
+$ cargo add rgflux
 ```
 
-Enable optional `rgpot` and `lammpc` features as needed:
+Enable optional `rgpot`, `rgpot-session`, and `lammpc` features as needed:
 
 ```console
-$ cargo check --features rgpot
-$ cargo check --features rgpot-session
-$ cargo check --features lammpc
+$ cargo add rgflux --features rgpot
+$ cargo add rgflux --features rgpot-session
+$ cargo add rgflux --features lammpc
 ```
 
-The `lammpc` feature links `liblammpc` from `LAMMPC_LIB_DIR`, from `pkg-config` when available, or from `LAMMPC_DIR` (install prefix with `lib/` or `lib64/` and `include/`) when `pkg-config` is not configured.
+The `lammpc` feature links `liblammpc` from `LAMMPC_LIB_DIR`, from `pkg-config` when available, or from `LAMMPC_DIR` (install prefix with `lib/` or `lib64/` and `include/`) when `pkg-config` is not configured. Its build also needs the `capnp` command-line tool on `PATH`; the `rgpot` and `rgpot-session` features do not.
 
 ## 1. Engine-free Bennett-Chandler recrossing
 
@@ -146,7 +146,7 @@ fn main() -> Result<(), rgflux::FluxError> {
 
 ## Sample holonomic hyperplane mean forces and configurations
 
-Construct a `HyperplaneConstraint` from a direction vector and scalar offset \(c\), configure `HyperplaneConfig`, and call `hyperplane::sample_hyperplane` over any `DynamicsEngine` cite:`sprikFreeEnergyConstrained1998,leimkuhlerGeodesicIntegration2016`. `sample_hyperplane` installs the constraint, runs BAOAB + RATTLE equilibration and production steps, estimates \(\langle \lambda \rangle ` dA/dc\) with a block-averaged standard error, retains dividing-surface configurations every `retention_stride= steps, and restores the engine's initial positions, velocities, periodic cell, thermostat, and constraint before returning:
+Construct a `HyperplaneConstraint` from a direction vector and scalar offset \(c\), configure `HyperplaneConfig`, and call `hyperplane::sample_hyperplane` over any `DynamicsEngine` cite:`sprikFreeEnergyConstrained1998,leimkuhlerGeodesicIntegration2016`. `sample_hyperplane` installs the constraint, runs BAOAB + RATTLE equilibration and production steps, estimates \(\langle \lambda \rangle = dA/dc\) with a block-averaged standard error, retains dividing-surface configurations every `retention_stride` steps, and restores the engine's initial positions, velocities, periodic cell, thermostat, and constraint before returning:
 
 ```rust
 use ndarray::{Array1, ArrayView1};
@@ -313,7 +313,7 @@ fn main() -> Result<(), rgflux::FluxError> {
 
 ## Place a fixed-normal OH-TST dividing hyperplane and evaluate the rate
 
-Pass a seed `HyperplaneConstraint` and `OhtstConfig` to `ohtst::optimize_hyperplane` cite:`goswamiAdaptivePruning2026,johannessonOptimizationHyperplanar2001,bligaardOptimizationHyperplanar2005,vineyardFrequencyFactors1957`. Even when the seed offset is displaced from the saddle (here \(c_0 ` -0.4\) while the barrier sits at \(c^\ddagger ` 0\)), `optimize_hyperplane` relaxes into the reactant minimum, brackets and bisects the stationary dividing hyperplane along the seed normal, samples the curvature probe plane, and returns \(k_{\mathrm{OHTST}} ` \frac{1}{2\pi}\sqrt{\kappa / \mu}\exp(-\Delta V / k_{\mathrm{B}}T)\) (with \(\mu\) from `rgsaddle::flux_mass=) alongside its delta-method standard error:
+Pass a seed `HyperplaneConstraint` and `OhtstConfig` to `ohtst::optimize_hyperplane` cite:`goswamiAdaptivePruning2026,johannessonOptimizationHyperplanar2001,bligaardOptimizationHyperplanar2005,vineyardFrequencyFactors1957`. Even when the seed offset is displaced from the saddle (here \(c_0 = -0.4\) while the barrier sits at \(c^\ddagger = 0\)), `optimize_hyperplane` relaxes into the reactant minimum, brackets and bisects the stationary dividing hyperplane along the seed normal, samples the curvature probe plane, and returns \(k_{\mathrm{OHTST}} = \frac{1}{2\pi}\sqrt{\kappa / \mu}\exp(-\Delta V / k_{\mathrm{B}}T)\) (with \(\mu\) from `rgsaddle::flux_mass`) alongside its delta-method standard error:
 
 ```rust
 use ndarray::{Array1, ArrayView1};
@@ -425,7 +425,7 @@ fn main() -> Result<(), rgflux::FluxError> {
 
 Projected Average Force Integration (PAFI) cite:`goswamiEnhancedClimbingImage2026,goswamiReproducibleOrchestration2026,swinburneUnsupervisedCalculation2018` takes the images of a converged minimum-energy path, for example from a nudged elastic band, and returns the free-energy profile \(F(s)\), the barrier \(\Delta F\), the dividing plane, and the normalized rate \(k\) through `pafi::pafi_profile`. The method is described under /Projected Average Force Integration/ in the explanation page and the defaults in the reference page.
 
-The example runs a straight path from the minimum \(x ` -1\) to the saddle \(x ` 0\) of the widening double well \(V(x, y) ` (1 - x^2)^2 + \tfrac{1}{2}(1.5 + 0.5x)y^2\) at \(k_{\mathrm{B}}T ` 0.2\), where the exact barrier is \(\Delta F = 1 + \tfrac{1}{2}k_{\mathrm{B}}T \ln 1.5\). It uses 33 planes. The trapezoid rule over the planes biases \(\Delta F\) low by about \(0.0156\,(8/(\text{planes} - 1))^2\) here, which is 0.025 with the default 9 planes (eight standard errors of this short run) and 0.0016 with 33, so the run checks the result within five standard errors.
+The example runs a straight path from the minimum \(x = -1\) to the saddle \(x = 0\) of the widening double well \(V(x, y) = (1 - x^2)^2 + \tfrac{1}{2}(1.5 + 0.5x)y^2\) at \(k_{\mathrm{B}}T = 0.2\), where the exact barrier is \(\Delta F = 1 + \tfrac{1}{2}k_{\mathrm{B}}T \ln 1.5\). It uses 33 planes. The trapezoid rule over the planes biases \(\Delta F\) low by about \(0.0156\,(8/(\text{planes} - 1))^2\) here, which is 0.025 with the default 9 planes (eight standard errors of this short run) and 0.0016 with 33, so the run checks the result within five standard errors.
 
 ```rust
 use ndarray::{Array1, Array2, ArrayView1};
@@ -500,7 +500,7 @@ Points to adapt for a real path:
 
 ## Shoot Bennett-Chandler reactive-flux trajectories and compare with Kramers
 
-Combine `hyperplane::sample_hyperplane` (to harvest thermalized configurations on the dividing surface \(x ` 0\)) with `kappa::bennett_chandler::shoot_bennett_chandler` and compare the resulting plateau transmission coefficient against `kappa::kramers_transmission_coefficient= cite:`goswamiEfficientExploration2025,bennettMolecularDynamics1977,chandlerStatisticalMechanics1978,kramersBrownianMotion1940`:
+Combine `hyperplane::sample_hyperplane` (to harvest thermalized configurations on the dividing surface \(x = 0\)) with `kappa::bennett_chandler::shoot_bennett_chandler` and compare the resulting plateau transmission coefficient against `kappa::kramers_transmission_coefficient` cite:`goswamiEfficientExploration2025,bennettMolecularDynamics1977,chandlerStatisticalMechanics1978,kramersBrownianMotion1940`:
 
 ```rust
 use ndarray::{Array1, ArrayView1};
@@ -604,14 +604,14 @@ fn main() -> Result<(), rgflux::FluxError> {
 | Module | Scope | Status |
 |---+---+---|
 | `engine` | `DynamicsEngine` trait, `ForceSurface`, `EindirSurface`, `HyperplaneConstraint`, `ThermostatConfig`, `SurfaceVelocityPolicy`, `StepReport`, `native` BAOAB/RATTLE backend, optional direct `lammpc` backend, `rgpot` static PES wrapper, and `rgpot-session` MD session skeleton (`openmm`, `nblib`, `lammps`) | Implemented (`native`, `lammpc`, `rgpot`) and `rgpot-session` skeleton |
-| `stats` | Batch means, effective sample size `n_eff`, and stationarity diagnostics | Implemented; spline propagation moves from `rgsaddle` |
+| `stats` | Batch means, effective sample size `n_eff`, and stationarity diagnostics | Implemented; spline-propagated profile covariance helpers are not yet implemented |
 | `kappa::bennett_chandler` | Engine-free reactive-flux estimator and `DynamicsEngine` trajectory shooter | Implemented |
-| `kappa` | Kramers analytical barrier-recrossing factor; surface-shooting quench classifiers and first-crossing estimators | `kramers_transmission_coefficient` and `KappaConfig` implemented; quench and first-crossing drivers move from `rgsaddle` |
-| `hyperplane` | Constrained hyperplane sampling (`sample_hyperplane`) and zero-variance control variates | Mean constraint force and configuration retention implemented; torque and control variates move from `rgsaddle` |
+| `kappa` | Kramers analytical barrier-recrossing factor; surface-shooting quench classifiers and first-crossing estimators | `kramers_transmission_coefficient` and `KappaConfig` implemented; the quench and first-crossing drivers are not yet implemented |
+| `hyperplane` | Constrained hyperplane sampling (`sample_hyperplane`) and zero-variance control variates | Mean constraint force and configuration retention implemented; the in-plane virial, torque, and control variates are not yet implemented |
 | `pafi` | Projected Average Force Integration along reaction paths (`PafiConfig`, `FreeEnergyProfile`, `pafi_profile`, `pafi_profile_dyn`) | Implemented: mass-metric spline planes with not-a-knot ends, zero-temperature path-force check, burn-in and batch-means sampling per plane, adaptive rounds to a target error, log-stable reactant partition quadrature, trapezoid free-energy profile, barrier, and normalized rate with propagated errors; the engine is restored on return |
-| `ohtst` | OH-TST with a fixed hyperplane normal (`optimize_hyperplane`) | Implemented for a fixed normal with `rgsaddle::flux_mass`; normal optimization moves from `rgsaddle` |
+| `ohtst` | OH-TST with a fixed hyperplane normal (`optimize_hyperplane`) | Implemented for a fixed normal with `rgsaddle::flux_mass`; normal optimization is not yet implemented |
 | `ffs` | Forward Flux Sampling across ordered interfaces (`forward_flux_rate`) | Implemented: flux collection, staged trials, and uncertainty propagation. Exit restores positions, velocities, the periodic cell, the thermostat, and the constraint; the stochastic stream is left where the run put it |
-| `network` | Symmetry-resolved rate networks and kinetic Monte Carlo rate tables (`NetworkConfig`, `RateTableConfig`, `RateEdge`, `build_rate_table`) | `RateEdge::new` and configuration types implemented; `build_rate_table` moves from `rgsaddle` |
+| `network` | Symmetry-resolved rate networks and kinetic Monte Carlo rate tables (`NetworkConfig`, `RateTableConfig`, `RateEdge`, `build_rate_table`) | `RateEdge::new` and configuration types implemented; `build_rate_table` is not yet implemented |
 | `error` | Shared `FluxError` enum and `From<rgsaddle::SaddleError>` conversion | Implemented |
 | `config` | Internal `with_setters!` macro used by public configuration types | Private module, so it has no importable public path; every generated public setter is listed in the inventory below |
 
@@ -658,7 +658,7 @@ Method: `ThermostatConfig::thermal_energy(&self) -> Result<f64, FluxError>` vali
 | Field | Type | Default | Constraint / Meaning |
 |---+---+---+---|
 | `normal` | `Array1<f64>` | `vec![1.0]` | Unit Euclidean normal \(\mathbf{n}\) (\(\lvert\lVert\mathbf{n}\rVert_2 - 1\rvert \le \text{UNIT\_NORMAL\_TOL}\)) oriented from reactant to product |
-| `offset` | `f64` | `0.0` | Scalar offset \(c\) in \(\sigma(\mathbf{x}) ` \mathbf{n} \cdot \mathbf{x} - c ` 0\) |
+| `offset` | `f64` | `0.0` | Scalar offset \(c\) in \(\sigma(\mathbf{x}) = \mathbf{n} \cdot \mathbf{x} - c = 0\) |
 
 Constructors and methods: `HyperplaneConstraint::new(normal, offset)`, `from_direction(direction, offset)`, `validate(&self)`, and `signed_distance(&self, positions)`.
 
@@ -666,7 +666,7 @@ Constructors and methods: `HyperplaneConstraint::new(normal, offset)`, `from_dir
 
 | Field | Type | Default | Constraint / Meaning |
 |---+---+---+---|
-| `masses` | `Array1<f64>` | `vec![1.0]` | Strictly positive per-coordinate masses \(m_i > 0\) (sets `dof ` masses.len()=) |
+| `masses` | `Array1<f64>` | `vec![1.0]` | Strictly positive per-coordinate masses \(m_i > 0\) (sets `dof = masses.len()`) |
 | `thermostat` | `ThermostatConfig` | `ThermostatConfig::default()` | Langevin thermostat parameters |
 | `constraint` | `Option<HyperplaneConstraint>` | `None` | Optional active holonomic hyperplane constraint |
 | `projection` | `ConstraintProjection` | `ConstraintProjection::Rattle` | Holonomic constraint projection scheme (`Rattle` or `Shake`) |
@@ -677,7 +677,7 @@ Constructors and methods: `HyperplaneConstraint::new(normal, offset)`, `from_dir
 
 | Field | Type | Default | Constraint / Meaning |
 |---+---+---+---|
-| `atomic_numbers` | `Vec<i32>` | `vec![18, 18]` | Non-empty atomic numbers in live atom order (\(N_{\mathrm{atoms}}\) entries; `dof ` 3 * N_atoms=) |
+| `atomic_numbers` | `Vec<i32>` | `vec![18, 18]` | Non-empty atomic numbers in live atom order (\(N_{\mathrm{atoms}}\) entries; `dof = 3 * N_atoms`) |
 | `type_to_atomic_number` | `Vec<i32>` | `vec![18]` | Non-empty LAMMPS type map (\(\text{type } i+1 \mapsto Z\)) |
 | `masses_by_type` | `Vec<f64>` | `vec![39.948]` | Strictly positive per-type masses in amu (length must match `type_to_atomic_number`) |
 | `pair_style` | `String` | `"lj/cut 8.5"` | Non-empty LAMMPS `pair_style` specification |
@@ -694,8 +694,8 @@ Constructors and methods: `HyperplaneConstraint::new(normal, offset)`, `from_dir
 
 | Field | Type | Default | Constraint / Meaning |
 |---+---+---+---|
-| `atomic_numbers` | `Vec<i32>` | `vec![1]` | Non-empty atomic numbers \(Z_i\) (\(N_{\mathrm{atoms}}\) entries; `dof ` 3 * N_atoms=) |
-| `default_cell` | `[f64; 9]` | `diag(100.0, 100.0, 100.0)` | Fallback row-major \(3 \times 3\) periodic box (Å) when `cell` is `None` (`DEFAULT_RGPOT_BOX_EDGE ` 100.0=) |
+| `atomic_numbers` | `Vec<i32>` | `vec![1]` | Non-empty atomic numbers \(Z_i\) (\(N_{\mathrm{atoms}}\) entries; `dof = 3 * N_atoms`) |
+| `default_cell` | `[f64; 9]` | `diag(100.0, 100.0, 100.0)` | Fallback row-major \(3 \times 3\) periodic box (Å) when `cell` is `None` (`DEFAULT_RGPOT_BOX_EDGE = 100.0`) |
 
 ### `engine::rgpot_session::RgpotSessionConfig` (feature `rgpot-session`)
 
@@ -935,7 +935,7 @@ field set is listed above.
 | `Surface` | `String` | Potential energy surface callback failure or converted `rgsaddle::SaddleError` |
 | `BackendUnavailable` | `&'static str` | Unlinked external MD session call on `RgpotSessionEngine` or unsupported unconstrained Langevin / constrained NVE mode in `LammpcEngine` |
 | `Lammpc` | `String` | Error returned by the `lammpc_session_*` C ABI or Cap'n Proto message decoding |
-| `Unimplemented` | `&'static str` | Estimator whose implementation is still migrating from `rgsaddle` (`build_rate_table`) |
+| `Unimplemented` | `&'static str` | Entry point that is not yet implemented (`build_rate_table`) |
 
 ## Binding surface
 
@@ -1621,12 +1621,12 @@ Saddle-point searches in `rgsaddle` and local or Riemannian minimizers in `rgmin
 ### How each engine backend is wired
 
 1. *In-process BAOAB + RATTLE/SHAKE reference backend (`engine::native::NativeEngine`)*:
-   Integrates unconstrained or hyperplane-constrained Langevin dynamics (\(\gamma > 0\)) and velocity-Verlet NVE dynamics (\(\gamma ` 0\)) using the symmetric BAOAB splitting (half velocity kick *B*, half coordinate drift *A*, exact Ornstein-Uhlenbeck thermostat update *O*, half drift *A*, closing half kick *B*) cite:`leimkuhlerRationalConstruction2012,leimkuhlerGeodesicIntegration2016`. Static potential energy surfaces enter through `engine::ForceSurface`, which converts gradients \(+\nabla V(\mathbf{x})\) into physical forces \(\mathbf{F}(\mathbf{x}) ` -\nabla V(\mathbf{x})\):
+   Integrates unconstrained or hyperplane-constrained Langevin dynamics (\(\gamma > 0\)) and velocity-Verlet NVE dynamics (\(\gamma = 0\)) using the symmetric BAOAB splitting (half velocity kick *B*, half coordinate drift *A*, exact Ornstein-Uhlenbeck thermostat update *O*, half drift *A*, closing half kick *B*) cite:`leimkuhlerRationalConstruction2012,leimkuhlerGeodesicIntegration2016`. Static potential energy surfaces enter through `engine::ForceSurface`, which converts gradients \(+\nabla V(\mathbf{x})\) into physical forces \(\mathbf{F}(\mathbf{x}) = -\nabla V(\mathbf{x})\):
    - Any `rgsaddle::PointSurface` via a blanket `ForceSurface` implementation (forwarding optional periodic cells through `eval_in_cell`).
    - Any `eindir_core::DifferentiableObjective<f64>` (as used by `rgmin::Oracle`) wrapped in `engine::EindirSurface`.
    - Any `rgpot_core::potential::PotentialImpl` callback wrapped in `engine::rgpot::RgpotSurface` (feature `rgpot`), exchanging zero-copy CPU DLPack tensors (`rgpot_force_input_t` / `rgpot_force_out_t`).
 2. *Direct LAMMPS backend (`engine::lammpc::LammpcEngine`, feature `lammpc`)*:
-   Links `liblammpc` and drives its persistent `lammpc_session_*` C ABI with `PotentialConfig` and `ForceInput` Cap'n Proto messages from `rgpot-core`. It supports constrained Langevin (\(\gamma > 0\)) or zero-friction projected velocity-Verlet (\(\gamma ` 0\)) dynamics on a `HyperplaneConstraint` via `lammpc_session_md_initialize`, `lammpc_session_md_step`, and `lammpc_session_md_state` (evaluating endpoint potential energy and physical forces via `lammpc_session_calculate_result` to form the mass-weighted multiplier \(\lambda\)), as well as unconstrained velocity-Verlet NVE (\(\gamma ` 0\), no constraint) via `lammpc_session_nve_*` with periodic image-flag coordinate unwrapping. Unconstrained Langevin (\(\gamma > 0\), no constraint) returns `FluxError::BackendUnavailable`, and C ABI failures return `FluxError::Lammpc`.
+   Links `liblammpc` and drives its persistent `lammpc_session_*` C ABI with `PotentialConfig` and `ForceInput` Cap'n Proto messages from `rgpot-core`. It supports constrained Langevin (\(\gamma > 0\)) or zero-friction projected velocity-Verlet (\(\gamma = 0\)) dynamics on a `HyperplaneConstraint` via `lammpc_session_md_initialize`, `lammpc_session_md_step`, and `lammpc_session_md_state` (evaluating endpoint potential energy and physical forces via `lammpc_session_calculate_result` to form the mass-weighted multiplier \(\lambda\)), as well as unconstrained velocity-Verlet NVE (\(\gamma = 0\), no constraint) via `lammpc_session_nve_*` with periodic image-flag coordinate unwrapping. Unconstrained Langevin (\(\gamma > 0\), no constraint) returns `FluxError::BackendUnavailable`, and C ABI failures return `FluxError::Lammpc`.
 3. *External MD session adapter (`engine::rgpot_session::RgpotSessionEngine`, feature `rgpot-session`)*:
    Targets `rgpot`'s engine-neutral session C ABI (`rgpot_md_session_*` and `rgpot_core::md_session`) across OpenMM (`SessionEngineKind::OpenMm`, `"openmm"`), GROMACS `nblib` (`SessionEngineKind::NbLib`, `"nblib"`), and LAMMPS (`SessionEngineKind::Lammps`, `"lammps"`). State accessors, Maxwell-Boltzmann velocity draws, and mass-weighted Householder dividing-surface reflections operate in-process; on `develop`, `step`, `energy_and_forces`, and `reseed` return `FluxError::BackendUnavailable` until `rgpot_core::md_session` merges onto `rgpot` `develop`.
 
@@ -1634,12 +1634,12 @@ Saddle-point searches in `rgsaddle` and local or Riemannian minimizers in `rgmin
 
 `rgflux` is unit-consistent with the active `DynamicsEngine`:
 
-- Let \([L]\), \([M]\), \([E]\), and \([T]\) denote the engine's length, mass, energy, and time units (satisfying \([E] ` [M][L]^2[T]^{-2}\) in consistent dynamical units, or reduced units where \(k_{\mathrm{B}} ` 1\)).
-- Hyperplane normals \(\mathbf{n}\) are dimensionless Euclidean unit vectors (\(\|\mathbf{n}\|_2 ` 1\) within `UNIT_NORMAL_TOL` \(` 64\,\varepsilon_{\mathrm{mach}}\) cite:`highamAccuracyStability2002`); plane offsets \(c\) have unit \([L]\).
-- Potential energies \(V(\mathbf{x})\), kinetic energies \(K(\mathbf{v}) ` \tfrac{1}{2}\sum_i m_i v_i^2\), and thermal energy \(k_{\mathrm{B}} T\) (`ThermostatConfig::thermal_energy=) have unit \([E]\).
-- Physical forces \(\mathbf{F}(\mathbf{x}) ` -\nabla V(\mathbf{x})\) and the holonomic constraint Lagrange multiplier \(\lambda ` dA/dc\) have unit \([E][L]^{-1}\).
+- Let \([L]\), \([M]\), \([E]\), and \([T]\) denote the engine's length, mass, energy, and time units (satisfying \([E] = [M][L]^2[T]^{-2}\) in consistent dynamical units, or reduced units where \(k_{\mathrm{B}} = 1\)).
+- Hyperplane normals \(\mathbf{n}\) are dimensionless Euclidean unit vectors (\(\|\mathbf{n}\|_2 = 1\) within `UNIT_NORMAL_TOL` \(= 64\,\varepsilon_{\mathrm{mach}}\) cite:`highamAccuracyStability2002`); plane offsets \(c\) have unit \([L]\).
+- Potential energies \(V(\mathbf{x})\), kinetic energies \(K(\mathbf{v}) = \tfrac{1}{2}\sum_i m_i v_i^2\), and thermal energy \(k_{\mathrm{B}} T\) (`ThermostatConfig::thermal_energy`) have unit \([E]\).
+- Physical forces \(\mathbf{F}(\mathbf{x}) = -\nabla V(\mathbf{x})\) and the holonomic constraint Lagrange multiplier \(\lambda = dA/dc\) have unit \([E][L]^{-1}\).
 - First-order transition rates (\(k_{\mathrm{OHTST}}\) in `ohtst`, \(k_{AB}\) in `ffs`, and `normalized_rate` in `pafi`) have inverse time units \([T]^{-1}\).
-- Across the `lammpc`, `rgpot`, and `rgpot-session` boundaries, quantities follow LAMMPS `metal` / `rgpot` units: coordinates and box vectors in Å, velocities in Å/ps, forces in eV/Å, energies and \(k_{\mathrm{B}}T\) in eV, masses in amu (with dynamical conversion factor `MASS_VELOCITY_TO_EV` \(` 1.0364269656262175 \times 10^{-4}\;\mathrm{eV / (amu \cdot \AA^2 / ps^2)}\) in `LammpcEngine=), time steps in ps, and Langevin friction \(\gamma\) in \(\mathrm{ps}^{-1}\).
+- Across the `lammpc`, `rgpot`, and `rgpot-session` boundaries, quantities follow LAMMPS `metal` / `rgpot` units: coordinates and box vectors in Å, velocities in Å/ps, forces in eV/Å, energies and \(k_{\mathrm{B}}T\) in eV, masses in amu (with dynamical conversion factor `MASS_VELOCITY_TO_EV` \(= 1.0364269656262175 \times 10^{-4}\;\mathrm{eV / (amu \cdot \AA^2 / ps^2)}\) in `LammpcEngine`), time steps in ps, and Langevin friction \(\gamma\) in \(\mathrm{ps}^{-1}\).
 
 ## Holonomic hyperplane sampling and fixed-normal OH-TST
 
@@ -1648,7 +1648,7 @@ Saddle-point searches in `rgsaddle` and local or Riemannian minimizers in `rgmin
 Optimal Hyperplanar Transition State Theory (OH-TST) cite:`goswamiEfficientExploration2025,goswamiAdaptivePruning2026,goswamiEnhancedClimbingImage2026,johannessonOptimizationHyperplanar2001,bligaardOptimizationHyperplanar2005` approximates the dividing surface between reactant and product basins by a hyperplane
 
 \[
-\sigma(\mathbf{x}) ` \mathbf{n} \cdot \mathbf{x} - c ` 0, \qquad \|\mathbf{n}\|_2 = 1,
+\sigma(\mathbf{x}) = \mathbf{n} \cdot \mathbf{x} - c = 0, \qquad \|\mathbf{n}\|_2 = 1,
 \]
 
 with constrained Helmholtz free energy
@@ -1657,42 +1657,42 @@ with constrained Helmholtz free energy
 A(\mathbf{n}, c) = -k_{\mathrm{B}} T \ln \int \delta(\mathbf{n} \cdot \mathbf{x} - c)\,\exp\!\left(-\frac{V(\mathbf{x})}{k_{\mathrm{B}} T}\right) d\mathbf{x}.
 \]
 
-Under diagonal mass matrix \(\mathbf{M} ` \mathrm{diag}(m_i)\), the inverse-mass metric norm of \(\nabla \sigma ` \mathbf{n}\) is
+Under diagonal mass matrix \(\mathbf{M} = \mathrm{diag}(m_i)\), the inverse-mass metric norm of \(\nabla \sigma = \mathbf{n}\) is
 
 \[
-z ` \mathbf{n}^\top \mathbf{M}^{-1} \mathbf{n} ` \sum_{i`1}^{D} \frac{n_i^2}{m_i}, \qquad \mu ` \frac{1}{z} ` \left(\sum_{i`1}^{D} \frac{n_i^2}{m_i}\right)^{-1},
+z = \mathbf{n}^\top \mathbf{M}^{-1} \mathbf{n} = \sum_{i=1}^{D} \frac{n_i^2}{m_i}, \qquad \mu = \frac{1}{z} = \left(\sum_{i=1}^{D} \frac{n_i^2}{m_i}\right)^{-1},
 \]
 
-where \(\mu\) is the effective directional flux mass along \(\mathbf{n}\), evaluated via `rgsaddle::flux_mass`. Note that Eq. (24) of Jóhannesson and Jónsson (2001) cite:`johannessonOptimizationHyperplanar2001` writes \(\sum_i m_i n_i^2\), which coincides with \(\mu ` (\sum_i n_i^2 / m_i)^{-1}\) only when all coordinates share a common mass. Because \(z\) is independent of position on a flat hyperplane, the Blue Moon geometric Jacobian of Sprik and Ciccotti (1998) cite:`sprikFreeEnergyConstrained1998` is constant across \(\sigma(\mathbf{x}) ` 0\), and the thermodynamic mean force equals the canonical average of the holonomic Lagrange multiplier:
+where \(\mu\) is the effective directional flux mass along \(\mathbf{n}\), evaluated via `rgsaddle::flux_mass`. Note that Eq. (24) of Jóhannesson and Jónsson (2001) cite:`johannessonOptimizationHyperplanar2001` writes \(\sum_i m_i n_i^2\), which coincides with \(\mu = (\sum_i n_i^2 / m_i)^{-1}\) only when all coordinates share a common mass. Because \(z\) is independent of position on a flat hyperplane, the Blue Moon geometric Jacobian of Sprik and Ciccotti (1998) cite:`sprikFreeEnergyConstrained1998` is constant across \(\sigma(\mathbf{x}) = 0\), and the thermodynamic mean force equals the canonical average of the holonomic Lagrange multiplier:
 
 \[
-\frac{\partial A}{\partial c} ` \langle \lambda \rangle_c, \qquad \lambda(\mathbf{x}) ` -\frac{\mathbf{n}^\top \mathbf{M}^{-1} \mathbf{F}(\mathbf{x})}{\mathbf{n}^\top \mathbf{M}^{-1} \mathbf{n}} = \frac{\mathbf{n}^\top \mathbf{M}^{-1} \nabla V(\mathbf{x})}{\mathbf{n}^\top \mathbf{M}^{-1} \mathbf{n}}.
+\frac{\partial A}{\partial c} = \langle \lambda \rangle_c, \qquad \lambda(\mathbf{x}) = -\frac{\mathbf{n}^\top \mathbf{M}^{-1} \mathbf{F}(\mathbf{x})}{\mathbf{n}^\top \mathbf{M}^{-1} \mathbf{n}} = \frac{\mathbf{n}^\top \mathbf{M}^{-1} \nabla V(\mathbf{x})}{\mathbf{n}^\top \mathbf{M}^{-1} \mathbf{n}}.
 \]
 
 `hyperplane::sample_hyperplane` equilibrates the constrained system for `burn_in_steps`, records \(\lambda_t\) over `sample_steps` steps, and estimates \(\langle \lambda \rangle_c\) and its block-averaged standard error \(\sigma_\lambda\) via `stats::batch_means` cite:`flyvbjergErrorEstimates1989,flegalMcmcThirdSignificantFigure2008` while retaining dividing-surface configurations every `retention_stride` steps.
 
 `ohtst::optimize_hyperplane` holds the seed normal \(\mathbf{n}\) fixed and determines the stationary dividing hyperplane offset \(c^\ddagger\) and harmonic hyperplanar TST rate cite:`vineyardFrequencyFactors1957,johannessonOptimizationHyperplanar2001`:
 
-1. *Reactant relaxation*: Clears any active constraint and relaxes from the engine's starting coordinates by backtracking line search along \(\mathbf{F}(\mathbf{x})\) (up to \(8 \times \text{max\_outer\_steps}\) updates) until \(\max_i |F_i| \le \text{SERIES\_FLAT\_TOL}\) and the directional slope \(-\mathbf{n} \cdot \mathbf{F}\) rises through \(\mathbf{x}_{\min}\) (\(s_{\min} ` \mathbf{n} \cdot \mathbf{x}_{\min}\), \(V_{\min} ` V(\mathbf{x}_{\min})\)). Stationary maxima or flat ledges are escaped by stepping \(-\text{max\_translation}\,\mathbf{n}\).
-2. *Dividing-surface bracketing and bisection*: If the seed point \(\mathbf{x}_{\min} + (c_0 - s_{\min})\mathbf{n}\) already satisfies \(|-\mathbf{n} \cdot \mathbf{F}| \le \text{SERIES\_FLAT\_TOL}\) and \(V > V_{\min}\), \(c^\ddagger ` c_0\) is accepted directly. Otherwise, the offset marches from \(s_{\min}\) in direction \(\mathrm{sign}(c_0 - s_{\min})\) (\(+1\) when \(c_0 \ge s_{\min}\)) in increments of `max_translation` (up to `max_outer_steps`) until the directional slope changes sign, then bisects the bracket \([c_{\mathrm{lo}}, c_{\mathrm{hi}}]\) to tolerance \(\text{SERIES\_FLAT\_TOL}\,(1 + c_{\mathrm{hi}})\) to obtain \(c^\ddagger\) and static barrier \(\Delta V ` V^\ddagger - V_{\min} > 0\).
-3. *Reactant curvature probing*: Places a parallel probe plane at signed offset \(c_{\mathrm{probe}} ` s_{\min} + \mathrm{sign}(c^\ddagger - s_{\min})\,\delta\) with \(\delta ` \min(\text{max\_translation}, \tfrac{1}{2}|c^\ddagger - s_{\min}|)\), calls `sample_hyperplane` for \(\max(\text{max\_outer\_steps} \times \text{sample\_step\_factor}, \text{min\_sample\_steps})\) steps, and infers the reactant curvature along \(\mathbf{n}\):
+1. *Reactant relaxation*: Clears any active constraint and relaxes from the engine's starting coordinates by backtracking line search along \(\mathbf{F}(\mathbf{x})\) (up to \(8 \times \text{max\_outer\_steps}\) updates) until \(\max_i |F_i| \le \text{SERIES\_FLAT\_TOL}\) and the directional slope \(-\mathbf{n} \cdot \mathbf{F}\) rises through \(\mathbf{x}_{\min}\) (\(s_{\min} = \mathbf{n} \cdot \mathbf{x}_{\min}\), \(V_{\min} = V(\mathbf{x}_{\min})\)). Stationary maxima or flat ledges are escaped by stepping \(-\text{max\_translation}\,\mathbf{n}\).
+2. *Dividing-surface bracketing and bisection*: If the seed point \(\mathbf{x}_{\min} + (c_0 - s_{\min})\mathbf{n}\) already satisfies \(|-\mathbf{n} \cdot \mathbf{F}| \le \text{SERIES\_FLAT\_TOL}\) and \(V > V_{\min}\), \(c^\ddagger = c_0\) is accepted directly. Otherwise, the offset marches from \(s_{\min}\) in direction \(\mathrm{sign}(c_0 - s_{\min})\) (\(+1\) when \(c_0 \ge s_{\min}\)) in increments of `max_translation` (up to `max_outer_steps`) until the directional slope changes sign, then bisects the bracket \([c_{\mathrm{lo}}, c_{\mathrm{hi}}]\) to tolerance \(\text{SERIES\_FLAT\_TOL}\,(1 + c_{\mathrm{hi}})\) to obtain \(c^\ddagger\) and static barrier \(\Delta V = V^\ddagger - V_{\min} > 0\).
+3. *Reactant curvature probing*: Places a parallel probe plane at signed offset \(c_{\mathrm{probe}} = s_{\min} + \mathrm{sign}(c^\ddagger - s_{\min})\,\delta\) with \(\delta = \min(\text{max\_translation}, \tfrac{1}{2}|c^\ddagger - s_{\min}|)\), calls `sample_hyperplane` for \(\max(\text{max\_outer\_steps} \times \text{sample\_step\_factor}, \text{min\_sample\_steps})\) steps, and infers the reactant curvature along \(\mathbf{n}\):
 
    \[
    \kappa = \frac{\langle \lambda \rangle_{c_{\mathrm{probe}}}}{c_{\mathrm{probe}} - s_{\min}} > 0.
    \]
 
    Because \(\langle \lambda \rangle\) carries the sign of \(c_{\mathrm{probe}} - s_{\min}\), dividing by the signed separation yields \(\kappa > 0\) on either side of the reactant minimum.
-4. *Rate and delta-method uncertainty*: With flux mass \(\mu ` (\sum_i n_i^2 / m_i)^{-1}\) from `rgsaddle::flux_mass` (mapping a normal/mass length mismatch to `FluxError::Shape` and a non-finite or non-positive metric to `FluxError::InvalidConfig`) and angular frequency \(\omega ` \sqrt{\kappa / \mu}\), the fixed-normal OH-TST rate and its first-order delta-method standard error are
+4. *Rate and delta-method uncertainty*: With flux mass \(\mu = (\sum_i n_i^2 / m_i)^{-1}\) from `rgsaddle::flux_mass` (mapping a normal/mass length mismatch to `FluxError::Shape` and a non-finite or non-positive metric to `FluxError::InvalidConfig`) and angular frequency \(\omega = \sqrt{\kappa / \mu}\), the fixed-normal OH-TST rate and its first-order delta-method standard error are
 
    \[
-   k_{\mathrm{OHTST}} ` \frac{1}{2\pi}\sqrt{\frac{\kappa}{\mu}}\,\exp\!\left(-\frac{\Delta V}{k_{\mathrm{B}} T}\right), \qquad \sigma_{k_{\mathrm{OHTST}}} ` k_{\mathrm{OHTST}}\,\frac{\sigma_\lambda}{2\,\lvert\langle \lambda \rangle\rvert}.
+   k_{\mathrm{OHTST}} = \frac{1}{2\pi}\sqrt{\frac{\kappa}{\mu}}\,\exp\!\left(-\frac{\Delta V}{k_{\mathrm{B}} T}\right), \qquad \sigma_{k_{\mathrm{OHTST}}} = k_{\mathrm{OHTST}}\,\frac{\sigma_\lambda}{2\,\lvert\langle \lambda \rangle\rvert}.
    \]
 
-### Assumptions and scope on `develop`
+### Assumptions and scope
 
 - Single dominant reaction channel along the fixed unit normal \(\mathbf{n}\); positive barrier \(\Delta V > 0\) and locally harmonic reactant well (\(\kappa > 0\)) at the probe offset \(c_{\mathrm{probe}}\).
 - Positive thermal energy \(k_{\mathrm{B}} T > 0\) and strictly positive masses \(m_i > 0\).
-- On `develop`, `hyperplane::sample_hyperplane` and fixed-normal `ohtst::optimize_hyperplane` are implemented; the in-plane virial, rotational torque \(\partial A / \partial \mathbf{n}\), Assaraf-Caffarel / Stein zero-variance control variates cite:`assarafZeroVariance1999`, two-state BAR / multi-state MBAR reversible work cite:`bennettEfficientEstimation1976,shirtsStatisticallyOptimal2008`, and Riemannian trust-region normal optimization (`patience`, `min_overlap`, `use_mbar`) move from `rgsaddle`.
+- `hyperplane::sample_hyperplane` and fixed-normal `ohtst::optimize_hyperplane` are implemented; the in-plane virial, rotational torque \(\partial A / \partial \mathbf{n}\), Assaraf-Caffarel / Stein zero-variance control variates cite:`assarafZeroVariance1999`, two-state BAR / multi-state MBAR reversible work cite:`bennettEfficientEstimation1976,shirtsStatisticallyOptimal2008`, and Riemannian trust-region normal optimization (`patience`, `min_overlap`, `use_mbar`) are not yet implemented.
 
 ### Engine wiring
 
@@ -1705,27 +1705,27 @@ Both `sample_hyperplane` and `optimize_hyperplane` capture an internal `EngineSn
 Direct Forward Flux Sampling cite:`goswamiEfficientExploration2025,allenSamplingRareSwitching2005,allenSimulatingRareEvents2006,allenForwardFluxEfficiency2006,allenForwardFluxReview2009` computes the rare-event transition rate \(k_{AB}\) from reactant basin \(A\) (\(\lambda(\mathbf{x}) \le \lambda_0\)) to product state \(B\) (\(\lambda(\mathbf{x}) \ge \lambda_n\)) across strictly ordered reaction-coordinate interfaces \(\lambda_0 < \lambda_1 < \dots < \lambda_n\):
 
 \[
-k_{AB} ` \Phi_{A,0} \prod_{i`0}^{n-1} P(\lambda_{i+1} \mid \lambda_i).
+k_{AB} = \Phi_{A,0} \prod_{i=0}^{n-1} P(\lambda_{i+1} \mid \lambda_i).
 \]
 
 `ffs::forward_flux_rate` evaluates this product in two phases:
 
-1. *Initial escape flux \(\Phi_{A,0}\)*: Starting from an initial state inside basin \(A\) (\(\lambda(\mathbf{x}_0) \le \lambda_0\)), the engine is reseeded from `config.seed`, `burn_in_steps` steps are discarded, and the trajectory is stepped by \(\Delta t ` \text{time\_step}\) up to `max_flux_steps` until \(M_0 ` \text{points\_per\_interface} \ge 2\) positive-going crossings of \(\lambda_0\) are collected. The crossing detector is armed whenever \(\lambda(\mathbf{x}) \le \lambda_0\) and triggers on the first subsequent step with \(\lambda(\mathbf{x}) > \lambda_0\), storing the phase point \((\mathbf{x}, \mathbf{v})\) and the elapsed waiting time \(\Delta \tau_m > 0\) since the previous crossing (or since burn-in finished). If an excursion reaches the product level \(\lambda(\mathbf{x}) \ge \lambda_n\), the engine is immediately reset to the initial basin-\(A\) phase point \((\mathbf{x}_0, \mathbf{v}_0)\) and re-armed. From the batch-means average waiting interval \(\bar{\tau}\) and standard error \(\sigma_{\bar{\tau}}\) (`stats::batch_means`), the escape flux and its delta-method uncertainty are
+1. *Initial escape flux \(\Phi_{A,0}\)*: Starting from an initial state inside basin \(A\) (\(\lambda(\mathbf{x}_0) \le \lambda_0\)), the engine is reseeded from `config.seed`, `burn_in_steps` steps are discarded, and the trajectory is stepped by \(\Delta t = \text{time\_step}\) up to `max_flux_steps` until \(M_0 = \text{points\_per\_interface} \ge 2\) positive-going crossings of \(\lambda_0\) are collected. The crossing detector is armed whenever \(\lambda(\mathbf{x}) \le \lambda_0\) and triggers on the first subsequent step with \(\lambda(\mathbf{x}) > \lambda_0\), storing the phase point \((\mathbf{x}, \mathbf{v})\) and the elapsed waiting time \(\Delta \tau_m > 0\) since the previous crossing (or since burn-in finished). If an excursion reaches the product level \(\lambda(\mathbf{x}) \ge \lambda_n\), the engine is immediately reset to the initial basin-\(A\) phase point \((\mathbf{x}_0, \mathbf{v}_0)\) and re-armed. From the batch-means average waiting interval \(\bar{\tau}\) and standard error \(\sigma_{\bar{\tau}}\) (`stats::batch_means`), the escape flux and its delta-method uncertainty are
 
    \[
-   \Phi_{A,0} ` \frac{1}{\bar{\tau}}, \qquad \sigma_{\Phi_{A,0}} ` \frac{\sigma_{\bar{\tau}}}{\bar{\tau}^2}.
+   \Phi_{A,0} = \frac{1}{\bar{\tau}}, \qquad \sigma_{\Phi_{A,0}} = \frac{\sigma_{\bar{\tau}}}{\bar{\tau}^2}.
    \]
 
-2. *Staged conditional probabilities \(P(\lambda_{i+1} \mid \lambda_i)\)*: At each stage \(i ` 0, \dots, n - 1\) with \(M_i \ge 2\) stored phase points at \(\lambda_i\), \(K ` \text{trials\_per\_interface} \ge 1\) trial trajectories are launched by drawing a starting index \(c \in \{0, \dots, M_i - 1\}\) uniformly, restoring its \((\mathbf{x}, \mathbf{v})\), calling `engine.reseed(seed)` with a fresh deterministic seed from the `StdRng` stream, and stepping up to `max_trial_steps` until \(\lambda(\mathbf{x}) \ge \lambda_{i+1}\) (success; phase point saved for stage \(i + 1\) when \(i + 1 < n - 1\)) or \(\lambda(\mathbf{x}) \le \lambda_0\) (return to basin \(A\), failure). With \(k_c\) trials and \(s_c\) successes launched from starting point \(c\) (\(\sum_c k_c ` K\), \(\hat{p}_i ` \frac{1}{K}\sum_c s_c\)), the cluster-variance standard error captures heterogeneity across entry points on \(\lambda_i\):
+2. *Staged conditional probabilities \(P(\lambda_{i+1} \mid \lambda_i)\)*: At each stage \(i = 0, \dots, n - 1\) with \(M_i \ge 2\) stored phase points at \(\lambda_i\), \(K = \text{trials\_per\_interface} \ge 1\) trial trajectories are launched by drawing a starting index \(c \in \{0, \dots, M_i - 1\}\) uniformly, restoring its \((\mathbf{x}, \mathbf{v})\), calling `engine.reseed(seed)` with a fresh deterministic seed from the `StdRng` stream, and stepping up to `max_trial_steps` until \(\lambda(\mathbf{x}) \ge \lambda_{i+1}\) (success; phase point saved for stage \(i + 1\) when \(i + 1 < n - 1\)) or \(\lambda(\mathbf{x}) \le \lambda_0\) (return to basin \(A\), failure). With \(k_c\) trials and \(s_c\) successes launched from starting point \(c\) (\(\sum_c k_c = K\), \(\hat{p}_i = \frac{1}{K}\sum_c s_c\)), the cluster-variance standard error captures heterogeneity across entry points on \(\lambda_i\):
 
    \[
-   \sigma_{p_i} ` \frac{1}{K}\sqrt{\frac{M_i}{M_i - 1}\sum_{c`0}^{M_i - 1} (s_c - \hat{p}_i k_c)^2}.
+   \sigma_{p_i} = \frac{1}{K}\sqrt{\frac{M_i}{M_i - 1}\sum_{c=0}^{M_i - 1} (s_c - \hat{p}_i k_c)^2}.
    \]
 
 3. *Composite rate and error propagation*: Combining the initial flux and stage probabilities in quadrature yields
 
    \[
-   \sigma_{k_{AB}} ` k_{AB}\sqrt{\left(\frac{\sigma_{\Phi_{A,0}}}{\Phi_{A,0}}\right)^2 + \sum_{i`0}^{n-1} \left(\frac{\sigma_{p_i}}{\hat{p}_i}\right)^2}.
+   \sigma_{k_{AB}} = k_{AB}\sqrt{\left(\frac{\sigma_{\Phi_{A,0}}}{\Phi_{A,0}}\right)^2 + \sum_{i=0}^{n-1} \left(\frac{\sigma_{p_i}}{\hat{p}_i}\right)^2}.
    \]
 
 ### Assumptions and units
@@ -1745,27 +1745,27 @@ k_{AB} ` \Phi_{A,0} \prod_{i`0}^{n-1} P(\lambda_{i+1} \mid \lambda_i).
 
 Projected Average Force Integration (PAFI) cite:`goswamiEfficientExploration2025,goswamiEnhancedClimbingImage2026,goswamiReproducibleOrchestration2026,swinburneUnsupervisedCalculation2018` turns a converged minimum-energy path \(\mathbf{X}(s)\), for example a nudged elastic band, into a finite-temperature free-energy profile \(F(s)\) without a global collective variable. The method itself is that of Swinburne and Marinica; the paths it needs come from the band methods cited first.
 
-The path parameter \(s\) is the arc length in the mass-weighted metric, \(ds^2 ` d\mathbf{X}^\top \mathbf{M}\, d\mathbf{X}\) with \(\mathbf{M} ` \mathrm{diag}(m_i)\). At each \(s\) the plane has the unit normal \(\mathbf{n}(s) ` \mathbf{M}\mathbf{X}'(s) / \lVert \mathbf{M}\mathbf{X}'(s) \rVert\) and the equation \(\sigma(\mathbf{x}, s) ` \mathbf{n}(s) \cdot (\mathbf{x} - \mathbf{X}(s)) ` 0\), so planes are orthogonal to the path in the metric \(\mathbf{M}\). Neighbouring planes tilt at the rate \(\mathbf{n}' ` d\mathbf{n}/ds\), which adds a Jacobian term to the constrained mean force. With \(\lambda\) the Lagrange multiplier of the holonomic constraint on the plane (the same multiplier as in the hyperplane section above):
+The path parameter \(s\) is the arc length in the mass-weighted metric, \(ds^2 = d\mathbf{X}^\top \mathbf{M}\, d\mathbf{X}\) with \(\mathbf{M} = \mathrm{diag}(m_i)\). At each \(s\) the plane has the unit normal \(\mathbf{n}(s) = \mathbf{M}\mathbf{X}'(s) / \lVert \mathbf{M}\mathbf{X}'(s) \rVert\) and the equation \(\sigma(\mathbf{x}, s) = \mathbf{n}(s) \cdot (\mathbf{x} - \mathbf{X}(s)) = 0\), so planes are orthogonal to the path in the metric \(\mathbf{M}\). Neighbouring planes tilt at the rate \(\mathbf{n}' = d\mathbf{n}/ds\), which adds a Jacobian term to the constrained mean force. With \(\lambda\) the Lagrange multiplier of the holonomic constraint on the plane (the same multiplier as in the hyperplane section above):
 
 \[
-\frac{dF}{ds}(s) ` \Bigl\langle \lambda(\mathbf{x}) \bigl( \mathbf{n} \cdot \mathbf{X}' - (\mathbf{x} - \mathbf{X}) \cdot \mathbf{n}' \bigr) \Bigr\rangle_{\sigma(\mathbf{x}, s) ` 0}.
+\frac{dF}{ds}(s) = \Bigl\langle \lambda(\mathbf{x}) \bigl( \mathbf{n} \cdot \mathbf{X}' - (\mathbf{x} - \mathbf{X}) \cdot \mathbf{n}' \bigr) \Bigr\rangle_{\sigma(\mathbf{x}, s) = 0}.
 \]
 
 Two limits anchor the estimator:
 
-- *Straight path (\(\mathbf{n}' ` \mathbf{0}\))*: the Jacobian term vanishes and \(dF/ds\) is the Sprik-Ciccotti mean constraint force \(\langle \lambda \rangle\) that `hyperplane::sample_hyperplane` samples on a single plane cite:`sprikFreeEnergyConstrained1998`. On the widening double well \(V(x, y) ` (1 - x^2)^2 + \tfrac{1}{2}k(x)y^2\) with \(k(x) ` 1.5 + 0.5x\), the profile from \(x ` -1\) to \(x ` 0\) ends at \(\Delta F(T) ` \Delta E_0 + \tfrac{1}{2}k_{\mathrm{B}}T \ln(k(0)/k(-1))\). The integration tests reproduce this value within two standard errors, for unit and anisotropic masses.
-- *Zero temperature (\(T \to 0\))*: the sampled points collapse onto the anchor and the integral of \(dF/ds\) becomes the static line integral \(\int \nabla V(\mathbf{X}) \cdot \mathbf{X}'\,ds ` \Delta E_0\). `pafi_profile= evaluates that trapezoid sum on the plane anchors before it samples anything and compares it with the end-to-end energy change, see the tolerance note below.
+- *Straight path (\(\mathbf{n}' = \mathbf{0}\))*: the Jacobian term vanishes and \(dF/ds\) is the Sprik-Ciccotti mean constraint force \(\langle \lambda \rangle\) that `hyperplane::sample_hyperplane` samples on a single plane cite:`sprikFreeEnergyConstrained1998`. On the widening double well \(V(x, y) = (1 - x^2)^2 + \tfrac{1}{2}k(x)y^2\) with \(k(x) = 1.5 + 0.5x\), the profile from \(x = -1\) to \(x = 0\) ends at \(\Delta F(T) = \Delta E_0 + \tfrac{1}{2}k_{\mathrm{B}}T \ln(k(0)/k(-1))\). The integration tests reproduce this value within two standard errors, for unit and anisotropic masses.
+- *Zero temperature (\(T \to 0\))*: the sampled points collapse onto the anchor and the integral of \(dF/ds\) becomes the static line integral \(\int \nabla V(\mathbf{X}) \cdot \mathbf{X}'\,ds = \Delta E_0\). `pafi_profile` evaluates that trapezoid sum on the plane anchors before it samples anything and compares it with the end-to-end energy change, see the tolerance note below.
 
 The profile is the trapezoid integral of the plane means \(g_k\),
 
 \[
-F(s_k) - F(s_0) ` \sum_{j`1}^{k} \tfrac{1}{2}\,(g_{j-1} + g_j)\,(s_j - s_{j-1}),
+F(s_k) - F(s_0) = \sum_{j=1}^{k} \tfrac{1}{2}\,(g_{j-1} + g_j)\,(s_j - s_{j-1}),
 \]
 
 the barrier is \(\Delta F = \max_k F(s_k)\) at the dividing plane \(s^*\), and the normalized rate is
 
 \[
-k ` \sqrt{\frac{k_{\mathrm{B}}T}{2\pi}}\;\frac{\exp(-F(s^*)/k_{\mathrm{B}}T)}{Z_R}, \qquad Z_R ` 2\int_0^{s^*} \exp\!\left(-\frac{F(s)}{k_{\mathrm{B}}T}\right) ds,
+k = \sqrt{\frac{k_{\mathrm{B}}T}{2\pi}}\;\frac{\exp(-F(s^*)/k_{\mathrm{B}}T)}{Z_R}, \qquad Z_R = 2\int_0^{s^*} \exp\!\left(-\frac{F(s)}{k_{\mathrm{B}}T}\right) ds,
 \]
 
 with \(Z_R\) also by the trapezoid rule.
@@ -1774,7 +1774,7 @@ with \(Z_R\) also by the trapezoid rule.
 
 1. *Spline*: The images become a cubic spline in the chord-length parameter, the sum of \(\sqrt{\sum_j m_j \Delta x_j^2}\) between neighbours. The end second derivatives follow from linear extrapolation of the second derivative, the not-a-knot condition, so the first and last planes keep the curvature of the path. Natural end conditions (zero second derivative) would set \(\mathbf{n}'\) to zero on the end planes and bias the end increments of the profile. Three images give one parabola, two images a straight line. Coincident images are rejected.
 2. *Planes*: `planes` planes sit at equal values of the parameter from the first to the last image. Each has an anchor \(\mathbf{X}(s_k)\), the normal \(\mathbf{n}\), and \(\mathbf{n}'\).
-3. *Zero-temperature check*: let \(I_T\) be the trapezoid sum of \(dV/ds\) over the anchors and \(\Delta E_0 ` V(\mathbf{X}(s_{K-1})) - V(\mathbf{X}(s_0))\). The code compares \(\lvert I_T - \Delta E_0\rvert / \max(E_{\mathrm{unit}}, \lvert\Delta E_0\rvert)\) with the effective `zero_temperature_tol`, where \(E_{\mathrm{unit}}\) is one energy unit of the engine. A mismatch returns `FluxError::InvalidConfig= without sampling.
+3. *Zero-temperature check*: let \(I_T\) be the trapezoid sum of \(dV/ds\) over the anchors and \(\Delta E_0 = V(\mathbf{X}(s_{K-1})) - V(\mathbf{X}(s_0))\). The code compares \(\lvert I_T - \Delta E_0\rvert / \max(E_{\mathrm{unit}}, \lvert\Delta E_0\rvert)\) with the effective `zero_temperature_tol`, where \(E_{\mathrm{unit}}\) is one energy unit of the engine. A mismatch returns `FluxError::InvalidConfig` without sampling.
 4. *Sampling*: On each plane the engine gets the constraint, is placed at the anchor, receives Maxwell-Boltzmann velocities from the per-plane seed, runs `burn_in_steps` steps, and then `sample_steps` steps that each record \(\lambda\,(\mathbf{n} \cdot \mathbf{X}' - (\mathbf{x} - \mathbf{X}) \cdot \mathbf{n}')\). `stats::batch_means` turns each series into a mean and a standard error.
 5. *Integration*: The profile, barrier, dividing plane, \(Z_R\) and rate follow from the plane means. The plane errors are independent, so they propagate through the trapezoid weights; the rate error comes from the delta method over the profile and \(Z_R\).
 6. *Adaptive rounds*: With `target_error` set, steps 4 and 5 repeat for up to `max_rounds` rounds, each adding `sample_steps` samples to every plane, until `barrier_error` is at most the target. The result uses all samples. Missing the target is not an error, so compare `barrier_error` with it.
@@ -1797,7 +1797,7 @@ The value stored by `PafiConfig::default()` is \(2 (\pi^2 / 12) / 8^2 \approx 0.
 
 ## Reactive-flux recrossing (`kappa` and `kappa::bennett_chandler`)
 
-Transition state theory overcounts the true transition rate whenever trajectories recross the dividing surface before thermalizing. In the Bennett-Chandler reactive-flux formalism cite:`goswamiEfficientExploration2025,goswamiAdaptivePruning2026,bennettMolecularDynamics1977,chandlerStatisticalMechanics1978,andersonStatisticalTheories1973,vanErpNovelPath2003`, trajectories launched from the dividing surface \(\sigma(\mathbf{x}) ` \mathbf{n} \cdot \mathbf{x} - c ` 0\) with initial normal velocity \(v_n(0) = \mathbf{n} \cdot \mathbf{v}(0)\) and post-launch side indicator \(\theta(s(t)) \in \{0, 1\}\) define the time-dependent transmission coefficient
+Transition state theory overcounts the true transition rate whenever trajectories recross the dividing surface before thermalizing. In the Bennett-Chandler reactive-flux formalism cite:`goswamiEfficientExploration2025,goswamiAdaptivePruning2026,bennettMolecularDynamics1977,chandlerStatisticalMechanics1978,andersonStatisticalTheories1973,vanErpNovelPath2003`, trajectories launched from the dividing surface \(\sigma(\mathbf{x}) = \mathbf{n} \cdot \mathbf{x} - c = 0\) with initial normal velocity \(v_n(0) = \mathbf{n} \cdot \mathbf{v}(0)\) and post-launch side indicator \(\theta(s(t)) \in \{0, 1\}\) define the time-dependent transmission coefficient
 
 \[
 \kappa(t) = \frac{\langle v_n(0)\,\theta(s(t)) \rangle}{\langle v_n(0)\,\theta(v_n(0)) \rangle}.
@@ -1808,20 +1808,20 @@ Transition state theory overcounts the true transition rate whenever trajectorie
 - `kappa::kramers_transmission_coefficient` evaluates Kramers' analytical spatial-diffusion barrier-recrossing factor across a parabolic barrier of unstable frequency \(\omega_b > 0\) under Langevin friction \(\gamma \ge 0\) cite:`kramersBrownianMotion1940`:
 
   \[
-  \kappa_{\mathrm{K}} ` \sqrt{1 + \alpha^2} - \alpha ` \frac{1}{\sqrt{1 + \alpha^2} + \alpha}, \qquad \alpha = \frac{\gamma}{2 \omega_b}.
+  \kappa_{\mathrm{K}} = \sqrt{1 + \alpha^2} - \alpha = \frac{1}{\sqrt{1 + \alpha^2} + \alpha}, \qquad \alpha = \frac{\gamma}{2 \omega_b}.
   \]
 
 ## Correlated time-series diagnostics (`stats`)
 
 Correlated MD and Markov-chain observables underestimate uncertainty when treated as independent draws cite:`goswamiBayesianHierarchical2025,flyvbjergErrorEstimates1989`:
 
-- `stats::effective_sample_size` estimates the integrated autocorrelation time \(\tau_{\mathrm{int}}\) and statistical inefficiency \(g ` 2\tau_{\mathrm{int}} \ge 1\) via Geyer's initial positive and monotone sequence estimator cite:`geyerPracticalMcmc1992`, returning \(n_{\mathrm{eff}} ` n / g \in [1, n]\).
+- `stats::effective_sample_size` estimates the integrated autocorrelation time \(\tau_{\mathrm{int}}\) and statistical inefficiency \(g = 2\tau_{\mathrm{int}} \ge 1\) via Geyer's initial positive and monotone sequence estimator cite:`geyerPracticalMcmc1992`, returning \(n_{\mathrm{eff}} = n / g \in [1, n]\).
 - `stats::batch_means` partitions a series of length \(n\) into \(a\) non-overlapping batches of width \(b\) (automatically choosing \(\max(\lceil 2\tau_{\mathrm{int}} \rceil, \lfloor \sqrt{n} \rfloor)\) subject to `min_batches` when `batch_size` is `None`) cite:`flegalMcmcThirdSignificantFigure2008`. Series whose spread from the first sample lies within \(\text{SERIES\_FLAT\_TOL}\,(1 + |x_0|)\) return \(x_0\) directly with zero standard error so repeated non-dyadic IEEE-754 floats are never rounded to a neighboring value by summation.
 - `stats::check_stationarity` compares the leading `stationarity_first_fraction` (\(0.25\)) and trailing `stationarity_last_fraction` (\(0.50\)) sub-windows via Geweke's two-window \(z\)-score cite:`gewekeEvaluatingAccuracy1992,choderaAutomatedEquilibration2016` alongside the ordinary-least-squares linear drift slope.
 
 ## Kinetic rate networks (`network`)
 
-`network` defines `NetworkConfig`, `RateTableConfig`, `RateEdge`, and `build_rate_table` for assembling elementary transition rates \(k_{i \to j}(T)\) cite:`vineyardFrequencyFactors1957,henkelmanLongTimeScale2001` into master-equation graphs and Bortz-Kalos-Lebowitz / Gillespie kinetic Monte Carlo (kMC) residence-time tables cite:`goswamiEfficientExploration2025,goswamiConcurrencyAkmc2025,eon2901,bortzNewAlgorithmMonteCarlo1975,gillespieGeneralMethod1976`. On `develop`, `RateEdge::new` validates finite non-negative rate constants while `build_rate_table` returns `FluxError::Unimplemented` as the graph reduction and kMC table builder migrate from `rgsaddle`.
+`network` defines `NetworkConfig`, `RateTableConfig`, `RateEdge`, and `build_rate_table` for assembling elementary transition rates \(k_{i \to j}(T)\) cite:`vineyardFrequencyFactors1957,henkelmanLongTimeScale2001` into master-equation graphs and Bortz-Kalos-Lebowitz / Gillespie kinetic Monte Carlo (kMC) residence-time tables cite:`goswamiEfficientExploration2025,goswamiConcurrencyAkmc2025,eon2901,bortzNewAlgorithmMonteCarlo1975,gillespieGeneralMethod1976`. `RateEdge::new` validates finite non-negative rate constants, while `build_rate_table` is not yet implemented and returns `FluxError::Unimplemented`.
 
 ## Bibliography
 
@@ -1835,7 +1835,7 @@ The method references are stored in ~docs/source/references.bib~.
 ## System prerequisites
 
 - Current stable Rust with `clippy` and `rustfmt`.
-- `jq` and `rustup` for minimum supported Rust version (`rust-version ` "1.88"=) checks.
+- `jq` and `rustup` for minimum supported Rust version (`rust-version = "1.88"`) checks.
 - Python 3.12+ and Emacs 29+ (`emacs-nox`) when building the Sphinx documentation from `docs/orgmode`.
 
 ## Build and test
@@ -1865,7 +1865,7 @@ RUSTDOCFLAGS="-D warnings" cargo doc --locked --no-deps --all-features --documen
 
 ## Dependency pins
 
-Every git dependency in `Cargo.toml` pins a full 40-hex commit `rev` with the exact crate version at that revision (for example `version ` "`0.5.0"`), never a branch or tag name. `ci/check_dependency_pins.py` verifies that `Cargo.lock` and `cargo tree -d --features rgpot,rgpot-session` resolve a single copy of `rgflux`, `rgsaddle`, `rgmin`, `rgpot-core`, `eindir-core`, `dlpk`, `linkcell` and `minimage`. The `lammpc` feature is left out because it links `liblammpc`.
+`rgsaddle`, `rgmin`, and `rgpot-core` are required from crates.io with caret requirements (`version = "0.5.0"` and the matching requirements for the other two), so downstream builds can unify patch releases. `Cargo.lock` resolves them from crates.io, and the manifest has no git dependency and no `[patch.crates-io]` table. A git source that does appear must pin a full 40-hex commit `rev`, never a branch or tag name. `ci/check_dependency_pins.py` enforces those rules, checks that each locked version satisfies its requirement, and verifies that `Cargo.lock` and `cargo tree -d --features rgpot,rgpot-session` resolve a single copy of `rgflux`, `rgsaddle`, `rgmin`, `rgpot-core`, `eindir-core`, `dlpk`, `linkcell` and `minimage`. The `lammpc` feature is left out because it links `liblammpc`.
 
 ## Changelog fragments
 
@@ -1879,7 +1879,7 @@ Report issues at https://github.com/OmniPotentRPC/rgflux/issues. Maintainer: Roh
 
 # towncrier release notes start
 
-## 0.1.0 (unreleased)
+## 0.1.0 (2026-11-19)
 
 ### Added
 
@@ -1891,14 +1891,16 @@ Report issues at https://github.com/OmniPotentRPC/rgflux/issues. Maintainer: Roh
 
 ### Developer
 
-- The curved PAFI integration test now compares the last free-energy increment with the one from a path that continues past it, so natural spline endpoints fail the test. It runs 9 planes with the default time step and the default zero-temperature tolerance. `cargo test` builds with `opt-level ` 2` through `[profile.test]=, and the curved test takes 0.7 s instead of 44 s.
+- The curved PAFI integration test now compares the last free-energy increment with the one from a path that continues past it, so natural spline endpoints fail the test. It runs 9 planes with the default time step and the default zero-temperature tolerance. `cargo test` builds with `opt-level = 2` through `[profile.test]`, and the curved test takes 0.7 s instead of 44 s.
 
 ### Changed
 
-- The value stored by default in `PafiConfig::zero_temperature_tol` is now about 2.6% instead of 1%. The check divides the path-force integral discrepancy by the larger of one engine energy unit and the endpoint energy change magnitude. While the field retains its default value, the effective tolerance scales as `2 (pi^2 / 12) / (planes - 1)^2`; an explicitly different value is used unchanged.
+- Depend on the crates.io releases of `rgsaddle` 0.5.0, `rgmin` 0.6.0, and `rgpot-core` 3.7.0 with caret requirements, so downstream builds can unify patch releases. Only the `lammpc` feature enables the `rgpot-core` `profile` and `schema` features, so `rgpot` and `rgpot-session` build without the `capnp` CLI.
+- The value stored by default in `PafiConfig::zero_temperature_tol` is now about 2.6% instead of 1%. The zero-temperature check compares the path-force integral discrepancy with this dimensionless tolerance after dividing by the larger of one engine energy unit and the endpoint energy change magnitude. While the field retains its default value, the effective tolerance scales as `2 (pi^2 / 12) / (planes - 1)^2`; an explicitly different value is used unchanged.
 
 ### Fixed
 
 - `ffs::forward_flux_rate` restores positions, velocities, the periodic cell, the thermostat, and the holonomic constraint on return, and leaves the stochastic stream where the flux and trial reseeds put it. `ohtst::optimize_hyperplane` takes the flux mass from `rgsaddle::flux_mass`, keeps a length mismatch on `FluxError::Shape`, and keeps a non-positive mass on `FluxError::InvalidConfig`.
 - `stats::batch_means` returns the first sample as the mean of a series that is constant up to rounding, so identical non-dyadic samples are no longer averaged to a neighbouring float.
+- Compute the PAFI reactant partition in log space with shifted log-sum-exp trapezoid quadrature so deep free-energy wells no longer overflow the partition integral. Propagate `ln Z_R` through normalized rate evaluation and uncertainty propagation while retaining legacy linear-rate and partition fields for compatibility.
 - Correct PAFI mass-metric projection, spline geometry, adaptive sampling, profile integration, uncertainty propagation, and engine-state restoration.
