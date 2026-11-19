@@ -755,7 +755,7 @@ fn reactant_log_partition_and_sensitivity(
     }
     if !scaled_half_partition.is_finite() || scaled_half_partition <= 0.0 {
         return Err(FluxError::InvalidConfig(
-            "PAFI reactant partition must be positive",
+            "PAFI reactant partition must be finite and positive",
         ));
     }
 
@@ -899,7 +899,7 @@ fn path_force_relative_error(arcs: &[f64], energies: &[f64], gradients: &[f64]) 
 /// - the thermal energy `k_B T` of the engine is not positive,
 /// - the zero-temperature check of [`PafiConfig::zero_temperature_tol`] fails,
 /// - a plane normal degenerates, or the dividing plane is the first plane so
-///   that the reactant partition `Z_R` is not positive.
+///   that the reactant partition `Z_R` is not finite and positive.
 ///
 /// Returns [`FluxError::EmptyInput`] for an empty coordinate axis and
 /// [`FluxError::Shape`] when the engine masses do not match the path
@@ -1352,6 +1352,20 @@ mod tests {
         assert_eq!(
             result,
             Err(FluxError::NonFinite("PAFI integrated free energy"))
+        );
+    }
+
+    #[test]
+    fn zero_width_reactant_partition_is_rejected() {
+        let arcs = [0.0, 1.0, 2.0];
+        let gradients = [-1.0, -1.0, -1.0];
+        let errors = [0.0, 0.0, 0.0];
+        let result = integrate_profile(&arcs, &gradients, &errors, 1.0);
+        assert_eq!(
+            result,
+            Err(FluxError::InvalidConfig(
+                "PAFI reactant partition must be finite and positive"
+            ))
         );
     }
 
