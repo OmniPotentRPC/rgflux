@@ -106,9 +106,13 @@ edition = "2024"
 
 [dependencies]
 ndarray = "0.17"
-rgsaddle = {{ version = "=0.5.0", git = "https://github.com/OmniPotentRPC/rgsaddle", rev = "92a74493d16364a1ba8542a63598ce8bcee5387c", default-features = false }}
-rgmin = {{ version = "=0.6.0", git = "https://github.com/OmniPotentRPC/rgmin", rev = "eb8d3e4123183bd3f5ca82852332eeddb5d17f54", default-features = false }}
+rgsaddle = {{ version = "=0.5.0", default-features = false }}
+rgmin = {{ version = "=0.6.0", default-features = false }}
 rgflux = {{ path = "{}" }}
+
+[patch.crates-io]
+rgsaddle = {{ git = "https://github.com/OmniPotentRPC/rgsaddle", rev = "92a74493d16364a1ba8542a63598ce8bcee5387c" }}
+rgmin = {{ git = "https://github.com/OmniPotentRPC/rgmin", rev = "eb8d3e4123183bd3f5ca82852332eeddb5d17f54" }}
 "#,
         env!("CARGO_MANIFEST_DIR")
     );
