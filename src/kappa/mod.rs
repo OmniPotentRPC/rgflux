@@ -54,22 +54,35 @@ pub use bennett_chandler::{
 
 use crate::error::FluxError;
 
-/// Configuration for surface-quench and first-crossing transmission workflows.
+/// Default consecutive basin-commitment checkpoints in [`KappaConfig`].
+pub const DEFAULT_COMMIT_CHECKPOINTS: usize = 4;
+
+/// Configuration for basin-commitment stopping and surface-quench / first-crossing
+/// transmission workflows.
 ///
-/// Those workflows are not yet implemented, so no estimator reads this
-/// configuration yet.
+/// [`shoot_reactive_trajectories`] and [`shoot_bennett_chandler`] read
+/// [`Self::commit_checkpoints`] through [`ShootingConfig::kappa`] (or
+/// [`ShootingConfig::with_commit_checkpoints`]). Steepest-descent endpoint
+/// quenching is not yet implemented, so [`Self::quench_force_tol`] and
+/// [`Self::quench_max_steps`] are not read yet.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct KappaConfig {
-    /// Consecutive basin-commitment checkpoints required to stop a half-trajectory.
+    /// Consecutive basin-commitment checkpoints on a committed side (`s < 0` or `s > 0`)
+    /// required to stop a half-trajectory and copy that side into every later
+    /// checkpoint of `kappa(t)` (`<= steps`; `0` runs every half to `steps`).
     ///
-    /// Default: `4`.
+    /// The window must outlast the time a trajectory lingers at the barrier top:
+    /// a shorter window commits trajectories that recross later and raises `kappa`.
+    ///
+    /// Default: [`DEFAULT_COMMIT_CHECKPOINTS`] (`4`).
     pub commit_checkpoints: usize,
-    /// Steepest-descent force tolerance when assigning end states by quenching.
+    /// Steepest-descent force tolerance when assigning end states by quenching
+    /// (not yet implemented).
     ///
     /// Default: `0.001`.
     pub quench_force_tol: f64,
-    /// Maximum quench steps per trajectory endpoint.
+    /// Maximum quench steps per trajectory endpoint (not yet implemented).
     ///
     /// Default: `2_000`.
     pub quench_max_steps: usize,
@@ -78,7 +91,7 @@ pub struct KappaConfig {
 impl Default for KappaConfig {
     fn default() -> Self {
         Self {
-            commit_checkpoints: 4,
+            commit_checkpoints: DEFAULT_COMMIT_CHECKPOINTS,
             quench_force_tol: 0.001,
             quench_max_steps: 2_000,
         }
