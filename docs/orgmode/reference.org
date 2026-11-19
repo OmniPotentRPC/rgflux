@@ -15,6 +15,22 @@
 | =ffs= | Forward Flux Sampling across ordered interfaces (=forward_flux_rate=) | Implemented: flux collection, staged trials, and uncertainty propagation. Exit restores positions, velocities, the periodic cell, the thermostat, and the constraint; the stochastic stream is left where the run put it |
 | =network= | Symmetry-resolved rate networks and kinetic Monte Carlo rate tables (=NetworkConfig=, =RateTableConfig=, =RateEdge=, =build_rate_table=) | =RateEdge::new= and configuration types implemented; =build_rate_table= is not yet implemented |
 | =error= | Shared =FluxError= enum and =From<rgsaddle::SaddleError>= conversion | Implemented |
+| =config= | Internal =with_setters!= macro used by public configuration types | Private module, so it has no importable public path; every generated public setter is listed in the inventory below |
+
+* Documentation map
+
+| API area | Reference entry | Method guide and theory |
+|---+---+---|
+| =pafi= | This page, =PafiConfig=, =FreeEnergyProfile=, functions, and generated inventory | =howto.org=, /Compute a free-energy profile, barrier and rate along a reaction path/; =explanation.org=, /Projected Average Force Integration (PAFI)/ |
+| =ohtst= | This page, =OhtstConfig=, =OhtstEstimate=, and generated inventory | =howto.org=, /Place a fixed-normal OH-TST dividing hyperplane and evaluate the rate/; =explanation.org=, /Holonomic hyperplane sampling and fixed-normal OH-TST/ |
+| =hyperplane= | This page, =HyperplaneConfig=, =HyperplaneSample=, and generated inventory | =howto.org=, /Sample holonomic hyperplane mean forces and configurations/; =explanation.org=, /Holonomic hyperplane sampling and fixed-normal OH-TST/ |
+| =ffs= | This page, =FfsConfig=, =FfsEstimate=, and generated inventory | =howto.org=, /Compute a transition rate with direct Forward Flux Sampling/; =explanation.org=, /Forward Flux Sampling (FFS)/ |
+| =network= | This page, network configuration, edge and function entries, and generated inventory | =howto.org=, /Assemble a rate-network edge and kMC configuration/; =explanation.org=, /Kinetic rate networks (network)/ |
+| =kappa= | This page, =KappaConfig=, Bennett-Chandler types and functions, Kramers function, and generated inventory | =howto.org=, /Shoot Bennett-Chandler reactive-flux trajectories and compare with Kramers/; =explanation.org=, /Reactive-flux recrossing (kappa and kappa::bennett_chandler)/ |
+| =stats= | This page, constants, configuration, outputs, functions, and generated inventory | =howto.org=, /Diagnose correlated samples with batch means, effective sample size, and Geweke windows/; =explanation.org=, /Correlated time-series diagnostics (stats)/ |
+| =engine= | This page, features, configuration, traits, types, methods, constants, and generated inventory | =howto.org= examples for hyperplanes, trajectory methods, and =EindirSurface=; =getting-started.org=, /Choose an engine/ |
+| internal =config= | This page, /Configuration structs and field defaults/, plus every =with_*= path in the generated inventory | =AGENTS.md=, /Public configuration convention/ |
+| C ABI and Python | This page, /Binding surface/ | No exported binding exists in this release |
 
 * Cargo features
 
@@ -256,3 +272,668 @@ The value stored by =PafiConfig::default()= is the 9-plane value shown in the ta
 | =BackendUnavailable= | =&'static str= | Unlinked external MD session call on =RgpotSessionEngine= or unsupported unconstrained Langevin / constrained NVE mode in =LammpcEngine= |
 | =Lammpc= | =String= | Error returned by the =lammpc_session_*= C ABI or Cap'n Proto message decoding |
 | =Unimplemented= | =&'static str= | Entry point that is not yet implemented (=build_rate_table=) |
+
+* Binding surface
+
+** C ABI
+
+=rgflux= exports no =extern "C"= function and has no C header in this release.
+The optional =lammpc= engine consumes, but does not re-export, the following
+=liblammpc= C ABI symbols:
+
+| Purpose | Consumed symbols |
+|---+---|
+| Session lifecycle | =lammpc_session_create_from_config=, =lammpc_session_destroy=, =lammpc_abi_version= |
+| Force evaluation | =lammpc_session_calculate_result=, =lammpc_potential_result_size_for_force_input= |
+| Constrained dynamics | =lammpc_session_md_initialize=, =lammpc_session_md_step=, =lammpc_session_md_set_velocities=, =lammpc_session_md_state= |
+| Unconstrained NVE dynamics | =lammpc_session_nve_set_positions=, =lammpc_session_nve_set_velocities=, =lammpc_session_nve_step=, =lammpc_session_nve_state= |
+| Errors and capabilities | =lammpc_last_error=, =lammpc_capabilities_result= |
+
+All declarations are private implementation details in
+=src/engine/lammpc.rs=. The public Rust boundary is =LammpcConfig=,
+=LammpcEngine=, and the =DynamicsEngine= implementation listed below.
+
+** Python
+
+=rgflux= has no Python extension module, Python package, or type stub in this
+release. Python callers need a separate downstream wrapper. Consequently
+there are no Python names beyond the Rust inventory below.
+
+* Public API documentation coverage
+
+The release audit uses =cargo-public-api= with every feature enabled. It
+counts modules, types, variants, fields, constants, functions, trait methods,
+inherent methods, builder methods, and public re-export paths. Generated
+trait implementations and blanket implementations are omitted because they
+do not add an =rgflux= declaration.
+
+Before this audit, 0 of 563 qualified public item paths had an explicit
+qualified entry in the Org reference. The gaps were primarily builder methods,
+=DynamicsEngine= methods on concrete engines, optional engine methods,
+constants, enum variants, and public re-export paths. After this audit, the
+generated inventory below maps all 563 of 563 paths to this page. The
+descriptive tables above document semantics, defaults, constraints, outputs,
+and errors. The how-to page documents every estimator workflow with runnable
+Rust, equations, and literature citations.
+
+The generated block is authoritative. Run
+=python3 scripts/generate_api_inventory.py= after changing public Rust API.
+
+** Complete qualified Rust inventory
+
+# BEGIN GENERATED PUBLIC API
+*** =DynamicsEngine=
+
+- =rgflux::DynamicsEngine=
+- =rgflux::DynamicsEngine::apply_dividing_surface=
+- =rgflux::DynamicsEngine::cell=
+- =rgflux::DynamicsEngine::constraint=
+- =rgflux::DynamicsEngine::dof=
+- =rgflux::DynamicsEngine::energy_and_forces=
+- =rgflux::DynamicsEngine::kinetic_energy=
+- =rgflux::DynamicsEngine::masses=
+- =rgflux::DynamicsEngine::positions=
+- =rgflux::DynamicsEngine::reflect_velocity=
+- =rgflux::DynamicsEngine::reseed=
+- =rgflux::DynamicsEngine::set_cell=
+- =rgflux::DynamicsEngine::set_constraint=
+- =rgflux::DynamicsEngine::set_positions=
+- =rgflux::DynamicsEngine::set_thermostat=
+- =rgflux::DynamicsEngine::set_velocities=
+- =rgflux::DynamicsEngine::shoot_velocities=
+- =rgflux::DynamicsEngine::step=
+- =rgflux::DynamicsEngine::thermostat=
+- =rgflux::DynamicsEngine::velocities=
+
+*** =EindirSurface=
+
+- =rgflux::EindirSurface=
+
+*** =FluxError=
+
+- =rgflux::FluxError=
+- =rgflux::FluxError::BackendUnavailable=
+- =rgflux::FluxError::ConstraintViolation=
+- =rgflux::FluxError::ConstraintViolation::residual=
+- =rgflux::FluxError::ConstraintViolation::tolerance=
+- =rgflux::FluxError::EmptyInput=
+- =rgflux::FluxError::InvalidConfig=
+- =rgflux::FluxError::Lammpc=
+- =rgflux::FluxError::NoPositiveFlux=
+- =rgflux::FluxError::NonFinite=
+- =rgflux::FluxError::NonStationaryPlateau=
+- =rgflux::FluxError::NonStationaryPlateau::drift_slope=
+- =rgflux::FluxError::NonStationaryPlateau::max_z_score=
+- =rgflux::FluxError::NonStationaryPlateau::z_score=
+- =rgflux::FluxError::Shape=
+- =rgflux::FluxError::Shape::context=
+- =rgflux::FluxError::Shape::expected=
+- =rgflux::FluxError::Shape::got=
+- =rgflux::FluxError::Surface=
+- =rgflux::FluxError::SurfaceRejection=
+- =rgflux::FluxError::SurfaceRejection::max_attempts=
+- =rgflux::FluxError::Unimplemented=
+
+*** =ForceSurface=
+
+- =rgflux::ForceSurface=
+- =rgflux::ForceSurface::energy_and_forces=
+
+*** =HyperplaneConstraint=
+
+- =rgflux::HyperplaneConstraint=
+- =rgflux::HyperplaneConstraint::normal=
+- =rgflux::HyperplaneConstraint::offset=
+
+*** =StepReport=
+
+- =rgflux::StepReport=
+- =rgflux::StepReport::constraint_force=
+- =rgflux::StepReport::kinetic_energy=
+- =rgflux::StepReport::potential_energy=
+
+*** =SurfaceVelocityPolicy=
+
+- =rgflux::SurfaceVelocityPolicy=
+- =rgflux::SurfaceVelocityPolicy::Reflect=
+- =rgflux::SurfaceVelocityPolicy::RejectRedraw=
+- =rgflux::SurfaceVelocityPolicy::RejectRedraw::max_attempts=
+- =rgflux::SurfaceVelocityPolicy::RejectRedraw::seed=
+
+*** =ThermostatConfig=
+
+- =rgflux::ThermostatConfig=
+- =rgflux::ThermostatConfig::boltzmann=
+- =rgflux::ThermostatConfig::gamma=
+- =rgflux::ThermostatConfig::temperature=
+
+*** =engine=
+
+- =rgflux::engine=
+- =rgflux::engine::DEFAULT_REJECTION_MAX_ATTEMPTS=
+- =rgflux::engine::DynamicsEngine=
+- =rgflux::engine::DynamicsEngine::apply_dividing_surface=
+- =rgflux::engine::DynamicsEngine::cell=
+- =rgflux::engine::DynamicsEngine::constraint=
+- =rgflux::engine::DynamicsEngine::dof=
+- =rgflux::engine::DynamicsEngine::energy_and_forces=
+- =rgflux::engine::DynamicsEngine::kinetic_energy=
+- =rgflux::engine::DynamicsEngine::masses=
+- =rgflux::engine::DynamicsEngine::positions=
+- =rgflux::engine::DynamicsEngine::reflect_velocity=
+- =rgflux::engine::DynamicsEngine::reseed=
+- =rgflux::engine::DynamicsEngine::set_cell=
+- =rgflux::engine::DynamicsEngine::set_constraint=
+- =rgflux::engine::DynamicsEngine::set_positions=
+- =rgflux::engine::DynamicsEngine::set_thermostat=
+- =rgflux::engine::DynamicsEngine::set_velocities=
+- =rgflux::engine::DynamicsEngine::shoot_velocities=
+- =rgflux::engine::DynamicsEngine::step=
+- =rgflux::engine::DynamicsEngine::thermostat=
+- =rgflux::engine::DynamicsEngine::velocities=
+- =rgflux::engine::EindirSurface=
+- =rgflux::engine::EindirSurface::energy_and_forces=
+- =rgflux::engine::EindirSurface::inner=
+- =rgflux::engine::EindirSurface::new=
+- =rgflux::engine::ForceSurface=
+- =rgflux::engine::ForceSurface::energy_and_forces=
+- =rgflux::engine::HYPERPLANE_PROJECTION_TOL=
+- =rgflux::engine::HyperplaneConstraint=
+- =rgflux::engine::HyperplaneConstraint::default=
+- =rgflux::engine::HyperplaneConstraint::from_direction=
+- =rgflux::engine::HyperplaneConstraint::new=
+- =rgflux::engine::HyperplaneConstraint::normal=
+- =rgflux::engine::HyperplaneConstraint::offset=
+- =rgflux::engine::HyperplaneConstraint::signed_distance=
+- =rgflux::engine::HyperplaneConstraint::validate=
+- =rgflux::engine::HyperplaneConstraint::with_normal=
+- =rgflux::engine::HyperplaneConstraint::with_offset=
+- =rgflux::engine::StepReport=
+- =rgflux::engine::StepReport::constraint_force=
+- =rgflux::engine::StepReport::kinetic_energy=
+- =rgflux::engine::StepReport::new=
+- =rgflux::engine::StepReport::potential_energy=
+- =rgflux::engine::SurfaceVelocityPolicy=
+- =rgflux::engine::SurfaceVelocityPolicy::Reflect=
+- =rgflux::engine::SurfaceVelocityPolicy::RejectRedraw=
+- =rgflux::engine::SurfaceVelocityPolicy::RejectRedraw::max_attempts=
+- =rgflux::engine::SurfaceVelocityPolicy::RejectRedraw::seed=
+- =rgflux::engine::ThermostatConfig=
+- =rgflux::engine::ThermostatConfig::boltzmann=
+- =rgflux::engine::ThermostatConfig::default=
+- =rgflux::engine::ThermostatConfig::gamma=
+- =rgflux::engine::ThermostatConfig::temperature=
+- =rgflux::engine::ThermostatConfig::thermal_energy=
+- =rgflux::engine::ThermostatConfig::with_boltzmann=
+- =rgflux::engine::ThermostatConfig::with_gamma=
+- =rgflux::engine::ThermostatConfig::with_temperature=
+- =rgflux::engine::UNIT_NORMAL_TOL=
+- =rgflux::engine::draw_maxwell_boltzmann_velocities=
+- =rgflux::engine::lammpc=
+- =rgflux::engine::lammpc::LammpcConfig=
+- =rgflux::engine::lammpc::LammpcConfig::atomic_numbers=
+- =rgflux::engine::lammpc::LammpcConfig::boundary=
+- =rgflux::engine::lammpc::LammpcConfig::cell=
+- =rgflux::engine::lammpc::LammpcConfig::constraint=
+- =rgflux::engine::lammpc::LammpcConfig::default=
+- =rgflux::engine::lammpc::LammpcConfig::extra_setup=
+- =rgflux::engine::lammpc::LammpcConfig::masses_by_type=
+- =rgflux::engine::lammpc::LammpcConfig::pair_coeffs=
+- =rgflux::engine::lammpc::LammpcConfig::pair_style=
+- =rgflux::engine::lammpc::LammpcConfig::seed=
+- =rgflux::engine::lammpc::LammpcConfig::suffix=
+- =rgflux::engine::lammpc::LammpcConfig::thermostat=
+- =rgflux::engine::lammpc::LammpcConfig::type_to_atomic_number=
+- =rgflux::engine::lammpc::LammpcConfig::with_atomic_numbers=
+- =rgflux::engine::lammpc::LammpcConfig::with_boundary=
+- =rgflux::engine::lammpc::LammpcConfig::with_cell=
+- =rgflux::engine::lammpc::LammpcConfig::with_constraint=
+- =rgflux::engine::lammpc::LammpcConfig::with_extra_setup=
+- =rgflux::engine::lammpc::LammpcConfig::with_masses_by_type=
+- =rgflux::engine::lammpc::LammpcConfig::with_pair_coeffs=
+- =rgflux::engine::lammpc::LammpcConfig::with_pair_style=
+- =rgflux::engine::lammpc::LammpcConfig::with_seed=
+- =rgflux::engine::lammpc::LammpcConfig::with_suffix=
+- =rgflux::engine::lammpc::LammpcConfig::with_thermostat=
+- =rgflux::engine::lammpc::LammpcConfig::with_type_to_atomic_number=
+- =rgflux::engine::lammpc::LammpcEngine=
+- =rgflux::engine::lammpc::LammpcEngine::apply_dividing_surface=
+- =rgflux::engine::lammpc::LammpcEngine::cell=
+- =rgflux::engine::lammpc::LammpcEngine::constraint=
+- =rgflux::engine::lammpc::LammpcEngine::dof=
+- =rgflux::engine::lammpc::LammpcEngine::drop=
+- =rgflux::engine::lammpc::LammpcEngine::energy_and_forces=
+- =rgflux::engine::lammpc::LammpcEngine::kinetic_energy=
+- =rgflux::engine::lammpc::LammpcEngine::masses=
+- =rgflux::engine::lammpc::LammpcEngine::new=
+- =rgflux::engine::lammpc::LammpcEngine::positions=
+- =rgflux::engine::lammpc::LammpcEngine::reflect_velocity=
+- =rgflux::engine::lammpc::LammpcEngine::reseed=
+- =rgflux::engine::lammpc::LammpcEngine::set_cell=
+- =rgflux::engine::lammpc::LammpcEngine::set_constraint=
+- =rgflux::engine::lammpc::LammpcEngine::set_positions=
+- =rgflux::engine::lammpc::LammpcEngine::set_thermostat=
+- =rgflux::engine::lammpc::LammpcEngine::set_velocities=
+- =rgflux::engine::lammpc::LammpcEngine::shoot_velocities=
+- =rgflux::engine::lammpc::LammpcEngine::step=
+- =rgflux::engine::lammpc::LammpcEngine::thermostat=
+- =rgflux::engine::lammpc::LammpcEngine::velocities=
+- =rgflux::engine::lammpc::MASS_VELOCITY_TO_EV=
+- =rgflux::engine::native=
+- =rgflux::engine::native::ConstraintProjection=
+- =rgflux::engine::native::ConstraintProjection::Rattle=
+- =rgflux::engine::native::ConstraintProjection::Shake=
+- =rgflux::engine::native::NativeConfig=
+- =rgflux::engine::native::NativeConfig::cell=
+- =rgflux::engine::native::NativeConfig::constraint=
+- =rgflux::engine::native::NativeConfig::default=
+- =rgflux::engine::native::NativeConfig::masses=
+- =rgflux::engine::native::NativeConfig::projection=
+- =rgflux::engine::native::NativeConfig::seed=
+- =rgflux::engine::native::NativeConfig::thermostat=
+- =rgflux::engine::native::NativeConfig::with_cell=
+- =rgflux::engine::native::NativeConfig::with_constraint=
+- =rgflux::engine::native::NativeConfig::with_masses=
+- =rgflux::engine::native::NativeConfig::with_projection=
+- =rgflux::engine::native::NativeConfig::with_seed=
+- =rgflux::engine::native::NativeConfig::with_thermostat=
+- =rgflux::engine::native::NativeEngine=
+- =rgflux::engine::native::NativeEngine::apply_dividing_surface=
+- =rgflux::engine::native::NativeEngine::cell=
+- =rgflux::engine::native::NativeEngine::constraint=
+- =rgflux::engine::native::NativeEngine::dof=
+- =rgflux::engine::native::NativeEngine::energy_and_forces=
+- =rgflux::engine::native::NativeEngine::kinetic_energy=
+- =rgflux::engine::native::NativeEngine::masses=
+- =rgflux::engine::native::NativeEngine::new=
+- =rgflux::engine::native::NativeEngine::positions=
+- =rgflux::engine::native::NativeEngine::projection=
+- =rgflux::engine::native::NativeEngine::reflect_velocity=
+- =rgflux::engine::native::NativeEngine::reseed=
+- =rgflux::engine::native::NativeEngine::reseed_rng=
+- =rgflux::engine::native::NativeEngine::set_cell=
+- =rgflux::engine::native::NativeEngine::set_constraint=
+- =rgflux::engine::native::NativeEngine::set_positions=
+- =rgflux::engine::native::NativeEngine::set_thermostat=
+- =rgflux::engine::native::NativeEngine::set_velocities=
+- =rgflux::engine::native::NativeEngine::shoot_velocities=
+- =rgflux::engine::native::NativeEngine::step=
+- =rgflux::engine::native::NativeEngine::surface=
+- =rgflux::engine::native::NativeEngine::thermostat=
+- =rgflux::engine::native::NativeEngine::velocities=
+- =rgflux::engine::reflect_velocity_in_place=
+- =rgflux::engine::rgpot=
+- =rgflux::engine::rgpot::DEFAULT_RGPOT_BOX_EDGE=
+- =rgflux::engine::rgpot::RgpotConfig=
+- =rgflux::engine::rgpot::RgpotConfig::atomic_numbers=
+- =rgflux::engine::rgpot::RgpotConfig::default=
+- =rgflux::engine::rgpot::RgpotConfig::default_cell=
+- =rgflux::engine::rgpot::RgpotConfig::with_atomic_numbers=
+- =rgflux::engine::rgpot::RgpotConfig::with_default_cell=
+- =rgflux::engine::rgpot::RgpotSurface=
+- =rgflux::engine::rgpot::RgpotSurface::energy_and_forces=
+- =rgflux::engine::rgpot::RgpotSurface::n_atoms=
+- =rgflux::engine::rgpot::RgpotSurface::new=
+- =rgflux::engine::rgpot_session=
+- =rgflux::engine::rgpot_session::RgpotSessionConfig=
+- =rgflux::engine::rgpot_session::RgpotSessionConfig::cell=
+- =rgflux::engine::rgpot_session::RgpotSessionConfig::constraint=
+- =rgflux::engine::rgpot_session::RgpotSessionConfig::default=
+- =rgflux::engine::rgpot_session::RgpotSessionConfig::engine=
+- =rgflux::engine::rgpot_session::RgpotSessionConfig::engine_path=
+- =rgflux::engine::rgpot_session::RgpotSessionConfig::masses=
+- =rgflux::engine::rgpot_session::RgpotSessionConfig::options=
+- =rgflux::engine::rgpot_session::RgpotSessionConfig::seed=
+- =rgflux::engine::rgpot_session::RgpotSessionConfig::spec=
+- =rgflux::engine::rgpot_session::RgpotSessionConfig::thermostat=
+- =rgflux::engine::rgpot_session::RgpotSessionConfig::with_cell=
+- =rgflux::engine::rgpot_session::RgpotSessionConfig::with_constraint=
+- =rgflux::engine::rgpot_session::RgpotSessionConfig::with_engine=
+- =rgflux::engine::rgpot_session::RgpotSessionConfig::with_engine_path=
+- =rgflux::engine::rgpot_session::RgpotSessionConfig::with_masses=
+- =rgflux::engine::rgpot_session::RgpotSessionConfig::with_options=
+- =rgflux::engine::rgpot_session::RgpotSessionConfig::with_seed=
+- =rgflux::engine::rgpot_session::RgpotSessionConfig::with_spec=
+- =rgflux::engine::rgpot_session::RgpotSessionConfig::with_thermostat=
+- =rgflux::engine::rgpot_session::RgpotSessionEngine=
+- =rgflux::engine::rgpot_session::RgpotSessionEngine::apply_dividing_surface=
+- =rgflux::engine::rgpot_session::RgpotSessionEngine::cell=
+- =rgflux::engine::rgpot_session::RgpotSessionEngine::constraint=
+- =rgflux::engine::rgpot_session::RgpotSessionEngine::dof=
+- =rgflux::engine::rgpot_session::RgpotSessionEngine::energy_and_forces=
+- =rgflux::engine::rgpot_session::RgpotSessionEngine::engine_kind=
+- =rgflux::engine::rgpot_session::RgpotSessionEngine::kinetic_energy=
+- =rgflux::engine::rgpot_session::RgpotSessionEngine::masses=
+- =rgflux::engine::rgpot_session::RgpotSessionEngine::new=
+- =rgflux::engine::rgpot_session::RgpotSessionEngine::positions=
+- =rgflux::engine::rgpot_session::RgpotSessionEngine::reflect_velocity=
+- =rgflux::engine::rgpot_session::RgpotSessionEngine::reseed=
+- =rgflux::engine::rgpot_session::RgpotSessionEngine::rgpot_version_major=
+- =rgflux::engine::rgpot_session::RgpotSessionEngine::set_cell=
+- =rgflux::engine::rgpot_session::RgpotSessionEngine::set_constraint=
+- =rgflux::engine::rgpot_session::RgpotSessionEngine::set_positions=
+- =rgflux::engine::rgpot_session::RgpotSessionEngine::set_thermostat=
+- =rgflux::engine::rgpot_session::RgpotSessionEngine::set_velocities=
+- =rgflux::engine::rgpot_session::RgpotSessionEngine::shoot_velocities=
+- =rgflux::engine::rgpot_session::RgpotSessionEngine::step=
+- =rgflux::engine::rgpot_session::RgpotSessionEngine::thermostat=
+- =rgflux::engine::rgpot_session::RgpotSessionEngine::velocities=
+- =rgflux::engine::rgpot_session::SessionEngineKind=
+- =rgflux::engine::rgpot_session::SessionEngineKind::Lammps=
+- =rgflux::engine::rgpot_session::SessionEngineKind::NbLib=
+- =rgflux::engine::rgpot_session::SessionEngineKind::OpenMm=
+- =rgflux::engine::rgpot_session::SessionEngineKind::engine_name=
+
+*** =error=
+
+- =rgflux::error=
+- =rgflux::error::FluxError=
+- =rgflux::error::FluxError::BackendUnavailable=
+- =rgflux::error::FluxError::ConstraintViolation=
+- =rgflux::error::FluxError::ConstraintViolation::residual=
+- =rgflux::error::FluxError::ConstraintViolation::tolerance=
+- =rgflux::error::FluxError::EmptyInput=
+- =rgflux::error::FluxError::InvalidConfig=
+- =rgflux::error::FluxError::Lammpc=
+- =rgflux::error::FluxError::NoPositiveFlux=
+- =rgflux::error::FluxError::NonFinite=
+- =rgflux::error::FluxError::NonStationaryPlateau=
+- =rgflux::error::FluxError::NonStationaryPlateau::drift_slope=
+- =rgflux::error::FluxError::NonStationaryPlateau::max_z_score=
+- =rgflux::error::FluxError::NonStationaryPlateau::z_score=
+- =rgflux::error::FluxError::Shape=
+- =rgflux::error::FluxError::Shape::context=
+- =rgflux::error::FluxError::Shape::expected=
+- =rgflux::error::FluxError::Shape::got=
+- =rgflux::error::FluxError::Surface=
+- =rgflux::error::FluxError::SurfaceRejection=
+- =rgflux::error::FluxError::SurfaceRejection::max_attempts=
+- =rgflux::error::FluxError::Unimplemented=
+- =rgflux::error::FluxError::from=
+
+*** =ffs=
+
+- =rgflux::ffs=
+- =rgflux::ffs::FfsConfig=
+- =rgflux::ffs::FfsConfig::burn_in_steps=
+- =rgflux::ffs::FfsConfig::default=
+- =rgflux::ffs::FfsConfig::interfaces=
+- =rgflux::ffs::FfsConfig::max_flux_steps=
+- =rgflux::ffs::FfsConfig::max_trial_steps=
+- =rgflux::ffs::FfsConfig::points_per_interface=
+- =rgflux::ffs::FfsConfig::seed=
+- =rgflux::ffs::FfsConfig::stats=
+- =rgflux::ffs::FfsConfig::time_step=
+- =rgflux::ffs::FfsConfig::trials_per_interface=
+- =rgflux::ffs::FfsConfig::with_burn_in_steps=
+- =rgflux::ffs::FfsConfig::with_interfaces=
+- =rgflux::ffs::FfsConfig::with_max_flux_steps=
+- =rgflux::ffs::FfsConfig::with_max_trial_steps=
+- =rgflux::ffs::FfsConfig::with_points_per_interface=
+- =rgflux::ffs::FfsConfig::with_seed=
+- =rgflux::ffs::FfsConfig::with_stats=
+- =rgflux::ffs::FfsConfig::with_time_step=
+- =rgflux::ffs::FfsConfig::with_trials_per_interface=
+- =rgflux::ffs::FfsEstimate=
+- =rgflux::ffs::FfsEstimate::initial_flux=
+- =rgflux::ffs::FfsEstimate::interface_probabilities=
+- =rgflux::ffs::FfsEstimate::rate=
+- =rgflux::ffs::FfsEstimate::standard_error=
+- =rgflux::ffs::forward_flux_rate=
+
+*** =hyperplane=
+
+- =rgflux::hyperplane=
+- =rgflux::hyperplane::HyperplaneConfig=
+- =rgflux::hyperplane::HyperplaneConfig::burn_in_steps=
+- =rgflux::hyperplane::HyperplaneConfig::default=
+- =rgflux::hyperplane::HyperplaneConfig::retention_stride=
+- =rgflux::hyperplane::HyperplaneConfig::sample_steps=
+- =rgflux::hyperplane::HyperplaneConfig::seed=
+- =rgflux::hyperplane::HyperplaneConfig::stats=
+- =rgflux::hyperplane::HyperplaneConfig::time_step=
+- =rgflux::hyperplane::HyperplaneConfig::with_burn_in_steps=
+- =rgflux::hyperplane::HyperplaneConfig::with_retention_stride=
+- =rgflux::hyperplane::HyperplaneConfig::with_sample_steps=
+- =rgflux::hyperplane::HyperplaneConfig::with_seed=
+- =rgflux::hyperplane::HyperplaneConfig::with_stats=
+- =rgflux::hyperplane::HyperplaneConfig::with_time_step=
+- =rgflux::hyperplane::HyperplaneConstraint=
+- =rgflux::hyperplane::HyperplaneConstraint::normal=
+- =rgflux::hyperplane::HyperplaneConstraint::offset=
+- =rgflux::hyperplane::HyperplaneSample=
+- =rgflux::hyperplane::HyperplaneSample::configurations=
+- =rgflux::hyperplane::HyperplaneSample::mean_force=
+- =rgflux::hyperplane::HyperplaneSample::plane=
+- =rgflux::hyperplane::HyperplaneSample::standard_error=
+- =rgflux::hyperplane::sample_hyperplane=
+
+*** =kappa=
+
+- =rgflux::kappa=
+- =rgflux::kappa::BennettChandlerConfig=
+- =rgflux::kappa::BennettChandlerConfig::plateau_end_fraction=
+- =rgflux::kappa::BennettChandlerConfig::plateau_start_fraction=
+- =rgflux::kappa::BennettChandlerConfig::stats=
+- =rgflux::kappa::BennettChandlerEstimate=
+- =rgflux::kappa::BennettChandlerEstimate::kappa_t=
+- =rgflux::kappa::BennettChandlerEstimate::n_eff=
+- =rgflux::kappa::BennettChandlerEstimate::plateau=
+- =rgflux::kappa::BennettChandlerEstimate::plateau_window=
+- =rgflux::kappa::BennettChandlerEstimate::positive_flux_count=
+- =rgflux::kappa::BennettChandlerEstimate::standard_error=
+- =rgflux::kappa::BennettChandlerEstimate::stationarity=
+- =rgflux::kappa::KappaConfig=
+- =rgflux::kappa::KappaConfig::commit_checkpoints=
+- =rgflux::kappa::KappaConfig::default=
+- =rgflux::kappa::KappaConfig::quench_force_tol=
+- =rgflux::kappa::KappaConfig::quench_max_steps=
+- =rgflux::kappa::KappaConfig::with_commit_checkpoints=
+- =rgflux::kappa::KappaConfig::with_quench_force_tol=
+- =rgflux::kappa::KappaConfig::with_quench_max_steps=
+- =rgflux::kappa::ReactiveTrajectory=
+- =rgflux::kappa::ReactiveTrajectory::initial_normal_velocity=
+- =rgflux::kappa::ReactiveTrajectory::sides=
+- =rgflux::kappa::ShootingConfig=
+- =rgflux::kappa::ShootingConfig::antithetic=
+- =rgflux::kappa::ShootingConfig::estimator=
+- =rgflux::kappa::ShootingConfig::seed=
+- =rgflux::kappa::ShootingConfig::steps=
+- =rgflux::kappa::ShootingConfig::time_step=
+- =rgflux::kappa::Side=
+- =rgflux::kappa::Side::Product=
+- =rgflux::kappa::Side::Reactant=
+- =rgflux::kappa::bennett_chandler=
+- =rgflux::kappa::bennett_chandler::BennettChandlerConfig=
+- =rgflux::kappa::bennett_chandler::BennettChandlerConfig::default=
+- =rgflux::kappa::bennett_chandler::BennettChandlerConfig::plateau_end_fraction=
+- =rgflux::kappa::bennett_chandler::BennettChandlerConfig::plateau_start_fraction=
+- =rgflux::kappa::bennett_chandler::BennettChandlerConfig::stats=
+- =rgflux::kappa::bennett_chandler::BennettChandlerConfig::with_plateau_end_fraction=
+- =rgflux::kappa::bennett_chandler::BennettChandlerConfig::with_plateau_start_fraction=
+- =rgflux::kappa::bennett_chandler::BennettChandlerConfig::with_stats=
+- =rgflux::kappa::bennett_chandler::BennettChandlerEstimate=
+- =rgflux::kappa::bennett_chandler::BennettChandlerEstimate::kappa_t=
+- =rgflux::kappa::bennett_chandler::BennettChandlerEstimate::n_eff=
+- =rgflux::kappa::bennett_chandler::BennettChandlerEstimate::plateau=
+- =rgflux::kappa::bennett_chandler::BennettChandlerEstimate::plateau_window=
+- =rgflux::kappa::bennett_chandler::BennettChandlerEstimate::positive_flux_count=
+- =rgflux::kappa::bennett_chandler::BennettChandlerEstimate::standard_error=
+- =rgflux::kappa::bennett_chandler::BennettChandlerEstimate::stationarity=
+- =rgflux::kappa::bennett_chandler::DEFAULT_PLATEAU_END_FRACTION=
+- =rgflux::kappa::bennett_chandler::DEFAULT_PLATEAU_START_FRACTION=
+- =rgflux::kappa::bennett_chandler::DEFAULT_SHOOTING_STEPS=
+- =rgflux::kappa::bennett_chandler::DEFAULT_SHOOTING_TIME_STEP=
+- =rgflux::kappa::bennett_chandler::ReactiveTrajectory=
+- =rgflux::kappa::bennett_chandler::ReactiveTrajectory::initial_normal_velocity=
+- =rgflux::kappa::bennett_chandler::ReactiveTrajectory::new=
+- =rgflux::kappa::bennett_chandler::ReactiveTrajectory::sides=
+- =rgflux::kappa::bennett_chandler::ShootingConfig=
+- =rgflux::kappa::bennett_chandler::ShootingConfig::antithetic=
+- =rgflux::kappa::bennett_chandler::ShootingConfig::default=
+- =rgflux::kappa::bennett_chandler::ShootingConfig::estimator=
+- =rgflux::kappa::bennett_chandler::ShootingConfig::seed=
+- =rgflux::kappa::bennett_chandler::ShootingConfig::steps=
+- =rgflux::kappa::bennett_chandler::ShootingConfig::time_step=
+- =rgflux::kappa::bennett_chandler::ShootingConfig::with_antithetic=
+- =rgflux::kappa::bennett_chandler::ShootingConfig::with_estimator=
+- =rgflux::kappa::bennett_chandler::ShootingConfig::with_seed=
+- =rgflux::kappa::bennett_chandler::ShootingConfig::with_steps=
+- =rgflux::kappa::bennett_chandler::ShootingConfig::with_time_step=
+- =rgflux::kappa::bennett_chandler::Side=
+- =rgflux::kappa::bennett_chandler::Side::Product=
+- =rgflux::kappa::bennett_chandler::Side::Reactant=
+- =rgflux::kappa::bennett_chandler::Side::from_signed_distance=
+- =rgflux::kappa::bennett_chandler::Side::indicator=
+- =rgflux::kappa::bennett_chandler::estimate_bennett_chandler=
+- =rgflux::kappa::bennett_chandler::shoot_bennett_chandler=
+- =rgflux::kappa::bennett_chandler::shoot_reactive_trajectories=
+- =rgflux::kappa::estimate_bennett_chandler=
+- =rgflux::kappa::kramers_transmission_coefficient=
+- =rgflux::kappa::shoot_bennett_chandler=
+- =rgflux::kappa::shoot_reactive_trajectories=
+
+*** =network=
+
+- =rgflux::network=
+- =rgflux::network::NetworkConfig=
+- =rgflux::network::NetworkConfig::boltzmann=
+- =rgflux::network::NetworkConfig::default=
+- =rgflux::network::NetworkConfig::enforce_detailed_balance=
+- =rgflux::network::NetworkConfig::min_rate=
+- =rgflux::network::NetworkConfig::temperature=
+- =rgflux::network::NetworkConfig::with_boltzmann=
+- =rgflux::network::NetworkConfig::with_enforce_detailed_balance=
+- =rgflux::network::NetworkConfig::with_min_rate=
+- =rgflux::network::NetworkConfig::with_temperature=
+- =rgflux::network::RateEdge=
+- =rgflux::network::RateEdge::from=
+- =rgflux::network::RateEdge::new=
+- =rgflux::network::RateEdge::rate=
+- =rgflux::network::RateEdge::to=
+- =rgflux::network::RateTableConfig=
+- =rgflux::network::RateTableConfig::default=
+- =rgflux::network::RateTableConfig::max_steps=
+- =rgflux::network::RateTableConfig::seed=
+- =rgflux::network::RateTableConfig::with_max_steps=
+- =rgflux::network::RateTableConfig::with_seed=
+- =rgflux::network::build_rate_table=
+
+*** =ohtst=
+
+- =rgflux::ohtst=
+- =rgflux::ohtst::OhtstConfig=
+- =rgflux::ohtst::OhtstConfig::burn_in_steps=
+- =rgflux::ohtst::OhtstConfig::default=
+- =rgflux::ohtst::OhtstConfig::max_outer_steps=
+- =rgflux::ohtst::OhtstConfig::max_rotation=
+- =rgflux::ohtst::OhtstConfig::max_translation=
+- =rgflux::ohtst::OhtstConfig::min_overlap=
+- =rgflux::ohtst::OhtstConfig::min_sample_steps=
+- =rgflux::ohtst::OhtstConfig::patience=
+- =rgflux::ohtst::OhtstConfig::retention_stride=
+- =rgflux::ohtst::OhtstConfig::sample_step_factor=
+- =rgflux::ohtst::OhtstConfig::seed=
+- =rgflux::ohtst::OhtstConfig::stats=
+- =rgflux::ohtst::OhtstConfig::time_step=
+- =rgflux::ohtst::OhtstConfig::use_mbar=
+- =rgflux::ohtst::OhtstConfig::with_burn_in_steps=
+- =rgflux::ohtst::OhtstConfig::with_max_outer_steps=
+- =rgflux::ohtst::OhtstConfig::with_max_rotation=
+- =rgflux::ohtst::OhtstConfig::with_max_translation=
+- =rgflux::ohtst::OhtstConfig::with_min_overlap=
+- =rgflux::ohtst::OhtstConfig::with_min_sample_steps=
+- =rgflux::ohtst::OhtstConfig::with_patience=
+- =rgflux::ohtst::OhtstConfig::with_retention_stride=
+- =rgflux::ohtst::OhtstConfig::with_sample_step_factor=
+- =rgflux::ohtst::OhtstConfig::with_seed=
+- =rgflux::ohtst::OhtstConfig::with_stats=
+- =rgflux::ohtst::OhtstConfig::with_time_step=
+- =rgflux::ohtst::OhtstConfig::with_use_mbar=
+- =rgflux::ohtst::OhtstEstimate=
+- =rgflux::ohtst::OhtstEstimate::plane=
+- =rgflux::ohtst::OhtstEstimate::rate=
+- =rgflux::ohtst::OhtstEstimate::standard_error=
+- =rgflux::ohtst::optimize_hyperplane=
+
+*** =pafi=
+
+- =rgflux::pafi=
+- =rgflux::pafi::FreeEnergyProfile=
+- =rgflux::pafi::FreeEnergyProfile::arc_lengths=
+- =rgflux::pafi::FreeEnergyProfile::barrier=
+- =rgflux::pafi::FreeEnergyProfile::barrier_error=
+- =rgflux::pafi::FreeEnergyProfile::dividing_index=
+- =rgflux::pafi::FreeEnergyProfile::free_energy=
+- =rgflux::pafi::FreeEnergyProfile::normalized_log_rate=
+- =rgflux::pafi::FreeEnergyProfile::normalized_rate=
+- =rgflux::pafi::FreeEnergyProfile::normalized_rate_error=
+- =rgflux::pafi::FreeEnergyProfile::reactant_log_partition=
+- =rgflux::pafi::FreeEnergyProfile::reactant_partition=
+- =rgflux::pafi::FreeEnergyProfile::standard_error=
+- =rgflux::pafi::PafiConfig=
+- =rgflux::pafi::PafiConfig::burn_in_steps=
+- =rgflux::pafi::PafiConfig::default=
+- =rgflux::pafi::PafiConfig::max_rounds=
+- =rgflux::pafi::PafiConfig::planes=
+- =rgflux::pafi::PafiConfig::sample_steps=
+- =rgflux::pafi::PafiConfig::seed=
+- =rgflux::pafi::PafiConfig::stats=
+- =rgflux::pafi::PafiConfig::target_error=
+- =rgflux::pafi::PafiConfig::time_step=
+- =rgflux::pafi::PafiConfig::with_burn_in_steps=
+- =rgflux::pafi::PafiConfig::with_max_rounds=
+- =rgflux::pafi::PafiConfig::with_planes=
+- =rgflux::pafi::PafiConfig::with_sample_steps=
+- =rgflux::pafi::PafiConfig::with_seed=
+- =rgflux::pafi::PafiConfig::with_stats=
+- =rgflux::pafi::PafiConfig::with_target_error=
+- =rgflux::pafi::PafiConfig::with_time_step=
+- =rgflux::pafi::PafiConfig::with_zero_temperature_tol=
+- =rgflux::pafi::PafiConfig::zero_temperature_tol=
+- =rgflux::pafi::pafi_profile=
+- =rgflux::pafi::pafi_profile_dyn=
+
+*** =stats=
+
+- =rgflux::stats=
+- =rgflux::stats::BatchEstimate=
+- =rgflux::stats::BatchEstimate::batch_count=
+- =rgflux::stats::BatchEstimate::batch_size=
+- =rgflux::stats::BatchEstimate::mean=
+- =rgflux::stats::BatchEstimate::n_eff=
+- =rgflux::stats::BatchEstimate::n_samples=
+- =rgflux::stats::BatchEstimate::standard_error=
+- =rgflux::stats::BatchEstimate::tau_int=
+- =rgflux::stats::BatchEstimate::variance=
+- =rgflux::stats::DEFAULT_FIRST_FRACTION=
+- =rgflux::stats::DEFAULT_LAST_FRACTION=
+- =rgflux::stats::DEFAULT_MAX_Z_SCORE=
+- =rgflux::stats::DEFAULT_MIN_BATCHES=
+- =rgflux::stats::MIN_STATIONARITY_SAMPLES=
+- =rgflux::stats::SERIES_FLAT_TOL=
+- =rgflux::stats::StationarityReport=
+- =rgflux::stats::StationarityReport::drift_slope=
+- =rgflux::stats::StationarityReport::first_mean=
+- =rgflux::stats::StationarityReport::is_stationary=
+- =rgflux::stats::StationarityReport::max_z_score=
+- =rgflux::stats::StationarityReport::second_mean=
+- =rgflux::stats::StationarityReport::z_score=
+- =rgflux::stats::StatsConfig=
+- =rgflux::stats::StatsConfig::batch_size=
+- =rgflux::stats::StatsConfig::default=
+- =rgflux::stats::StatsConfig::max_z_score=
+- =rgflux::stats::StatsConfig::min_batches=
+- =rgflux::stats::StatsConfig::stationarity_first_fraction=
+- =rgflux::stats::StatsConfig::stationarity_last_fraction=
+- =rgflux::stats::StatsConfig::with_batch_size=
+- =rgflux::stats::StatsConfig::with_max_z_score=
+- =rgflux::stats::StatsConfig::with_min_batches=
+- =rgflux::stats::StatsConfig::with_stationarity_first_fraction=
+- =rgflux::stats::StatsConfig::with_stationarity_last_fraction=
+- =rgflux::stats::VARIANCE_REL_FLOOR=
+- =rgflux::stats::batch_means=
+- =rgflux::stats::check_stationarity=
+- =rgflux::stats::effective_sample_size=
+
+# END GENERATED PUBLIC API
