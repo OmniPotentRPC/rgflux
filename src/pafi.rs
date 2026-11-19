@@ -1301,6 +1301,30 @@ fn reactant_log_partition_and_sensitivity(
     Ok((reactant_log_partition, d_ln_zr_d_f))
 }
 
+fn trapezoid_to(arcs: &[f64], gradients: &[f64], arc: f64) -> f64 {
+    let mut accumulated = 0.0_f64;
+    for k in 0..arcs.len() - 1 {
+        let left = arcs[k];
+        if arc <= left {
+            break;
+        }
+        let width = arcs[k + 1] - left;
+        let fraction = ((arc.min(arcs[k + 1]) - left) / width).clamp(0.0, 1.0);
+        let slope = gradients[k + 1] - gradients[k];
+        accumulated += width * (gradients[k] * fraction + slope * fraction * fraction / 2.0);
+        if arc <= arcs[k + 1] {
+            break;
+        }
+    }
+    accumulated
+}
+
+fn trapezoid_cumulative(arcs: &[f64], gradients: &[f64]) -> Vec<f64> {
+    (0..arcs.len())
+        .map(|k| trapezoid_to(arcs, gradients, arcs[k]))
+        .collect()
+}
+
 fn integrate_profile(
     quadrature: &Quadrature,
     gradients: &[f64],
@@ -1338,6 +1362,10 @@ fn integrate_profile(
         return Err(FluxError::NonFinite("PAFI integrated free energy"));
     }
     let dividing = quadrature.dividing_plane(gradients, &free_energy);
+    let lower = trapezoid_cumulative(&quadrature.arcs, gradients);
+    if lower.iter().any(|value| !value.is_finite()) {
+        return Err(FluxError::NonFinite("PAFI trapezoid free energy"));
+    }
     let propagate = |weights: &[f64]| {
         weights
             .iter()
@@ -1349,10 +1377,18 @@ fn integrate_profile(
     let standard_error: Vec<f64> = quadrature
         .cumulative
         .iter()
-        .map(|weights| propagate(weights))
+        .zip(&free_energy)
+        .zip(&lower)
+        .map(|((weights, hermite), trapezoid)| {
+            propagate(weights).hypot((hermite - trapezoid).abs())
+        })
         .collect();
     let barrier = dividing.free_energy;
-    let barrier_error = propagate(&dividing.weights);
+    let lower_barrier = trapezoid_to(&quadrature.arcs, gradients, dividing.arc);
+    if !lower_barrier.is_finite() {
+        return Err(FluxError::NonFinite("PAFI trapezoid barrier"));
+    }
+    let barrier_error = propagate(&dividing.weights).hypot((barrier - lower_barrier).abs());
     if !barrier.is_finite() || !barrier_error.is_finite() || barrier_error < 0.0 {
         return Err(FluxError::NonFinite("PAFI barrier"));
     }
@@ -1955,7 +1991,10 @@ mod tests {
         assert_eq!(profile.dividing_index, 1);
         assert_abs_diff_eq!(profile.dividing_arc, 1.0, epsilon = 1.0e-12);
         assert_abs_diff_eq!(profile.barrier, 13.0 / 12.0, epsilon = 1.0e-12);
-        assert_eq!(profile.barrier_error, 0.0);
+        let trapezoid_barrier = 0.5 * (gradients[0] + gradients[1]);
+        let truncation = (profile.barrier - trapezoid_barrier).abs();
+        assert!(truncation > 0.0);
+        assert_abs_diff_eq!(profile.barrier_error, truncation, epsilon = 1.0e-12);
         assert_eq!(profile.normalized_rate_error, Some(0.0));
         assert_abs_diff_eq!(profile.reactant_frequency, 2.0, epsilon = 1.0e-12);
         // The maximum is the node s = 1, so the reactant integral is the one
