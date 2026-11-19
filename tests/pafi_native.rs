@@ -283,18 +283,21 @@ fn normalized_pafi_rate_matches_analytic_profile() {
         "pafi_profile returned {profile_result:?}",
     );
     let profile = profile_result.expect("checked above");
-    let rate = profile.normalized_rate;
-    let rate_error = profile.normalized_rate_error;
+    let rate = profile.normalized_rate.expect("finite normalized rate");
+    let rate_error = profile
+        .normalized_rate_error
+        .expect("finite normalized rate error");
     let dividing = profile.dividing_index;
     assert!(rate_error.is_finite() && rate_error >= 0.0);
     assert!(dividing > 0);
     let reconstructed_zr =
         integrate_reactant_partition(&profile.arc_lengths, &profile.free_energy, thermal);
+    let reactant_partition = profile
+        .reactant_partition
+        .expect("finite reactant partition");
     assert!(
-        (profile.reactant_partition - reconstructed_zr).abs() <= 1.0e-12,
-        "reactant partition mismatch: {:.16e} vs {:.16e}",
-        profile.reactant_partition,
-        reconstructed_zr
+        (reactant_partition - reconstructed_zr).abs() <= 1.0e-12,
+        "reactant partition mismatch: {reactant_partition:.16e} vs {reconstructed_zr:.16e}"
     );
     assert!(
         (profile.reactant_log_partition - reconstructed_zr.ln()).abs() <= 1.0e-12,
