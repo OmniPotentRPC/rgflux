@@ -323,6 +323,102 @@ fn double_well_2d_native_shooting_matches_high_friction_kramers_within_se() {
     );
 }
 
+#[test]
+fn double_well_1d_late_return_stays_at_committed_kappa() {
+    // 1D asymmetric double well with saddle at x = 0 (V(0) = 0, V'(0) = 0):
+    // - Product basin (x >= 0): V(x) = 16 x^4 - 8 x^2 (minimum at x = 0.5, outer wall at x = 1 / sqrt(2)).
+    //   A forward shot (v_x(0) > 0) enters x > 0 and stays on Side::Product for >= 35 steps,
+    //   then reflects off the outer wall and returns across x = 0 into x < 0.
+    // - Reactant basin (x < 0): V(x) = 0.0001 x^4 - 0.01 x^2 (wide basin, minimum at x = -5 * sqrt(2)).
+    //   Once in x < 0, the trajectory remains on Side::Reactant across the entire plateau window [140, 280).
+    struct AsymmetricDoubleWell1D;
+
+    impl rgsaddle::PointSurface for AsymmetricDoubleWell1D {
+        fn eval(&self, r: ArrayView1<f64>) -> Result<(f64, Array1<f64>), rgsaddle::SaddleError> {
+            let x = r[0];
+            let (c4, c2) = if x >= 0.0 { (16.0, 8.0) } else { (0.0001, 0.01) };
+            let energy = c4 * x.powi(4) - c2 * x * x;
+            let gx = 4.0 * c4 * x.powi(3) - 2.0 * c2 * x;
+            Ok((energy, Array1::from_vec(vec![gx])))
+        }
+    }
+
+    assert_eq!(rgflux::kappa::KappaConfig::default().commit_checkpoints, 4);
+
+    let plane = HyperplaneConstraint::new(Array1::from_vec(vec![1.0]), 0.0).expect("x = 0");
+    let mut engine = NativeEngine::new(
+        AsymmetricDoubleWell1D,
+        NativeConfig::default()
+            .with_masses(Array1::from_vec(vec![1.0]))
+            .with_thermostat(
+                ThermostatConfig::default()
+                    .with_gamma(0.0)
+                    .with_temperature(0.08),
+            )
+            .with_seed(23),
+    )
+    .expect("1d engine");
+    let starts = Array2::zeros((8, 1));
+    let shoot_cfg = ShootingConfig::default()
+        .with_steps(280)
+        .with_time_step(0.02)
+        .with_antithetic(true)
+        .with_seed(23);
+
+    let est = shoot_bennett_chandler(&mut engine, &plane, starts.view(), &shoot_cfg)
+        .expect("1d committed estimate");
+    assert_abs_diff_eq!(est.plateau, 1.0, epsilon = ALGEBRAIC_TOL);
+    for &kt in &est.kappa_t {
+        assert_abs_diff_eq!(kt, 1.0, epsilon = ALGEBRAIC_TOL);
+    }
+}
+
+#[test]
+fn double_well_2d_late_return_stays_at_committed_kappa() {
+    struct AsymmetricDoubleWell2D;
+
+    impl rgsaddle::PointSurface for AsymmetricDoubleWell2D {
+        fn eval(&self, r: ArrayView1<f64>) -> Result<(f64, Array1<f64>), rgsaddle::SaddleError> {
+            let (x, y) = (r[0], r[1]);
+            let (c4, c2) = if x >= 0.0 { (16.0, 8.0) } else { (0.0001, 0.01) };
+            let energy = c4 * x.powi(4) - c2 * x * x + y * y;
+            let gx = 4.0 * c4 * x.powi(3) - 2.0 * c2 * x;
+            let gy = 2.0 * y;
+            Ok((energy, Array1::from_vec(vec![gx, gy])))
+        }
+    }
+
+    assert_eq!(rgflux::kappa::KappaConfig::default().commit_checkpoints, 4);
+
+    let plane =
+        HyperplaneConstraint::new(Array1::from_vec(vec![1.0, 0.0]), 0.0).expect("x = 0 plane");
+    let mut engine = NativeEngine::new(
+        AsymmetricDoubleWell2D,
+        NativeConfig::default()
+            .with_masses(Array1::from_vec(vec![1.0, 1.0]))
+            .with_thermostat(
+                ThermostatConfig::default()
+                    .with_gamma(0.0)
+                    .with_temperature(0.08),
+            )
+            .with_seed(23),
+    )
+    .expect("2d engine");
+    let starts = Array2::zeros((8, 2));
+    let shoot_cfg = ShootingConfig::default()
+        .with_steps(280)
+        .with_time_step(0.02)
+        .with_antithetic(true)
+        .with_seed(23);
+
+    let est = shoot_bennett_chandler(&mut engine, &plane, starts.view(), &shoot_cfg)
+        .expect("2d committed estimate");
+    assert_abs_diff_eq!(est.plateau, 1.0, epsilon = ALGEBRAIC_TOL);
+    for &kt in &est.kappa_t {
+        assert_abs_diff_eq!(kt, 1.0, epsilon = ALGEBRAIC_TOL);
+    }
+}
+
 proptest! {
     #[test]
     fn positive_flux_ensembles_satisfy_bounds_scale_invariance_and_complementarity(
