@@ -1,0 +1,22 @@
+# rgflux
+
+> Rare event kinetics over rgsaddle and rgmin.
+
+The Rust API separates rate estimators and trajectory sampling from
+potential energy surfaces and molecular dynamics engines.
+
+## Documentation
+
+- [rgflux](docs/index.html): `rgflux` separates rare-event kinetics from specific force fields and molecular dynamics codes. Every sampler drives the `DynamicsEngine` trait, while recorded trajectory estimators such as `kappa::bennett_chandler` stay engine-free.
+- [Getting started](docs/getting-started.html): Add `rgflux` from crates.io (alongside `ndarray` and `rgsaddle` when defining custom potential surfaces):
+- [How-to guides](docs/howto.html): Construct a `HyperplaneConstraint` from a direction vector and scalar offset c, configure `HyperplaneConfig`, and call `hyperplane::sample_hyperplane` over any `DynamicsEngine`. `sample_hyperplane` installs the constraint, runs BAOAB + R...
+- [Reference](docs/reference.html): Every public configuration struct is `#[non_exhaustive]` and provides chainable `#[must_use]` `with_*` builder methods. Setter methods for `Option<T>` fields accept `impl Into<Option<T>>` so passing a bare `T` sets `Some(T)` and passing...
+- [Explanation](docs/explanation.html): Saddle-point searches in `rgsaddle` and local or Riemannian minimizers in `rgmin` query static energy and gradient surfaces. Finite-temperature kinetics additionally requires finite-timestep propagation, thermal velocity seeding, dividin...
+- [Bibliography](docs/reference/bibliography.html): The method references are stored in `docs/source/references.bib`.
+- [Contributing](docs/contributing/index.html): When `liblammpc` is installed, also run `--all-features` clippy, tests, and rustdoc:
+- [Changelog](docs/changelog.html): Changelog documentation.
+
+## Source references
+
+- [Rust crate API](https://docs.rs/rgflux): Generated Rust API reference.
+- [Repository](https://github.com/OmniPotentRPC/rgflux): Source and examples.
