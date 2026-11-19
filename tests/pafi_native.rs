@@ -9,9 +9,11 @@ use rgflux::pafi::{FreeEnergyProfile, PafiConfig, pafi_profile};
 use rgflux::stats::StatsConfig;
 
 struct WideningDoubleWell;
-struct AnisotropicHarmonic {
+struct CircularValley {
     ax: f64,
     ay: f64,
+    radius: f64,
+    along_path: f64,
 }
 
 impl rgsaddle::PointSurface for WideningDoubleWell {
@@ -27,12 +29,40 @@ impl rgsaddle::PointSurface for WideningDoubleWell {
     }
 }
 
-impl rgsaddle::PointSurface for AnisotropicHarmonic {
+impl rgsaddle::PointSurface for CircularValley {
     fn eval(&self, r: ArrayView1<'_, f64>) -> Result<(f64, Array1<f64>), rgsaddle::SaddleError> {
-        let x = r[0];
-        let y = r[1];
-        let energy = 0.5 * (self.ax * x * x + 4.0 * self.ay * y * y);
-        let gradient = Array1::from_vec(vec![self.ax * x, 4.0 * self.ay * y]);
+        // Masses are `(1, 4)`, so `q = (x, 2 y)` is mass-weighted. The floor
+        // of the valley is the circle `|q| = radius`. Transverse stiffness is
+        // `ax` at angle 0 and `ay` at `pi / 2`. `along_path` is a shallow well
+        // in the arc so the first image is a positive definite minimum.
+        let qx = r[0];
+        let qy = 2.0 * r[1];
+        let rho_sq = qx * qx + qy * qy;
+        let rho = rho_sq.sqrt();
+        if !rho.is_finite() || rho == 0.0 {
+            return Err(rgsaddle::SaddleError::NonFinite("circular valley radius"));
+        }
+        let theta = qy.atan2(qx);
+        let radial = rho - self.radius;
+        let lambda = (self.ax * qx * qx + self.ay * qy * qy) / rho_sq;
+        let angle = std::f64::consts::FRAC_PI_2 - theta;
+        let energy = 0.5 * lambda * radial * radial
+            + 0.5 * self.along_path * self.radius * self.radius * angle * angle;
+        let d_rho_dqx = qx / rho;
+        let d_rho_dqy = qy / rho;
+        let d_theta_dqx = -qy / rho_sq;
+        let d_theta_dqy = qx / rho_sq;
+        let d_lambda_d_theta = 2.0 * (self.ay - self.ax) * (qy / rho) * (qx / rho);
+        let radial_sq = radial * radial;
+        let d_trans_dqx =
+            0.5 * d_lambda_d_theta * d_theta_dqx * radial_sq + lambda * radial * d_rho_dqx;
+        let d_trans_dqy =
+            0.5 * d_lambda_d_theta * d_theta_dqy * radial_sq + lambda * radial * d_rho_dqy;
+        let well = self.along_path * self.radius * self.radius * angle;
+        let gradient = Array1::from_vec(vec![
+            d_trans_dqx - well * d_theta_dqx,
+            2.0 * (d_trans_dqy - well * d_theta_dqy),
+        ]);
         Ok((energy, gradient))
     }
 }
@@ -53,7 +83,7 @@ fn tilted_path(start: f64, end: f64, planes: usize, slope: f64) -> Array2<f64> {
         let t = (i as f64) / ((planes - 1) as f64);
         let x = start + (end - start) * t;
         path[[i, 0]] = x;
-        path[[i, 1]] = slope * x;
+        path[[i, 1]] = slope * (x - start);
     }
     path
 }
@@ -133,9 +163,15 @@ fn pafi_widening_barrier_mass_anisotropic_matches_analytic_within_reported_se() 
 }
 
 const CURVED_THERMAL: f64 = 0.2;
-const CURVED_RADIUS: f64 = 1.2;
-const CURVED_FORCE_CONSTANT_X: f64 = 3.0;
-const CURVED_FORCE_CONSTANT_Y: f64 = 1.0;
+/// Power of two, so the circle `|q| = radius` is exact in floating point and
+/// the reactant gradient at the first image is a true zero.
+const CURVED_RADIUS: f64 = 1.0;
+const CURVED_STIFFNESS_END: f64 = 120.0;
+const CURVED_STIFFNESS_START: f64 = 40.0;
+/// Curvature along the arc. Small next to `kT`, large next to the zero-mode
+/// floor `sqrt(epsilon) * stiffness`, so the floor is a minimum and the
+/// potential rise does not hide the transverse entropy.
+const CURVED_ALONG_PATH: f64 = 1.0e-4;
 const CURVED_PLANES: usize = 9;
 const CURVED_SEED: u64 = 1_234;
 
@@ -169,9 +205,11 @@ fn curved_profile(extra_images: usize) -> FreeEnergyProfile {
         .with_stats(StatsConfig::default().with_min_batches(4))
         .with_seed(CURVED_SEED);
     let mut engine = NativeEngine::new(
-        AnisotropicHarmonic {
-            ax: CURVED_FORCE_CONSTANT_X,
-            ay: CURVED_FORCE_CONSTANT_Y,
+        CircularValley {
+            ax: CURVED_STIFFNESS_END,
+            ay: CURVED_STIFFNESS_START,
+            radius: CURVED_RADIUS,
+            along_path: CURVED_ALONG_PATH,
         },
         NativeConfig::default()
             .with_masses(Array1::from_vec(vec![1.0, 4.0]))
@@ -191,6 +229,43 @@ fn curved_profile(extra_images: usize) -> FreeEnergyProfile {
 }
 
 #[test]
+fn circular_valley_starts_at_a_minimum() {
+    let start = mass_weighted_circular_path(CURVED_RADIUS, PI * 0.5, 0.0, 2);
+    let mut engine = NativeEngine::new(
+        CircularValley {
+            ax: CURVED_STIFFNESS_END,
+            ay: CURVED_STIFFNESS_START,
+            radius: CURVED_RADIUS,
+            along_path: CURVED_ALONG_PATH,
+        },
+        NativeConfig::default()
+            .with_masses(Array1::from_vec(vec![1.0, 4.0]))
+            .with_thermostat(
+                ThermostatConfig::default()
+                    .with_temperature(CURVED_THERMAL)
+                    .with_boltzmann(1.0),
+            ),
+    )
+    .expect("native engine");
+    engine
+        .set_positions(start.row(0))
+        .expect("set the first image");
+    let (_, forces) = engine.energy_and_forces().expect("forces");
+    let peak = forces
+        .iter()
+        .fold(0.0_f64, |acc, force| acc.max(force.abs()));
+    assert!(
+        peak <= rgflux::stats::SERIES_FLAT_TOL,
+        "valley reactant force peak {peak}"
+    );
+    let config = PafiConfig::default()
+        .with_planes(2)
+        .with_burn_in_steps(1)
+        .with_sample_steps(2);
+    pafi_profile(&mut engine, start.view(), &config).expect("valley reactant is a minimum");
+}
+
+#[test]
 fn curved_mass_weighted_harmonic_profile_requires_jacobian() {
     let (profile, longer) = std::thread::scope(|scope| {
         let base = scope.spawn(|| curved_profile(0));
@@ -200,8 +275,12 @@ fn curved_mass_weighted_harmonic_profile_requires_jacobian() {
             longer.join().expect("longer curved profile thread"),
         )
     });
-    let analytic_barrier =
-        0.5 * CURVED_THERMAL * (CURVED_FORCE_CONSTANT_X / CURVED_FORCE_CONSTANT_Y).ln();
+    // On the valley floor the radial spring is harmonic in the flat measure
+    // of the plane, so its free energy changes by `1/2 kT ln(k_end / k_start)`.
+    // The shallow well adds `1/2 * along_path * (radius * pi / 2)^2`.
+    let arc = CURVED_RADIUS * PI * 0.5;
+    let analytic_barrier = 0.5 * CURVED_ALONG_PATH * arc * arc
+        + 0.5 * CURVED_THERMAL * (CURVED_STIFFNESS_END / CURVED_STIFFNESS_START).ln();
     let z = (profile.barrier - analytic_barrier).abs() / profile.barrier_error;
     eprintln!(
         "curved harmonic barrier={:.8} se={:.8} analytic={:.8} z={:.4}",
@@ -310,20 +389,30 @@ fn normalized_pafi_rate_matches_analytic_profile() {
     }
     let analytic_partition = dx * partition_sum / 3.0;
     let analytic_barrier = analytic_free_energy(0.0) - reference;
-    let analytic_rate =
+    let line_integral_rate =
         (thermal / (2.0 * PI)).sqrt() * (-analytic_barrier / thermal).exp() / analytic_partition;
-    // Gaussian normalization against the exact full line integral, plus two
-    // reported standard errors, the same coverage the barrier tests use.
-    let predicted = omega_0 / (2.0 * PI) * (-analytic_barrier / thermal).exp();
-    let tolerance = (predicted - analytic_rate).abs() + 2.0 * rate_error;
-    let absolute_error = (rate - analytic_rate).abs();
-    let relative_error = absolute_error / analytic_rate;
+    // Harmonic reactant normalization is `Z_R = sqrt(2 π kT) / ω_0`, so
+    // `k = ω_0 / (2 π) exp(-ΔF / kT)`. This well is wider than that parabola,
+    // and the line integral above is the larger partition. On this sample the
+    // two rates differ by about `1.0e-4`, while two reported standard errors
+    // are about `7.5e-5`. Coverage of two standard errors, the same factor the
+    // barrier tests use, therefore rejects a rate that dropped the reactant
+    // frequency and kept the full line integral.
+    const RATE_COVERAGE: f64 = 2.0;
+    let harmonic_rate = omega_0 / (2.0 * PI) * (-analytic_barrier / thermal).exp();
+    let tolerance = RATE_COVERAGE * rate_error;
+    let absolute_error = (rate - harmonic_rate).abs();
+    let gap = (harmonic_rate - line_integral_rate).abs();
     eprintln!(
-        "normalized rate={rate:.8e} se={rate_error:.8e} analytic={analytic_rate:.8e} relative error={relative_error:.4} tolerance={tolerance:.4e}",
+        "normalized rate={rate:.8e} se={rate_error:.8e} harmonic={harmonic_rate:.8e} line integral={line_integral_rate:.8e} gap={gap:.4e} tolerance={tolerance:.4e}",
+    );
+    assert!(
+        gap > tolerance,
+        "the harmonic gap {gap:.4e} no longer exceeds two standard errors {tolerance:.4e}, so this tolerance would not catch a missing reactant frequency",
     );
     assert!(
         absolute_error <= tolerance,
-        "rate {rate:.8e} ± {rate_error:.8e} versus analytic {analytic_rate:.8e} misses the Gaussian model by more than {tolerance:.4e}",
+        "rate {rate:.8e} ± {rate_error:.8e} versus harmonic {harmonic_rate:.8e} exceeds {tolerance:.4e}",
     );
 }
 
@@ -351,8 +440,9 @@ fn arc_lengths_reflect_mass_weighting() {
     let end = 0.0_f64;
     let path = tilted_path(start, end, planes, slope);
     let spacing = 1.0 / ((planes - 1) as f64);
-    // Along the path the potential is
-    // `V(x, slope * x) = (1 - x^2)^2 + 0.5 * (1.5 + 0.5 * x) * (slope * x)^2`.
+    // The path is `y = slope * (x - start)`, so it leaves the minimum at
+    // `(-1, 0)`. Along it the potential is
+    // `V = (1 - x^2)^2 + 0.5 * (1.5 + 0.5 * x) * (slope * (x - start))^2`.
     // The quartic part has third derivative `4 * 3 * 2 * x`, and the cubic part
     // `0.5 * 0.5 * slope^2 * x^3` has the constant `3 * 2 * 0.5 * 0.5 * slope^2`.
     // The path force `V'` therefore has curvature at most `third_derivative_bound`,

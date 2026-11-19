@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - The PAFI dividing-plane search inspected only the intervals next to the highest sampled free energy, so a larger maximum of the interpolant on another interval was missed. The normalized rate used a doubled integral of `exp(-F / kT)` for `Z_R`, which biased `k` after the barrier itself had converged. The search now covers every interval, and `Z_R` comes from the reactant Hessian.
+- PAFI formed Lagrange derivative weights by a running product that overflowed on a wide arc, and it exponentiated `ln Z_R` without checking that the result was finite. Both now stay in log space and return `NonFinite` when the exponential overflows. The reactant Hessian step grew with the absolute coordinates, so a translation changed it. The step is a fraction of the displacement. The reactant check only required positive curvature along the path normal. It now requires a flat gradient and a positive definite Hessian once zero modes are excluded.
 
 ## [0.1.0] - 2026-11-19
 

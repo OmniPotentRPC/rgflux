@@ -45,9 +45,12 @@
 //!
 //! `Z_R` and `k` are also returned as [`FreeEnergyProfile::reactant_log_partition`]
 //! and [`FreeEnergyProfile::normalized_log_rate`], so a large barrier does not
-//! underflow the reported logarithm. In the harmonic limit this is the
-//! Vineyard rate: the transverse entropy sits in `Delta F`, and `omega_0` is
-//! the curvature of the potential along the path.
+//! underflow the reported logarithm. The value of `Z_R` itself is the
+//! exponential of that logarithm, and the call fails when the exponential is
+//! not finite. The Hermite derivative weights are products of node gaps and
+//! are formed in log space for the same reason. In the harmonic limit this is
+//! the Vineyard rate: the transverse entropy sits in `Delta F`, and `omega_0`
+//! is the curvature of the potential along the path.
 //!
 //! ## What the code does
 //!
@@ -65,16 +68,24 @@
 //!    is one energy unit of the engine, and compares that dimensionless value
 //!    with [`PafiConfig::zero_temperature_tol`]. A mismatch returns
 //!    [`FluxError::InvalidConfig`] before any sampling.
-//! 4. On each plane the engine is constrained, placed at the anchor, given
+//! 4. The first image is certified as the reactant minimum before any
+//!    sampling. The gradient norm must sit at or below
+//!    [`crate::stats::SERIES_FLAT_TOL`], and the mass-weighted Hessian must be
+//!    positive definite once eigenvalues on the zero-mode floor are set
+//!    aside. The Hessian products are central differences whose step is a
+//!    fixed fraction of the displacement, so a translation of every coordinate
+//!    leaves the Hessian unchanged. `omega_0` is then solved by conjugate
+//!    gradients on those products.
+//! 5. On each plane the engine is constrained, placed at the anchor, given
 //!    Maxwell-Boltzmann velocities, run for `burn_in_steps`, and then run for
 //!    `sample_steps` steps that each record
 //!    `lambda (n . X' - (x - X) . n')`. Batch means over the samples give the
 //!    mean force and its standard error on each plane.
-//! 5. The profile, barrier and rate follow from the plane means. The
+//! 6. The profile, barrier and rate follow from the plane means. The
 //!    standard errors of the planes are independent and propagate through the
 //!    Hermite weights. The reactant Hessian is deterministic, so the rate
 //!    error comes from the barrier alone, by the delta method.
-//! 6. With `target_error` set, steps 4 and 5 repeat for up to `max_rounds`
+//! 7. With `target_error` set, steps 5 and 6 repeat for up to `max_rounds`
 //!    rounds, each adding `sample_steps` fresh samples to every plane, until
 //!    the standard error of the barrier is at most `target_error`. Without
 //!    it there is one round. The returned profile uses all samples so far.
@@ -99,8 +110,10 @@
 //!   anchor, so a plane whose thermal centre lies far from its anchor needs a
 //!   long burn-in.
 //! - The first image is the reactant minimum. The rate normalization uses the
-//!   reactant Hessian there. A non-positive curvature along the path normal
-//!   makes `Z_R` undefined and the call fails.
+//!   reactant Hessian there. The call checks the gradient and the positive
+//!   definite character of that Hessian, excluding zero modes. A failing check,
+//!   or a non-positive curvature along the path normal, makes `Z_R` undefined
+//!   and the call fails.
 //!
 //! ## Units
 //!
@@ -205,7 +218,7 @@
 
 use std::f64::consts::{PI, TAU};
 
-use ndarray::{Array1, ArrayView1, ArrayView2};
+use ndarray::{Array1, Array2, ArrayView1, ArrayView2};
 use rgmin::vecops::{dot, nrm2};
 
 use crate::engine::{
@@ -213,7 +226,7 @@ use crate::engine::{
     validate_masses,
 };
 use crate::error::FluxError;
-use crate::stats::{StatsConfig, batch_means};
+use crate::stats::{SERIES_FLAT_TOL, StatsConfig, batch_means};
 
 /// Number of planes in the default [`PafiConfig`].
 const DEFAULT_PLANES: usize = 9;
@@ -731,6 +744,30 @@ const DERIVATIVE_WINDOW: usize = 5;
 /// sign change of the force is refined.
 const MAXIMUM_SCAN_POINTS: usize = 128;
 
+/// Central difference step as a fraction of the displacement.
+///
+/// The cube root of machine epsilon balances the `O(h^2)` truncation of a
+/// second derivative against roundoff. The fraction multiplies the
+/// displacement vector, so a translation of every coordinate leaves the
+/// step, and therefore the Hessian product, unchanged.
+fn hessian_displacement_fraction() -> f64 {
+    f64::EPSILON.cbrt()
+}
+
+/// Eigenvalues no larger than this fraction of `1 +` the stiffest curvature
+/// are zero modes (translation or rotation), not negative curvature.
+///
+/// A central difference with step [`hessian_displacement_fraction`] rounds
+/// an exact zero eigenvalue down near `epsilon^(2/3)`. The square root of
+/// machine epsilon sits above that roundoff and below a curvature of order one.
+fn reactant_zero_mode_floor() -> f64 {
+    f64::EPSILON.sqrt()
+}
+
+/// `rgsaddle::exact_eigh` uses cyclic Jacobi through this dimension when the
+/// `faer` feature is off. A larger reactant is rejected instead of panicking.
+const REACTANT_HESSIAN_EIGEN_LIMIT: usize = 128;
+
 /// Cubic Hermite quadrature of the plane mean forces.
 ///
 /// Each interval uses the cubic Hermite interpolant of `g = dF/ds`. The
@@ -766,29 +803,70 @@ struct DividingPlane {
     weights: Vec<f64>,
 }
 
-fn lagrange_derivative_weights(nodes: &[f64], at: usize) -> Vec<f64> {
+fn checked_exp(log_value: f64, context: &'static str) -> Result<f64, FluxError> {
+    if !log_value.is_finite() {
+        return Err(FluxError::NonFinite(context));
+    }
+    let value = log_value.exp();
+    if !value.is_finite() {
+        return Err(FluxError::NonFinite(context));
+    }
+    Ok(value)
+}
+
+fn lagrange_derivative_weights(nodes: &[f64], at: usize) -> Result<Vec<f64>, FluxError> {
     let mut weights = vec![0.0_f64; nodes.len()];
     for j in 0..nodes.len() {
         if j == at {
-            weights[j] = (0..nodes.len())
-                .filter(|&m| m != at)
-                .map(|m| 1.0 / (nodes[at] - nodes[m]))
-                .sum();
-        } else {
-            let mut numerator = 1.0_f64;
-            let mut denominator = 1.0_f64;
+            let mut diagonal = 0.0_f64;
             for m in 0..nodes.len() {
-                if m != j {
-                    denominator *= nodes[j] - nodes[m];
-                    if m != at {
-                        numerator *= nodes[at] - nodes[m];
+                if m == at {
+                    continue;
+                }
+                let gap = nodes[at] - nodes[m];
+                if !gap.is_finite() || gap == 0.0 {
+                    return Err(FluxError::NonFinite("PAFI Lagrange derivative weight"));
+                }
+                diagonal += 1.0 / gap;
+            }
+            if !diagonal.is_finite() {
+                return Err(FluxError::NonFinite("PAFI Lagrange derivative weight"));
+            }
+            weights[j] = diagonal;
+        } else {
+            // `l_j'(x_at) = prod_{m != j, m != at} (x_at - x_m) / prod_{m != j} (x_j - x_m)`.
+            // The products overflow when the nodes span more than about `f64::MAX.sqrt()`,
+            // while the ratio stays finite. Sum the logs, then exponentiate once.
+            let mut log_magnitude = 0.0_f64;
+            let mut negative = false;
+            for m in 0..nodes.len() {
+                if m == j {
+                    continue;
+                }
+                let gap = nodes[j] - nodes[m];
+                if !gap.is_finite() || gap == 0.0 {
+                    return Err(FluxError::NonFinite("PAFI Lagrange derivative weight"));
+                }
+                log_magnitude -= gap.abs().ln();
+                if gap.is_sign_negative() {
+                    negative = !negative;
+                }
+                if m != at {
+                    let span = nodes[at] - nodes[m];
+                    if !span.is_finite() || span == 0.0 {
+                        return Err(FluxError::NonFinite("PAFI Lagrange derivative weight"));
+                    }
+                    log_magnitude += span.abs().ln();
+                    if span.is_sign_negative() {
+                        negative = !negative;
                     }
                 }
             }
-            weights[j] = numerator / denominator;
+            let magnitude = checked_exp(log_magnitude, "PAFI Lagrange derivative weight")?;
+            weights[j] = if negative { -magnitude } else { magnitude };
         }
     }
-    weights
+    Ok(weights)
 }
 
 impl Quadrature {
@@ -813,7 +891,7 @@ impl Quadrature {
         let mut derivative = vec![vec![0.0_f64; n]; n];
         for (i, row) in derivative.iter_mut().enumerate() {
             let start = i.saturating_sub(window / 2).min(n - window);
-            let local = lagrange_derivative_weights(&arcs[start..start + window], i - start);
+            let local = lagrange_derivative_weights(&arcs[start..start + window], i - start)?;
             for (offset, weight) in local.into_iter().enumerate() {
                 row[start + offset] = weight;
             }
@@ -1045,7 +1123,7 @@ fn integrate_profile(
     if !reactant_log_partition.is_finite() {
         return Err(FluxError::NonFinite("PAFI reactant log partition"));
     }
-    let reactant_partition = reactant_log_partition.exp();
+    let reactant_partition = checked_exp(reactant_log_partition, "PAFI reactant partition")?;
     let normalized_log_rate = reactant_frequency.ln() - TAU.ln() - barrier / kbt;
     if !normalized_log_rate.is_finite() {
         return Err(FluxError::InvalidConfig(
@@ -1083,15 +1161,138 @@ fn integrate_profile(
     })
 }
 
+/// Mass-weighted Hessian-vector product `M^{-1/2} (d grad V) M^{-1/2} direction`.
+///
+/// The probe moves `fraction` length units along the unit displacement, with
+/// `fraction` equal to [`hessian_displacement_fraction`]. The same step is
+/// used for every direction, and it does not depend on the absolute
+/// coordinates, so translating every coordinate leaves the product unchanged.
+///
+/// [`rgsaddle::numerical_hvp`] is not used. It needs a shared
+/// [`rgsaddle::PointSurface`], and its step sign follows the absolute
+/// position through `direction · x`. This path only has a [`DynamicsEngine`],
+/// and the central difference above has no absolute position in the step.
+fn mass_weighted_hessian_product<E: DynamicsEngine + ?Sized>(
+    engine: &mut E,
+    origin: ArrayView1<'_, f64>,
+    root_mass: ArrayView1<'_, f64>,
+    direction: ArrayView1<'_, f64>,
+) -> Result<Array1<f64>, FluxError> {
+    let dof = origin.len();
+    let mut displacement = Array1::zeros(dof);
+    for i in 0..dof {
+        displacement[i] = direction[i] / root_mass[i];
+    }
+    let length = nrm2(displacement.view());
+    if !length.is_finite() || length <= f64::MIN_POSITIVE.sqrt() {
+        return Err(FluxError::InvalidConfig(
+            "PAFI reactant Hessian direction underflowed",
+        ));
+    }
+    let scale = hessian_displacement_fraction() / length;
+    let mut gradients = Vec::with_capacity(2);
+    for sign in [1.0_f64, -1.0] {
+        let probe = &origin.to_owned() + &displacement.mapv(|value| sign * scale * value);
+        engine.set_positions(probe.view())?;
+        let (_, forces) = engine.energy_and_forces()?;
+        gradients.push(forces.mapv(|force| -force));
+    }
+    let mut product = Array1::zeros(dof);
+    for i in 0..dof {
+        product[i] = (gradients[0][i] - gradients[1][i]) / (2.0 * scale) / root_mass[i];
+    }
+    if product.iter().any(|value| !value.is_finite()) {
+        return Err(FluxError::NonFinite("PAFI reactant Hessian product"));
+    }
+    Ok(product)
+}
+
+fn mass_weighted_hessian<E: DynamicsEngine + ?Sized>(
+    engine: &mut E,
+    origin: ArrayView1<'_, f64>,
+    root_mass: ArrayView1<'_, f64>,
+) -> Result<Array2<f64>, FluxError> {
+    let dof = origin.len();
+    if dof == 0 || dof > REACTANT_HESSIAN_EIGEN_LIMIT {
+        return Err(FluxError::InvalidConfig(
+            "PAFI reactant Hessian dimension is outside the dense eigen range",
+        ));
+    }
+    let mut hessian = Array2::zeros((dof, dof));
+    for column in 0..dof {
+        let mut direction = Array1::zeros(dof);
+        direction[column] = 1.0;
+        let product = mass_weighted_hessian_product(engine, origin, root_mass, direction.view())?;
+        for row in 0..dof {
+            hessian[(row, column)] = product[row];
+        }
+    }
+    Ok(hessian)
+}
+
+/// Reject a first image that is not a reactant minimum.
+///
+/// The gradient norm uses [`SERIES_FLAT_TOL`], the same stationary-force test
+/// as OH-TST. The mass-weighted Hessian is diagonalized with
+/// [`rgsaddle::exact_eigh`]. Eigenvalues no larger than
+/// [`reactant_zero_mode_floor`] times `1 +` the stiffest curvature are zero
+/// modes. Every other eigenvalue must be positive, and at least one positive
+/// eigenvalue must remain.
+fn ensure_reactant_minimum<E: DynamicsEngine + ?Sized>(
+    engine: &mut E,
+    origin: ArrayView1<'_, f64>,
+) -> Result<(), FluxError> {
+    engine.set_positions(origin)?;
+    let (_, forces) = engine.energy_and_forces()?;
+    for force in forces.iter().copied() {
+        if !force.is_finite() {
+            return Err(FluxError::NonFinite("PAFI reactant force"));
+        }
+    }
+    let gradient_norm = nrm2(forces.view());
+    if !gradient_norm.is_finite() || gradient_norm > SERIES_FLAT_TOL {
+        return Err(FluxError::InvalidConfig(
+            "PAFI reactant gradient is not zero",
+        ));
+    }
+    let root_mass = engine.masses().mapv(f64::sqrt);
+    let hessian = mass_weighted_hessian(engine, origin, root_mass.view())?;
+    let (values, _) = rgsaddle::exact_eigh(hessian.view())
+        .map_err(|_| FluxError::InvalidConfig("PAFI reactant Hessian eigensolve failed"))?;
+    let stiffest = values
+        .iter()
+        .fold(0.0_f64, |acc, value| acc.max(value.abs()));
+    let zero_floor = reactant_zero_mode_floor() * (1.0 + stiffest);
+    let mut positive = 0usize;
+    for value in values.iter().copied() {
+        if !value.is_finite() {
+            return Err(FluxError::NonFinite("PAFI reactant Hessian eigenvalue"));
+        }
+        if value.abs() <= zero_floor {
+            continue;
+        }
+        if value < 0.0 {
+            return Err(FluxError::InvalidConfig(
+                "PAFI reactant Hessian is not positive definite off the zero modes",
+            ));
+        }
+        positive += 1;
+    }
+    if positive == 0 {
+        return Err(FluxError::InvalidConfig(
+            "PAFI reactant Hessian has no positive curvature off the zero modes",
+        ));
+    }
+    Ok(())
+}
+
 /// Squared projected reactant frequency `omega_0^2 = 1 / (n^T H^-1 n)`.
 ///
 /// `H` is the mass-weighted Hessian at the first path image and `n` the unit
 /// mass-weighted path tangent there. `H u = n` is solved by conjugate
 /// gradients. The products are central differences of
 /// [`DynamicsEngine::energy_and_forces`], so the solve stays generic over the
-/// engine trait. [`rgsaddle::numerical_hvp`] is not used: it requires a
-/// shared [`rgsaddle::PointSurface`], and this path only has a
-/// [`DynamicsEngine`].
+/// engine trait.
 fn reactant_curvature<E: DynamicsEngine + ?Sized>(
     engine: &mut E,
     geometry: &PlaneGeometry,
@@ -1099,13 +1300,6 @@ fn reactant_curvature<E: DynamicsEngine + ?Sized>(
     let dof = engine.dof();
     let root_mass: Array1<f64> = engine.masses().mapv(f64::sqrt);
     let origin = geometry.anchor.clone();
-    let reach = origin
-        .iter()
-        .fold(0.0_f64, |acc, value| acc.max(value.abs()));
-    // Central difference of a gradient: the step that balances truncation
-    // and roundoff is the cube root of machine epsilon, scaled by the
-    // coordinate magnitude.
-    let step = f64::EPSILON.cbrt() * (1.0 + reach);
 
     let mut normal = Array1::zeros(dof);
     for i in 0..dof {
@@ -1117,35 +1311,6 @@ fn reactant_curvature<E: DynamicsEngine + ?Sized>(
     }
     normal.mapv_inplace(|value| value / normal_norm);
 
-    let mut apply = |direction: &Array1<f64>| -> Result<Array1<f64>, FluxError> {
-        let mut displacement = Array1::zeros(dof);
-        for i in 0..dof {
-            displacement[i] = direction[i] / root_mass[i];
-        }
-        let length = nrm2(displacement.view());
-        if !length.is_finite() || length <= f64::MIN_POSITIVE.sqrt() {
-            return Err(FluxError::InvalidConfig(
-                "PAFI reactant Hessian direction underflowed",
-            ));
-        }
-        let scale = step / length;
-        let mut gradients = Vec::with_capacity(2);
-        for sign in [1.0_f64, -1.0] {
-            let probe = &origin + &displacement.mapv(|value| sign * scale * value);
-            engine.set_positions(probe.view())?;
-            let (_, forces) = engine.energy_and_forces()?;
-            gradients.push(forces.mapv(|force| -force));
-        }
-        let mut product = Array1::zeros(dof);
-        for i in 0..dof {
-            product[i] = (gradients[0][i] - gradients[1][i]) / (2.0 * scale) / root_mass[i];
-        }
-        if product.iter().any(|value| !value.is_finite()) {
-            return Err(FluxError::NonFinite("PAFI reactant Hessian product"));
-        }
-        Ok(product)
-    };
-
     let tolerance = f64::EPSILON.sqrt();
     let mut solution = Array1::<f64>::zeros(dof);
     let mut residual = normal.clone();
@@ -1156,7 +1321,8 @@ fn reactant_curvature<E: DynamicsEngine + ?Sized>(
         if residual_sq.sqrt() <= tolerance {
             break;
         }
-        let image = apply(&search)?;
+        let image =
+            mass_weighted_hessian_product(engine, origin.view(), root_mass.view(), search.view())?;
         let curvature = dot(search.view(), image.view());
         if !curvature.is_finite() || curvature <= 0.0 {
             return Err(FluxError::InvalidConfig(
@@ -1220,13 +1386,17 @@ fn path_force_relative_error(arcs: &[f64], energies: &[f64], gradients: &[f64]) 
 ///   coincide in the mass-weighted metric,
 /// - the thermal energy `k_B T` of the engine is not positive,
 /// - the zero-temperature check of [`PafiConfig::zero_temperature_tol`] fails,
-/// - a plane normal degenerates, or the reactant curvature along the first
-///   path normal is not finite and positive, so `Z_R` is not defined.
+/// - a plane normal degenerates, the first image is not a minimum (the
+///   gradient norm exceeds [`crate::stats::SERIES_FLAT_TOL`], or the
+///   mass-weighted Hessian is not positive definite once zero modes are
+///   excluded), or the reactant curvature along the first path normal is not
+///   finite and positive, so `Z_R` is not defined.
 ///
 /// Returns [`FluxError::EmptyInput`] for an empty coordinate axis and
 /// [`FluxError::Shape`] when the engine masses do not match the path
 /// coordinates. [`FluxError::NonFinite`] reports non-finite path coordinates,
-/// constraint forces, force samples, profile values or plane means. Errors
+/// constraint forces, force samples, profile values, plane means, Lagrange
+/// weights, or a reactant partition whose exponential overflowed. Errors
 /// from the engine and from the batch-means estimator are passed through, for
 /// example an invalid [`StatsConfig`] or an engine that does not report the
 /// constraint force on a constrained step.
@@ -1305,6 +1475,7 @@ pub fn pafi_profile<E: DynamicsEngine + ?Sized>(
             }
             quadrature_residual = quadrature_residual.max(discrepancy);
         }
+        ensure_reactant_minimum(engine, geometries[0].anchor.view())?;
         let curvature = reactant_curvature(engine, &geometries[0])?;
 
         let mut plane_samples = vec![Vec::new(); geometries.len()];
@@ -1377,20 +1548,24 @@ mod tests {
         }
     }
 
-    struct InconsistentLinearGradient;
+    struct InconsistentQuadraticGradient;
 
-    impl rgsaddle::PointSurface for InconsistentLinearGradient {
+    impl rgsaddle::PointSurface for InconsistentQuadraticGradient {
         fn eval(
             &self,
             x: ArrayView1<'_, f64>,
         ) -> Result<(f64, Array1<f64>), rgsaddle::SaddleError> {
-            // The energy rises by 1. A constant gradient of 0.98 leaves a
-            // discrepancy of 0.02. Adding that same shortfall as a slope
-            // recenters the gradient so the trapezoid integral is still 0.98,
-            // and it keeps the reactant curvature positive once the check passes.
-            let shortfall = 0.02;
-            let gradient = (1.0 - shortfall) + shortfall * (x[0] - 0.5);
-            Ok((x[0], Array1::from_vec(vec![gradient])))
+            // `V(x) = x^2 / 2` is a minimum at the reactant `x = 0` and rises
+            // by 1/2 on `[0, 1]`. The reported gradient matches `V'` at 0 and
+            // adds `QUADRATURE_SHORTFALL * 6 * x * (x - 1)` in integrated form:
+            // `g(x) = (1 - 6 s) x + 6 s x^2` with `s = QUADRATURE_SHORTFALL`,
+            // and `∫_0^1 g = 1/2 - s`. The trapezoid of that quadratic on 33
+            // planes stays near the shortfall, above the scaled default
+            // tolerance and below the explicit tolerance 0.0257.
+            const QUADRATURE_SHORTFALL: f64 = 0.02;
+            let bend = QUADRATURE_SHORTFALL * 6.0;
+            let reported = (1.0 - bend) * x[0] + bend * x[0] * x[0];
+            Ok((0.5 * x[0] * x[0], Array1::from_vec(vec![reported])))
         }
     }
 
@@ -1638,8 +1813,13 @@ mod tests {
             config.zero_temperature_tol
         );
 
+        // The quarter-arc anchor is not a stationary point, so the profile
+        // call starts at the harmonic minimum and runs out along `x`.
         let (mut engine, _) = quarter_arc_engine();
-        let path = quarter_arc_path(config.planes);
+        let mut path = Array2::zeros((config.planes, 2));
+        for k in 0..config.planes {
+            path[[k, 0]] = (k as f64) / ((config.planes - 1) as f64);
+        }
         let result = pafi_profile(
             &mut engine,
             path.view(),
@@ -1830,7 +2010,7 @@ mod tests {
     fn default_tolerance_scales_with_planes_for_consistency_check() {
         let path = Array2::from_shape_vec((2, 1), vec![0.0, 1.0]).expect("shape");
         let mut engine = NativeEngine::new(
-            InconsistentLinearGradient,
+            InconsistentQuadraticGradient,
             NativeConfig::default()
                 .with_masses(Array1::from_vec(vec![1.0]))
                 .with_thermostat(ThermostatConfig::default().with_temperature(0.2))
@@ -1850,7 +2030,7 @@ mod tests {
         );
 
         let mut legacy_engine = NativeEngine::new(
-            InconsistentLinearGradient,
+            InconsistentQuadraticGradient,
             NativeConfig::default()
                 .with_masses(Array1::from_vec(vec![1.0]))
                 .with_thermostat(ThermostatConfig::default().with_temperature(0.2))
@@ -1933,5 +2113,139 @@ mod tests {
         assert_eq!(engine.positions(), original_positions.view());
         assert_eq!(engine.velocities(), original_velocities.view());
         assert_eq!(engine.constraint(), Some(&original_constraint));
+    }
+
+    #[test]
+    fn reactant_partition_exponential_overflow_is_rejected() {
+        // `ln Z_R = 1/2 ln(2 π kT / curvature)`. `kT = MAX / 8` keeps
+        // `2 π kT` finite. The curvature is the smallest positive subnormal,
+        // so the log stays finite and sits above `ln(f64::MAX)`. The
+        // exponential overflows and must not come back as infinity.
+        let result = profile_from(
+            &[0.0, 1.0],
+            &[0.0, 0.0],
+            &[0.0, 0.0],
+            f64::MAX / 8.0,
+            f64::from_bits(1),
+        );
+        assert_eq!(result, Err(FluxError::NonFinite("PAFI reactant partition")));
+    }
+
+    #[test]
+    fn lagrange_weights_stay_finite_on_a_wide_grid() {
+        // Four node gaps of this size have a product `24 * spacing^4 = 16 * MAX`,
+        // so the running product overflows, while `spacing^2` stays finite and
+        // the derivative ratio does not.
+        let spacing = (f64::MAX / 24.0).sqrt().sqrt() * 2.0;
+        let unit: Vec<f64> = (0..DERIVATIVE_WINDOW)
+            .map(|node| f64::from(node as u32))
+            .collect();
+        let wide: Vec<f64> = unit.iter().map(|node| node * spacing).collect();
+        let gradients = [1.0, 2.0, 3.0, 2.0, 1.0];
+        let unit_integral = Quadrature::new(&unit)
+            .expect("unit quadrature")
+            .integrate(&gradients);
+        let wide_integral = Quadrature::new(&wide)
+            .expect("wide quadrature")
+            .integrate(&gradients);
+        // Each weight sums about two logs per other node, and the integral
+        // adds a window of weights. This many ulps covers that chain and is
+        // far tighter than an overflowing product.
+        let lagrange_log_weight_tol =
+            (DERIVATIVE_WINDOW * DERIVATIVE_WINDOW) as f64 * 64.0 * f64::EPSILON;
+        for (unit_value, wide_value) in unit_integral.iter().zip(wide_integral) {
+            let scaled = unit_value * spacing;
+            let scale = scaled.abs().max(1.0);
+            assert!(
+                wide_value.is_finite()
+                    && (wide_value - scaled).abs() <= lagrange_log_weight_tol * scale,
+                "wide integral {wide_value} versus scaled unit integral {scaled}"
+            );
+        }
+    }
+
+    struct BondQuartic;
+
+    impl rgsaddle::PointSurface for BondQuartic {
+        fn eval(
+            &self,
+            x: ArrayView1<'_, f64>,
+        ) -> Result<(f64, Array1<f64>), rgsaddle::SaddleError> {
+            const QUARTIC: f64 = 1.0;
+            let gap = x[1] - x[0] - 1.0;
+            let slope = gap + 4.0 * QUARTIC * gap.powi(3);
+            let energy = 0.5 * gap * gap + QUARTIC * gap.powi(4);
+            Ok((energy, Array1::from_vec(vec![-slope, slope])))
+        }
+    }
+
+    #[test]
+    fn translated_bond_hessian_matches_the_unshifted_hessian() {
+        const TRANSLATION: f64 = 10_000.0;
+        // Central-difference truncation of the quartic is `4 * h^2`. A step
+        // proportional to `|x|` at this translation sits far above a few
+        // displacement fractions. The displacement-relative step does not.
+        let hessian_translation_tol = 64.0 * hessian_displacement_fraction();
+        let mut engine = NativeEngine::new(
+            BondQuartic,
+            NativeConfig::default()
+                .with_masses(Array1::from_vec(vec![1.0, 1.0]))
+                .with_thermostat(ThermostatConfig::default().with_temperature(0.2)),
+        )
+        .expect("engine");
+        let root = engine.masses().mapv(f64::sqrt);
+        let origin = Array1::from_vec(vec![0.0, 1.0]);
+        let shifted = Array1::from_vec(vec![TRANSLATION, TRANSLATION + 1.0]);
+        ensure_reactant_minimum(&mut engine, origin.view()).expect("origin minimum");
+        ensure_reactant_minimum(&mut engine, shifted.view()).expect("shifted minimum");
+        let reference =
+            mass_weighted_hessian(&mut engine, origin.view(), root.view()).expect("hessian");
+        let translated = mass_weighted_hessian(&mut engine, shifted.view(), root.view())
+            .expect("shifted hessian");
+        for (left, right) in reference.iter().zip(translated.iter()) {
+            assert!(
+                (left - right).abs() <= hessian_translation_tol,
+                "hessian entries {left} and {right} differ by more than {hessian_translation_tol}"
+            );
+        }
+    }
+
+    struct SaddleWell;
+
+    impl rgsaddle::PointSurface for SaddleWell {
+        fn eval(
+            &self,
+            r: ArrayView1<'_, f64>,
+        ) -> Result<(f64, Array1<f64>), rgsaddle::SaddleError> {
+            // Stationary at the origin, positive curvature along `y`, and a
+            // negative mode along `x`.
+            Ok((
+                -0.5 * r[0] * r[0] + 2.0 * r[1] * r[1],
+                Array1::from_vec(vec![-r[0], 4.0 * r[1]]),
+            ))
+        }
+    }
+
+    #[test]
+    fn a_saddle_is_rejected_as_a_reactant_minimum() {
+        let mut engine = NativeEngine::new(
+            SaddleWell,
+            NativeConfig::default()
+                .with_masses(Array1::from_vec(vec![1.0, 1.0]))
+                .with_thermostat(ThermostatConfig::default().with_temperature(0.2)),
+        )
+        .expect("engine");
+        let path = Array2::from_shape_vec((2, 2), vec![0.0, 0.0, 0.0, 1.0]).expect("shape");
+        let config = PafiConfig::default()
+            .with_planes(2)
+            .with_burn_in_steps(1)
+            .with_sample_steps(2);
+        let result = pafi_profile(&mut engine, path.view(), &config);
+        assert_eq!(
+            result,
+            Err(FluxError::InvalidConfig(
+                "PAFI reactant Hessian is not positive definite off the zero modes"
+            ))
+        );
     }
 }
