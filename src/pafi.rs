@@ -33,24 +33,25 @@
 //! more planes the window has at least four nodes, the rule is exact for
 //! cubic `g`, and the global error is `O(h^4)` for smoother `g`. The dividing
 //! plane `s*` is the global maximum of that interpolant, not the highest
-//! sampled plane. The barrier is `Delta F = F(s*) - F(s_0)`.
+//! sampled plane: on each segment the derivative is a cubic, solved in closed
+//! form, and the barrier is the largest value at those roots and the
+//! endpoints. The barrier is `Delta F = F(s*) - F(s_0)`.
 //!
-//! The normalized rate uses the Gaussian reactant integral. With the first
-//! image at the reactant minimum, `F(s_0) = 0`, and `omega_0` the projected
-//! frequency of the mass-weighted reactant Hessian `H` along the unit
-//! mass-weighted path normal `n`, `omega_0^2 = 1 / (n^T H^-1 n)`,
+//! The reactant partition is the doubled trapezoid of the Boltzmann weight up
+//! to the last sample of the segment that holds `s*`,
 //!
-//! `Z_R = sqrt(2 pi k_B T) / omega_0`,
-//! `k = (omega_0 / 2 pi) exp(-Delta F / k_B T)`.
+//! `Z_R = 2 * \int_0^{s_div} exp(-F(s) / k_B T) ds`,
+//! `k = sqrt(k_B T / (2 pi)) exp(-Delta F / k_B T) / Z_R`.
 //!
-//! `Z_R` and `k` are also returned as [`FreeEnergyProfile::reactant_log_partition`]
-//! and [`FreeEnergyProfile::normalized_log_rate`], so a large barrier does not
+//! The integral is formed in log space. `Z_R` and `k` are also returned as
+//! [`FreeEnergyProfile::reactant_log_partition`] and
+//! [`FreeEnergyProfile::normalized_log_rate`], so a large barrier does not
 //! underflow the reported logarithm. The value of `Z_R` itself is the
 //! exponential of that logarithm, and the call fails when the exponential is
 //! not finite. The Hermite derivative weights are products of node gaps and
-//! are formed in log space for the same reason. In the harmonic limit this is
-//! the Vineyard rate: the transverse entropy sits in `Delta F`, and `omega_0`
-//! is the curvature of the potential along the path.
+//! are formed in log space for the same reason. The projected frequency
+//! `omega_0` of the mass-weighted reactant Hessian is reported separately and
+//! is not this normalization.
 //!
 //! ## What the code does
 //!
@@ -83,8 +84,7 @@
 //!    mean force and its standard error on each plane.
 //! 6. The profile, barrier and rate follow from the plane means. The
 //!    standard errors of the planes are independent and propagate through the
-//!    Hermite weights. The reactant Hessian is deterministic, so the rate
-//!    error comes from the barrier alone, by the delta method.
+//!    Hermite weights of the barrier and, for the rate, through `Z_R`.
 //! 7. With `target_error` set, steps 5 and 6 repeat for up to `max_rounds`
 //!    rounds, each adding `sample_steps` fresh samples to every plane, until
 //!    the standard error of the barrier is at most `target_error`. Without
@@ -109,11 +109,13 @@
 //! - Each plane equilibrates within `burn_in_steps`. The samples start at the
 //!   anchor, so a plane whose thermal centre lies far from its anchor needs a
 //!   long burn-in.
-//! - The first image is the reactant minimum. The rate normalization uses the
-//!   reactant Hessian there. The call checks the gradient and the positive
-//!   definite character of that Hessian, excluding zero modes. A failing check,
-//!   or a non-positive curvature along the path normal, makes `Z_R` undefined
-//!   and the call fails.
+//! - The first image is the reactant minimum. The call checks the gradient and
+//!   the positive definite character of the mass-weighted Hessian there,
+//!   excluding zero modes, and reports the projected frequency. A failing
+//!   check, or a non-positive curvature along the path normal, makes that
+//!   frequency undefined and the call fails. A profile whose maximum is the
+//!   first sample has an empty reactant interval, so `Z_R` is undefined and
+//!   the call fails.
 //!
 //! ## Units
 //!
@@ -396,22 +398,24 @@ pub struct FreeEnergyProfile {
     /// mass-weighted reactant Hessian `H` and the unit mass-weighted path
     /// normal `n` at the first image.
     pub reactant_frequency: f64,
-    /// Gaussian reactant normalization
-    /// `Z_R = sqrt(2 pi k_B T) / omega_0`, in units of `s`.
+    /// Reactant partition
+    /// `Z_R = 2 * \int_0^{s_div} exp(-F(s) / k_B T) ds`, in units of `s`.
+    /// The integral is the trapezoid rule up to the last sample of the segment
+    /// that holds the dividing plane. It is the exponential of
+    /// [`Self::reactant_log_partition`], and the call fails with
+    /// [`FluxError::NonFinite`] when that exponential overflows.
     pub reactant_partition: f64,
-    /// Natural logarithm of the reactant normalization,
-    /// `ln Z_R = ln(sqrt(2 pi k_B T) / omega_0)`.
+    /// Natural logarithm of the reactant partition,
+    /// `ln Z_R = ln(2 * \int_0^{s_div} exp(-F(s) / k_B T) ds)`.
     pub reactant_log_partition: f64,
     /// Normalized PAFI rate
-    /// `k = sqrt(k_B T / (2 pi)) * exp(-Delta F / k_B T) / Z_R
-    ///    = (omega_0 / 2 pi) * exp(-Delta F / k_B T)`.
+    /// `k = sqrt(k_B T / (2 pi)) * exp(-Delta F / k_B T) / Z_R`.
     pub normalized_rate: f64,
-    /// Natural logarithm of [`Self::normalized_rate`],
-    /// `ln k = ln(omega_0 / 2 pi) - Delta F / k_B T`.
+    /// Natural logarithm of [`Self::normalized_rate`].
     /// This stays finite when [`Self::normalized_rate`] underflows.
     pub normalized_log_rate: f64,
-    /// Propagated standard error of [`Self::normalized_rate`]. The reactant
-    /// Hessian is deterministic, so only [`Self::barrier`] contributes.
+    /// Propagated standard error of [`Self::normalized_rate`]. The barrier and
+    /// the reactant partition both depend on the plane means.
     pub normalized_rate_error: f64,
     /// Largest absolute discrepancy, over the sampled planes, between the
     /// Hermite integral of `dV/ds` and the anchor energy measured from the
@@ -740,10 +744,6 @@ fn estimate_plane(samples: &[f64], config: &PafiConfig) -> Result<PlaneEstimate,
 /// Nodes used to differentiate the mean force at one plane.
 const DERIVATIVE_WINDOW: usize = 5;
 
-/// Samples of the interpolant taken inside one plane interval before the
-/// sign change of the force is refined.
-const MAXIMUM_SCAN_POINTS: usize = 128;
-
 /// Central difference step as a fraction of the displacement.
 ///
 /// The cube root of machine epsilon balances the `O(h^2)` truncation of a
@@ -801,6 +801,10 @@ struct DividingPlane {
     arc: f64,
     free_energy: f64,
     weights: Vec<f64>,
+    /// Last sample included in the reactant integral. This is the end of the
+    /// segment that holds the interpolant maximum, or the maximum itself when
+    /// that maximum sits on a sample.
+    partition_end: usize,
 }
 
 fn checked_exp(log_value: f64, context: &'static str) -> Result<f64, FluxError> {
@@ -982,20 +986,16 @@ impl Quadrature {
                     + slopes[k + 1] * (0.25 * u4 - u3 / 3.0))
     }
 
-    fn interpolated_force(&self, k: usize, u: f64, gradients: &[f64], slopes: &[f64]) -> f64 {
-        let h = self.arcs[k + 1] - self.arcs[k];
-        let u2 = u * u;
-        let u3 = u2 * u;
-        gradients[k] * (2.0 * u3 - 3.0 * u2 + 1.0)
-            + gradients[k + 1] * (-2.0 * u3 + 3.0 * u2)
-            + h * (slopes[k] * (u3 - 2.0 * u2 + u) + slopes[k + 1] * (u3 - u2))
-    }
-
     /// Global maximum of the interpolated profile.
     ///
-    /// Every interval is scanned. The highest sampled plane is recorded
-    /// separately, because an overshoot can put `s*` in an interval that
-    /// does not touch that plane.
+    /// Each segment is the integral of a cubic Hermite interpolant of the mean
+    /// force, so its derivative is the cubic `a u^3 + b u^2 + c u + d`. The
+    /// maximum on that segment is the larger of the endpoint values and the
+    /// values at the real roots inside the segment. A vanishing leading
+    /// coefficient leaves a quadratic, including the `a == 0` and `b == 0`
+    /// degeneracies. The highest sampled plane is recorded separately,
+    /// because an overshoot can put `s*` on an interval that does not touch
+    /// that plane.
     fn dividing_plane(&self, gradients: &[f64], free_energy: &[f64]) -> DividingPlane {
         let n = self.len();
         let mut index = 0usize;
@@ -1009,35 +1009,7 @@ impl Quadrature {
         let mut best_u = 0.0_f64;
         let mut best_value = free_energy[0];
         for k in 0..n - 1 {
-            let mut scan_best = 0usize;
-            let mut scan_value = self.interpolated_value(k, 0.0, gradients, &slopes, free_energy);
-            for j in 1..=MAXIMUM_SCAN_POINTS {
-                let u = j as f64 / MAXIMUM_SCAN_POINTS as f64;
-                let value = self.interpolated_value(k, u, gradients, &slopes, free_energy);
-                if value > scan_value {
-                    scan_value = value;
-                    scan_best = j;
-                }
-            }
-            let mut u = scan_best as f64 / MAXIMUM_SCAN_POINTS as f64;
-            if scan_best > 0 && scan_best < MAXIMUM_SCAN_POINTS {
-                let mut lo = (scan_best - 1) as f64 / MAXIMUM_SCAN_POINTS as f64;
-                let mut hi = (scan_best + 1) as f64 / MAXIMUM_SCAN_POINTS as f64;
-                let force_lo = self.interpolated_force(k, lo, gradients, &slopes);
-                let force_hi = self.interpolated_force(k, hi, gradients, &slopes);
-                if force_lo > 0.0 && force_hi < 0.0 {
-                    for _ in 0..80 {
-                        let mid = 0.5 * (lo + hi);
-                        if self.interpolated_force(k, mid, gradients, &slopes) > 0.0 {
-                            lo = mid;
-                        } else {
-                            hi = mid;
-                        }
-                    }
-                    u = 0.5 * (lo + hi);
-                }
-            }
-            let value = self.interpolated_value(k, u, gradients, &slopes, free_energy);
+            let (u, value) = self.segment_maximum(k, gradients, &slopes, free_energy);
             if value > best_value {
                 best_interval = k;
                 best_u = u;
@@ -1045,13 +1017,287 @@ impl Quadrature {
             }
         }
         let width = self.arcs[best_interval + 1] - self.arcs[best_interval];
+        let partition_end = if best_u == 0.0 {
+            best_interval
+        } else {
+            best_interval + 1
+        };
         DividingPlane {
             index,
             arc: self.arcs[best_interval] + best_u * width,
             free_energy: best_value,
             weights: self.interval_weights(best_interval, best_u),
+            partition_end,
         }
     }
+
+    /// `(u, F)` at the maximum of segment `k`, with `u` in `[0, 1]`.
+    ///
+    /// Ties keep the smaller `u`, so a flat segment reports its left endpoint.
+    fn segment_maximum(
+        &self,
+        k: usize,
+        gradients: &[f64],
+        slopes: &[f64],
+        free_energy: &[f64],
+    ) -> (f64, f64) {
+        let h = self.arcs[k + 1] - self.arcs[k];
+        let g0 = gradients[k];
+        let g1 = gradients[k + 1];
+        let s0 = slopes[k];
+        let s1 = slopes[k + 1];
+        // `dF/ds` on this segment. `h > 0`, so its roots are the critical
+        // points of `F`. Coefficients of `a u^3 + b u^2 + c u + d`.
+        let a = (g0 - g1).mul_add(2.0, h * (s0 + s1));
+        let b = (g1 - g0).mul_add(3.0, -h * s0.mul_add(2.0, s1));
+        let c = h * s0;
+        let d = g0;
+        let (nroots, roots) = cubic_real_roots(a, b, c, d);
+        let mut best_u = 0.0_f64;
+        let mut best_value = self.interpolated_value(k, 0.0, gradients, slopes, free_energy);
+        let mut consider = |u: f64| {
+            let Some(u) = root_in_unit_interval(u) else {
+                return;
+            };
+            let value = self.interpolated_value(k, u, gradients, slopes, free_energy);
+            if !value.is_finite() {
+                return;
+            }
+            if value > best_value || (value.to_bits() == best_value.to_bits() && u < best_u) {
+                best_u = u;
+                best_value = value;
+            }
+        };
+        for &root in roots.iter().take(nroots) {
+            consider(root);
+        }
+        consider(1.0);
+        (best_u, best_value)
+    }
+}
+
+/// Clamp a root that landed just outside `[0, 1]` from rounding.
+fn root_in_unit_interval(u: f64) -> Option<f64> {
+    if !u.is_finite() {
+        return None;
+    }
+    let pad = 64.0 * f64::EPSILON;
+    if !(-pad..=1.0 + pad).contains(&u) {
+        return None;
+    }
+    Some(u.clamp(0.0, 1.0))
+}
+
+/// Real roots of `a x^2 + b x + c = 0`.
+///
+/// `a == 0` is the linear equation `b x + c = 0`. `a == 0` and `b == 0`
+/// leave a constant, which has no isolated root. The nonzero case uses
+/// `q = -1/2 (b + copysign(sqrt(b^2 - 4 a c), b))`, then the roots `q / a`
+/// and `c / q`, so a small root is not formed by cancelling two large terms.
+fn quadratic_real_roots(a: f64, b: f64, c: f64) -> (usize, [f64; 2]) {
+    let mut roots = [0.0; 2];
+    if !a.is_finite() || !b.is_finite() || !c.is_finite() {
+        return (0, roots);
+    }
+    if a == 0.0 {
+        if b == 0.0 {
+            return (0, roots);
+        }
+        let root = -c / b;
+        if root.is_finite() {
+            roots[0] = root;
+            return (1, roots);
+        }
+        return (0, roots);
+    }
+    let discriminant = b.mul_add(b, -4.0 * a * c);
+    if !discriminant.is_finite() {
+        return (0, roots);
+    }
+    if discriminant < 0.0 {
+        let scale = b.abs().max((a.abs() * c.abs()).sqrt());
+        if discriminant.abs() > 8.0 * f64::EPSILON * scale * scale {
+            return (0, roots);
+        }
+        let root = -b / (2.0 * a);
+        if root.is_finite() {
+            roots[0] = root;
+            return (1, roots);
+        }
+        return (0, roots);
+    }
+    let q = -0.5 * (b + discriminant.sqrt().copysign(b));
+    if q == 0.0 || !q.is_finite() {
+        let root = -b / (2.0 * a);
+        if root.is_finite() {
+            roots[0] = root;
+            return (1, roots);
+        }
+        return (0, roots);
+    }
+    let first = q / a;
+    let second = c / q;
+    let mut count = 0usize;
+    if first.is_finite() {
+        roots[count] = first;
+        count += 1;
+    }
+    if second.is_finite() && (count == 0 || second.to_bits() != roots[0].to_bits()) {
+        roots[count] = second;
+        count += 1;
+    }
+    (count, roots)
+}
+
+/// Real roots of `a x^3 + b x^2 + c x + d = 0`.
+///
+/// A leading coefficient that is zero, or too small to change the polynomial
+/// on `[0, 1]` by more than a rounding of the remaining terms, is solved by
+/// [`quadratic_real_roots`]. Three real roots use the trigonometric form.
+/// One real root uses Cardano's formula with the product identity
+/// `u v = -p / 3`, which avoids cancellation in the sum of the two cube
+/// roots. Each accepted root is polished by two Newton steps.
+fn cubic_real_roots(a: f64, b: f64, c: f64, d: f64) -> (usize, [f64; 3]) {
+    let mut roots = [0.0; 3];
+    if !a.is_finite() || !b.is_finite() || !c.is_finite() || !d.is_finite() {
+        return (0, roots);
+    }
+    let rest = b.abs() + c.abs() + d.abs();
+    if a == 0.0 || a.abs() <= rest * f64::EPSILON {
+        let (count, quadratic) = quadratic_real_roots(b, c, d);
+        roots[..count].copy_from_slice(&quadratic[..count]);
+        return (count, roots);
+    }
+    let monic_b = b / a;
+    let monic_c = c / a;
+    let monic_d = d / a;
+    if !monic_b.is_finite() || !monic_c.is_finite() || !monic_d.is_finite() {
+        let (count, quadratic) = quadratic_real_roots(b, c, d);
+        roots[..count].copy_from_slice(&quadratic[..count]);
+        return (count, roots);
+    }
+    let shift = monic_b / 3.0;
+    let p = monic_c - monic_b * shift;
+    let q = monic_d + shift * (2.0 * shift * shift - monic_c);
+    let p_over_3 = p / 3.0;
+    let half_q = 0.5 * q;
+    let discriminant = half_q * half_q + p_over_3 * p_over_3 * p_over_3;
+    if !p.is_finite() || !q.is_finite() || !discriminant.is_finite() {
+        return (0, roots);
+    }
+    let mut count = 0usize;
+    let mut push = |y: f64| {
+        let x = polish_cubic_root(a, b, c, d, y - shift);
+        if x.is_finite() {
+            roots[count] = x;
+            count += 1;
+        }
+    };
+    if discriminant > 0.0 {
+        let sqrt_discriminant = discriminant.sqrt();
+        let mut u = (-half_q + sqrt_discriminant).cbrt();
+        let mut v = (-half_q - sqrt_discriminant).cbrt();
+        let product = -p_over_3;
+        if u.abs() >= v.abs() {
+            if u != 0.0 {
+                v = product / u;
+            }
+        } else if v != 0.0 {
+            u = product / v;
+        }
+        push(u + v);
+    } else if discriminant == 0.0 {
+        let u = (-half_q).cbrt();
+        push(2.0 * u);
+        push(-u);
+    } else {
+        let radius = (-p_over_3).sqrt();
+        if !radius.is_finite() || radius == 0.0 {
+            push(0.0);
+        } else {
+            let cosine = (-half_q / (radius * radius * radius)).clamp(-1.0, 1.0);
+            let angle = cosine.acos();
+            let diameter = 2.0 * radius;
+            for k in 0..3 {
+                let y = diameter * (angle / 3.0 - TAU * f64::from(k) / 3.0).cos();
+                push(y);
+            }
+        }
+    }
+    (count, roots)
+}
+
+/// Two Newton steps from a closed-form seed. A step that leaves the
+/// neighbourhood of the seed is rejected, so a poor seed stays put.
+fn polish_cubic_root(a: f64, b: f64, c: f64, d: f64, mut x: f64) -> f64 {
+    if !x.is_finite() {
+        return x;
+    }
+    for _ in 0..2 {
+        let slope = (3.0 * a).mul_add(x, 2.0 * b).mul_add(x, c);
+        if !slope.is_finite() || slope == 0.0 {
+            break;
+        }
+        let value = a.mul_add(x, b).mul_add(x, c).mul_add(x, d);
+        if !value.is_finite() {
+            break;
+        }
+        let step = value / slope;
+        if !step.is_finite() || step.abs() > 1.0 {
+            break;
+        }
+        x -= step;
+    }
+    x
+}
+
+/// `Z_R = 2 \int_0^{s_div} exp(-F / kT) ds` by the trapezoid rule, in log space.
+///
+/// `s_div` is the last sample of the segment that holds the interpolant
+/// maximum. `d_ln_zr_d_f[i]` is `d ln Z_R / d F_i`.
+fn reactant_log_partition_and_sensitivity(
+    arc_lengths: &[f64],
+    free_energy: &[f64],
+    dividing: usize,
+    kbt: f64,
+) -> Result<(f64, Vec<f64>), FluxError> {
+    let n = free_energy.len();
+    let mut exponent_shift = f64::NEG_INFINITY;
+    for &value in &free_energy[..=dividing] {
+        let exponent = -value / kbt;
+        if !exponent.is_finite() {
+            return Err(FluxError::NonFinite("PAFI reactant partition exponent"));
+        }
+        exponent_shift = exponent_shift.max(exponent);
+    }
+
+    let mut scaled_half_partition = 0.0_f64;
+    let mut scaled_numerator = vec![0.0_f64; n];
+    for i in 1..=dividing {
+        let ds = arc_lengths[i] - arc_lengths[i - 1];
+        let left_exp = (-free_energy[i - 1] / kbt - exponent_shift).exp();
+        let right_exp = (-free_energy[i] / kbt - exponent_shift).exp();
+        let left_weight = 0.5 * ds * left_exp;
+        let right_weight = 0.5 * ds * right_exp;
+        scaled_half_partition += left_weight + right_weight;
+        scaled_numerator[i - 1] += left_weight;
+        scaled_numerator[i] += right_weight;
+    }
+    if !scaled_half_partition.is_finite() || scaled_half_partition <= 0.0 {
+        return Err(FluxError::InvalidConfig(
+            "PAFI reactant partition must be finite and positive",
+        ));
+    }
+
+    let reactant_log_partition = 2.0_f64.ln() + exponent_shift + scaled_half_partition.ln();
+    if !reactant_log_partition.is_finite() {
+        return Err(FluxError::NonFinite("PAFI reactant log partition"));
+    }
+    let mut d_ln_zr_d_f = vec![0.0_f64; n];
+    for i in 0..=dividing {
+        d_ln_zr_d_f[i] = -scaled_numerator[i] / (kbt * scaled_half_partition);
+    }
+    Ok((reactant_log_partition, d_ln_zr_d_f))
 }
 
 fn integrate_profile(
@@ -1110,21 +1356,23 @@ fn integrate_profile(
         return Err(FluxError::NonFinite("PAFI barrier"));
     }
 
-    // F(s_0) = 0 and a Gaussian reactant well give
-    // Z_R = sqrt(2 pi kT) / omega_0, so
-    // sqrt(kT / 2 pi) exp(-F* / kT) / Z_R = (omega_0 / 2 pi) exp(-F* / kT).
     let reactant_frequency = reactant_curvature.sqrt();
     if !reactant_frequency.is_finite() || reactant_frequency <= 0.0 {
         return Err(FluxError::InvalidConfig(
             "PAFI reactant frequency must be finite and positive",
         ));
     }
-    let reactant_log_partition = 0.5 * (TAU * kbt).ln() - reactant_frequency.ln();
-    if !reactant_log_partition.is_finite() {
-        return Err(FluxError::NonFinite("PAFI reactant log partition"));
-    }
+    // Z_R is the doubled trapezoid of exp(-F / kT) up to the dividing segment.
+    // k = sqrt(kT / 2 pi) exp(-Delta F / kT) / Z_R. omega_0 is reported and is
+    // not this normalization.
+    let (reactant_log_partition, d_ln_zr_d_f) = reactant_log_partition_and_sensitivity(
+        &quadrature.arcs,
+        &free_energy,
+        dividing.partition_end,
+        kbt,
+    )?;
     let reactant_partition = checked_exp(reactant_log_partition, "PAFI reactant partition")?;
-    let normalized_log_rate = reactant_frequency.ln() - TAU.ln() - barrier / kbt;
+    let normalized_log_rate = 0.5 * (kbt / TAU).ln() - barrier / kbt - reactant_log_partition;
     if !normalized_log_rate.is_finite() {
         return Err(FluxError::InvalidConfig(
             "PAFI normalized log rate must be finite",
@@ -1136,7 +1384,24 @@ fn integrate_profile(
             "PAFI normalized rate must be finite",
         ));
     }
-    let normalized_rate_error = normalized_rate * barrier_error / kbt;
+    let mut variance_ln_rate = 0.0_f64;
+    for (gradient_index, sigma) in gradient_errors.iter().copied().enumerate() {
+        let barrier_sensitivity = dividing.weights[gradient_index];
+        let mut partition_log_sensitivity = 0.0_f64;
+        for profile_index in 0..=dividing.partition_end {
+            partition_log_sensitivity +=
+                d_ln_zr_d_f[profile_index] * quadrature.cumulative[profile_index][gradient_index];
+        }
+        let log_rate_sensitivity = -barrier_sensitivity / kbt - partition_log_sensitivity;
+        variance_ln_rate += log_rate_sensitivity * log_rate_sensitivity * sigma * sigma;
+    }
+    let sigma_ln_k = variance_ln_rate.sqrt();
+    if !sigma_ln_k.is_finite() || sigma_ln_k < 0.0 {
+        return Err(FluxError::InvalidConfig(
+            "PAFI normalized-rate logarithmic error must be finite and non-negative",
+        ));
+    }
+    let normalized_rate_error = normalized_rate * sigma_ln_k;
     if !normalized_rate_error.is_finite() || normalized_rate_error < 0.0 {
         return Err(FluxError::InvalidConfig(
             "PAFI normalized-rate standard error must be finite and non-negative",
@@ -1698,8 +1963,10 @@ mod tests {
         assert_abs_diff_eq!(profile.barrier, 13.0 / 12.0, epsilon = 1.0e-12);
         assert_eq!(profile.barrier_error, 0.0);
         assert_eq!(profile.normalized_rate_error, 0.0);
-        let frequency = 4.0_f64.sqrt();
-        let log_partition = 0.5 * (TAU * 1.0).ln() - frequency.ln();
+        assert_abs_diff_eq!(profile.reactant_frequency, 2.0, epsilon = 1.0e-12);
+        // The maximum is the node s = 1, so the reactant integral is the one
+        // trapezoid on [0, 1]. F(1) = 13/12.
+        let log_partition = (1.0 + (-13.0 / 12.0_f64).exp()).ln();
         assert_abs_diff_eq!(
             profile.reactant_log_partition,
             log_partition,
@@ -1707,7 +1974,7 @@ mod tests {
         );
         assert_abs_diff_eq!(
             profile.normalized_log_rate,
-            frequency.ln() - TAU.ln() - profile.barrier,
+            0.5 * (1.0_f64 / TAU).ln() - profile.barrier - log_partition,
             epsilon = 1.0e-12
         );
     }
@@ -1838,22 +2105,22 @@ mod tests {
         let errors = [0.0; 4];
         let curvature = 4.0;
         let profile = profile_from(&arcs, &gradients, &errors, 1.0, curvature).expect("profile");
-        let frequency = curvature.sqrt();
-        let log_partition = 0.5 * (TAU).ln() - frequency.ln();
-        let log_rate = frequency.ln() - TAU.ln() - profile.barrier;
         assert!(profile.barrier > 700.0);
         assert!(profile.normalized_rate <= f64::MIN_POSITIVE);
-        assert_abs_diff_eq!(
-            profile.reactant_log_partition,
-            log_partition,
-            epsilon = f64::EPSILON * log_partition.abs()
-        );
+        assert!(profile.reactant_log_partition.is_finite());
+        let log_rate =
+            0.5 * (1.0_f64 / TAU).ln() - profile.barrier - profile.reactant_log_partition;
         assert_abs_diff_eq!(profile.normalized_log_rate, log_rate, epsilon = 1.0e-9);
         assert!(profile.reactant_partition.is_finite() && profile.reactant_partition > 0.0);
+        assert_abs_diff_eq!(
+            profile.reactant_frequency,
+            curvature.sqrt(),
+            epsilon = 1.0e-12
+        );
     }
 
     #[test]
-    fn log_fields_match_the_projected_frequency_formula() {
+    fn log_fields_match_the_line_integral_rate() {
         let arcs = [0.0, 0.5, 1.0, 1.5];
         let gradients = [0.3, 0.1, -0.4, -0.6];
         let errors = [0.02, 0.03, 0.01, 0.02];
@@ -1861,34 +2128,28 @@ mod tests {
         let curvature = 5.0;
         let profile = profile_from(&arcs, &gradients, &errors, kbt, curvature).expect("profile");
         let frequency = curvature.sqrt();
-        let partition = (TAU * kbt).sqrt() / frequency;
-        let rate = frequency / TAU * (-profile.barrier / kbt).exp();
         assert_abs_diff_eq!(
-            profile.reactant_partition,
-            partition,
-            epsilon = f64::EPSILON * partition.abs()
+            profile.reactant_frequency,
+            frequency,
+            epsilon = f64::EPSILON * frequency
         );
         assert_abs_diff_eq!(
             profile.reactant_log_partition,
-            partition.ln(),
-            epsilon = 16.0 * f64::EPSILON * partition.ln().abs().max(1.0)
-        );
-        assert_abs_diff_eq!(
-            profile.normalized_rate,
-            rate,
-            epsilon = f64::EPSILON * rate.abs()
-        );
-        assert_abs_diff_eq!(
-            profile.normalized_log_rate,
-            rate.ln(),
-            epsilon = 16.0 * f64::EPSILON * rate.ln().abs().max(1.0)
+            profile.reactant_partition.ln(),
+            epsilon = 1.0e-12
         );
         let flux = (kbt / TAU).sqrt() * (-profile.barrier / kbt).exp() / profile.reactant_partition;
         assert_abs_diff_eq!(
             profile.normalized_rate,
             flux,
-            epsilon = f64::EPSILON * rate.abs()
+            epsilon = f64::EPSILON * flux.abs()
         );
+        assert_abs_diff_eq!(
+            profile.normalized_log_rate,
+            flux.ln(),
+            epsilon = 16.0 * f64::EPSILON * flux.ln().abs().max(1.0)
+        );
+        assert!(profile.normalized_rate_error.is_finite() && profile.normalized_rate_error > 0.0);
     }
 
     fn polynomial_integral_error(planes: usize, degree: u32) -> f64 {
@@ -1989,21 +2250,17 @@ mod tests {
     }
 
     #[test]
-    fn a_descending_profile_keeps_the_gaussian_partition() {
+    fn a_descending_profile_has_no_reactant_interval() {
         let arcs = [0.0, 1.0, 2.0];
         let gradients = [-1.0, -1.0, -1.0];
         let errors = [0.0, 0.0, 0.0];
-        let curvature = 2.0;
-        let profile = profile_from(&arcs, &gradients, &errors, 1.0, curvature).expect("profile");
-        assert_eq!(profile.dividing_index, 0);
-        assert_eq!(profile.barrier, 0.0);
-        let partition = (TAU / curvature).sqrt();
-        assert_abs_diff_eq!(
-            profile.reactant_partition,
-            partition,
-            epsilon = f64::EPSILON * partition
+        let result = profile_from(&arcs, &gradients, &errors, 1.0, 2.0);
+        assert_eq!(
+            result,
+            Err(FluxError::InvalidConfig(
+                "PAFI reactant partition must be finite and positive"
+            ))
         );
-        assert!(profile.normalized_log_rate.is_finite());
     }
 
     #[test]
@@ -2117,16 +2374,15 @@ mod tests {
 
     #[test]
     fn reactant_partition_exponential_overflow_is_rejected() {
-        // `ln Z_R = 1/2 ln(2 π kT / curvature)`. `kT = MAX / 8` keeps
-        // `2 π kT` finite. The curvature is the smallest positive subnormal,
-        // so the log stays finite and sits above `ln(f64::MAX)`. The
-        // exponential overflows and must not come back as infinity.
+        // Linear `g(s) = a + b s` is integrated exactly. `F(1) = -1e6` and
+        // `F(2) = 1`, so the dividing sample is the last plane and the shifted
+        // trapezoid is finite while `exp(ln Z_R)` is not.
         let result = profile_from(
-            &[0.0, 1.0],
-            &[0.0, 0.0],
-            &[0.0, 0.0],
-            f64::MAX / 8.0,
-            f64::from_bits(1),
+            &[0.0, 1.0, 2.0],
+            &[-2_000_000.5, 0.5, 2_000_001.5],
+            &[0.0, 0.0, 0.0],
+            1.0,
+            1.0,
         );
         assert_eq!(result, Err(FluxError::NonFinite("PAFI reactant partition")));
     }
