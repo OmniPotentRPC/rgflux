@@ -34,7 +34,7 @@ RUSTDOCFLAGS="-D warnings" cargo doc --locked --no-deps --all-features --documen
 
 * Dependency pins
 
-Every git dependency in =Cargo.toml= pins a full 40-hex commit =rev= with the exact crate version at that revision (for example =version = "=0.5.0"=), never a branch or tag name. =ci/check_dependency_pins.py= verifies that =Cargo.lock= and =cargo tree -d --features rgpot,rgpot-session= resolve a single copy of =rgflux=, =rgsaddle=, =rgmin=, =rgpot-core=, =eindir-core=, =dlpk=, =linkcell= and =minimage=. The =lammpc= feature is left out because it links =liblammpc=.
+=rgsaddle=, =rgmin=, and =rgpot-core= are required from crates.io by exact version (=version = "=0.5.0"= and the matching pins for the other two). =[patch.crates-io]= overrides those crates for local builds. Every git override pins a full 40-hex commit =rev= at that same crate version, never a branch or tag name. =ci/check_dependency_pins.py= verifies that =Cargo.lock= and =cargo tree -d --features rgpot,rgpot-session= resolve a single copy of =rgflux=, =rgsaddle=, =rgmin=, =rgpot-core=, =eindir-core=, =dlpk=, =linkcell= and =minimage=. The =lammpc= feature is left out because it links =liblammpc=.
 
 * Changelog fragments
 
