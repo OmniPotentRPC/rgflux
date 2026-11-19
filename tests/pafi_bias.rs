@@ -490,7 +490,8 @@ fn zero_noise_quartic_rate_matches_the_doubled_line_integral() {
         let integral = simpson(|x| (-(1.0 - x * x).powi(2) / kt).exp(), -1.0, 0.0, 8_000);
         let partition = 2.0 * mass.sqrt() * integral;
         let expected = (kt / (2.0 * PI)).sqrt() * (-profile.barrier / kt).exp() / partition;
-        let ratio = profile.normalized_rate / expected;
+        let rate = profile.normalized_rate.expect("representable normalized rate");
+        let ratio = rate / expected;
         eprintln!("quartic kT={kt}: k/k_line={ratio:.8}");
         assert!(
             (ratio - 1.0).abs() <= 1.0e-6,
