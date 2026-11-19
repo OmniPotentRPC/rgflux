@@ -124,7 +124,12 @@ fn pafi_trait_object_matches_generic_on_native_engine() {
     let dynamic = pafi_profile_dyn(dyn_engine, path.view(), &config).expect("dynamic profile");
     assert_eq!(generic.dividing_index, dynamic.dividing_index);
     assert!((generic.barrier - dynamic.barrier).abs() <= 1.0e-12);
-    assert!((generic.normalized_rate - dynamic.normalized_rate).abs() <= 1.0e-12);
+    assert!(
+        (generic.normalized_rate.expect("generic rate")
+            - dynamic.normalized_rate.expect("dynamic rate"))
+        .abs()
+            <= 1.0e-12
+    );
 }
 
 #[test]
@@ -195,19 +200,23 @@ fn pafi_runs_unchanged_on_native_and_rgpot_backed_engines() {
         z_barrier
     );
 
-    let rate_sigma = (native_profile.normalized_rate_error.powi(2)
-        + rgpot_profile.normalized_rate_error.powi(2))
-    .sqrt();
-    let z_rate =
-        (native_profile.normalized_rate - rgpot_profile.normalized_rate).abs() / rate_sigma;
+    let native_rate = native_profile
+        .normalized_rate
+        .expect("native normalized rate");
+    let native_rate_error = native_profile
+        .normalized_rate_error
+        .expect("native normalized rate error");
+    let rgpot_rate = rgpot_profile
+        .normalized_rate
+        .expect("rgpot normalized rate");
+    let rgpot_rate_error = rgpot_profile
+        .normalized_rate_error
+        .expect("rgpot normalized rate error");
+    let rate_sigma = (native_rate_error.powi(2) + rgpot_rate_error.powi(2)).sqrt();
+    let z_rate = (native_rate - rgpot_rate).abs() / rate_sigma;
     assert!(
         z_rate <= 2.0,
-        "rate native {:.8e} ± {:.8e}, rgpot {:.8e} ± {:.8e}, z={:.4}",
-        native_profile.normalized_rate,
-        native_profile.normalized_rate_error,
-        rgpot_profile.normalized_rate,
-        rgpot_profile.normalized_rate_error,
-        z_rate
+        "rate native {native_rate:.8e} ± {native_rate_error:.8e}, rgpot {rgpot_rate:.8e} ± {rgpot_rate_error:.8e}, z={z_rate:.4}"
     );
 }
 

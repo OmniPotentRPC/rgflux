@@ -187,7 +187,7 @@
 //! assert_eq!(profile.free_energy.len(), config.planes);
 //! assert_eq!(profile.free_energy[0], 0.0);
 //! assert!(profile.barrier.is_finite() && profile.barrier_error > 0.0);
-//! assert!(profile.normalized_rate > 0.0);
+//! assert!(profile.normalized_rate.is_some_and(|rate| rate > 0.0));
 //! # Ok::<(), rgflux::FluxError>(())
 //! ```
 //!
@@ -394,21 +394,29 @@ pub struct FreeEnergyProfile {
     pub reactant_frequency: f64,
     /// Gaussian reactant normalization
     /// `Z_R = sqrt(2 pi k_B T) / omega_0`, in units of `s`.
-    pub reactant_partition: f64,
+    ///
+    /// `Some` when [`Self::reactant_log_partition`] has a finite positive
+    /// exponential. `None` when that finite log overflows or underflows.
+    pub reactant_partition: Option<f64>,
     /// Natural logarithm of the reactant normalization,
     /// `ln Z_R = ln(sqrt(2 pi k_B T) / omega_0)`.
     pub reactant_log_partition: f64,
     /// Normalized PAFI rate
     /// `k = sqrt(k_B T / (2 pi)) * exp(-Delta F / k_B T) / Z_R
     ///    = (omega_0 / 2 pi) * exp(-Delta F / k_B T)`.
-    pub normalized_rate: f64,
+    ///
+    /// `Some` when [`Self::normalized_log_rate`] has a finite positive
+    /// exponential. `None` when that finite log overflows or underflows.
+    pub normalized_rate: Option<f64>,
     /// Natural logarithm of [`Self::normalized_rate`],
     /// `ln k = ln(omega_0 / 2 pi) - Delta F / k_B T`.
     /// This stays finite when [`Self::normalized_rate`] underflows.
     pub normalized_log_rate: f64,
-    /// Propagated standard error of [`Self::normalized_rate`]. The reactant
+    /// Propagated standard error of the linear normalized rate. The reactant
     /// Hessian is deterministic, so only [`Self::barrier`] contributes.
-    pub normalized_rate_error: f64,
+    ///
+    /// `None` only when the representable linear error overflows.
+    pub normalized_rate_error: Option<f64>,
     /// Largest absolute discrepancy, over the sampled planes, between the
     /// Hermite integral of `dV/ds` and the anchor energy measured from the
     /// first plane. The acceptance check itself stays the trapezoid comparison
@@ -1225,25 +1233,15 @@ fn integrate_profile(
     if !reactant_log_partition.is_finite() {
         return Err(FluxError::NonFinite("PAFI reactant log partition"));
     }
-    let reactant_partition = reactant_log_partition.exp();
+    let reactant_partition = finite_exponential(reactant_log_partition);
     let normalized_log_rate = reactant_frequency.ln() - TAU.ln() - barrier / kbt;
     if !normalized_log_rate.is_finite() {
         return Err(FluxError::InvalidConfig(
             "PAFI normalized log rate must be finite",
         ));
     }
-    let normalized_rate = normalized_log_rate.exp();
-    if !normalized_rate.is_finite() || normalized_rate < 0.0 {
-        return Err(FluxError::InvalidConfig(
-            "PAFI normalized rate must be finite",
-        ));
-    }
-    let normalized_rate_error = normalized_rate * barrier_error / kbt;
-    if !normalized_rate_error.is_finite() || normalized_rate_error < 0.0 {
-        return Err(FluxError::InvalidConfig(
-            "PAFI normalized-rate standard error must be finite and non-negative",
-        ));
-    }
+    let normalized_rate = finite_exponential(normalized_log_rate);
+    let normalized_rate_error = linear_rate_error(normalized_log_rate, barrier_error / kbt);
 
     Ok(FreeEnergyProfile {
         arc_lengths: quadrature.arcs.clone(),
@@ -1261,6 +1259,29 @@ fn integrate_profile(
         normalized_rate_error,
         quadrature_residual: 0.0,
     })
+}
+
+/// Exponential of a finite logarithm when the result is a finite positive `f64`.
+///
+/// Overflow to positive infinity and underflow to zero are `None`.
+fn finite_exponential(log_value: f64) -> Option<f64> {
+    let linear = log_value.exp();
+    if linear.is_finite() && linear > 0.0 {
+        Some(linear)
+    } else {
+        None
+    }
+}
+
+/// Linear standard error `exp(log_rate) * sigma`.
+///
+/// A zero `sigma` remains representable even when the corresponding rate is
+/// not. `None` means the nonzero linear error overflows.
+fn linear_rate_error(log_rate: f64, sigma: f64) -> Option<f64> {
+    if sigma == 0.0 {
+        return Some(0.0);
+    }
+    finite_exponential(log_rate + sigma.ln())
 }
 
 /// Squared projected reactant frequency `omega_0^2 = 1 / (n^T H^-1 n)`.
@@ -1705,8 +1726,8 @@ mod tests {
         assert!(truncation > 0.0);
         assert_abs_diff_eq!(profile.barrier_error, truncation, epsilon = 1.0e-12);
         assert_abs_diff_eq!(
-            profile.normalized_rate_error,
-            profile.normalized_rate * profile.barrier_error,
+            profile.normalized_rate_error.expect("representable rate error"),
+            profile.normalized_rate.expect("representable rate") * profile.barrier_error,
             epsilon = 1.0e-12
         );
         let frequency = 4.0_f64.sqrt();
@@ -1890,14 +1911,16 @@ mod tests {
         let log_partition = 0.5 * (TAU).ln() - frequency.ln();
         let log_rate = frequency.ln() - TAU.ln() - profile.barrier;
         assert!(profile.barrier > 700.0);
-        assert!(profile.normalized_rate <= f64::MIN_POSITIVE);
+        assert!(profile.normalized_rate.is_none());
         assert_abs_diff_eq!(
             profile.reactant_log_partition,
             log_partition,
             epsilon = f64::EPSILON * log_partition.abs()
         );
         assert_abs_diff_eq!(profile.normalized_log_rate, log_rate, epsilon = 1.0e-9);
-        assert!(profile.reactant_partition.is_finite() && profile.reactant_partition > 0.0);
+        assert!(profile
+            .reactant_partition
+            .is_some_and(|partition| partition.is_finite() && partition > 0.0));
     }
 
     #[test]
@@ -1912,7 +1935,7 @@ mod tests {
         let partition = (TAU * kbt).sqrt() / frequency;
         let rate = frequency / TAU * (-profile.barrier / kbt).exp();
         assert_abs_diff_eq!(
-            profile.reactant_partition,
+            profile.reactant_partition.expect("representable partition"),
             partition,
             epsilon = f64::EPSILON * partition.abs()
         );
@@ -1922,7 +1945,7 @@ mod tests {
             epsilon = 16.0 * f64::EPSILON * partition.ln().abs().max(1.0)
         );
         assert_abs_diff_eq!(
-            profile.normalized_rate,
+            profile.normalized_rate.expect("representable rate"),
             rate,
             epsilon = f64::EPSILON * rate.abs()
         );
@@ -1931,9 +1954,10 @@ mod tests {
             rate.ln(),
             epsilon = 16.0 * f64::EPSILON * rate.ln().abs().max(1.0)
         );
-        let flux = (kbt / TAU).sqrt() * (-profile.barrier / kbt).exp() / profile.reactant_partition;
+        let flux = (kbt / TAU).sqrt() * (-profile.barrier / kbt).exp()
+            / profile.reactant_partition.expect("representable partition");
         assert_abs_diff_eq!(
-            profile.normalized_rate,
+            profile.normalized_rate.expect("representable rate"),
             flux,
             epsilon = f64::EPSILON * rate.abs()
         );
@@ -2034,22 +2058,9 @@ mod tests {
     }
 
     #[test]
-    fn non_finite_reactant_partition_exponent_is_rejected() {
-        // `f64::MIN_POSITIVE / 4` is a positive subnormal. The free energy
-        // stays finite, and `-F / kT` overflows, so the failure is the
-        // reactant partition rather than `integrate_means`.
-        let arcs = [0.0, 1.0];
-        let gradients = [1.0, 1.0];
-        let thermal = f64::MIN_POSITIVE * 0.25;
-        assert!(thermal.is_finite() && thermal > 0.0);
-        assert!(!(1.0 / thermal).is_finite());
-        let (free_energy, _, _) = integrate_means(&arcs, &gradients).expect("finite free energy");
-        assert!(free_energy.iter().all(|value| value.is_finite()));
-        let result = integrate_profile(&arcs, &gradients, &[0.0, 0.0], thermal);
-        assert_eq!(
-            result,
-            Err(FluxError::NonFinite("PAFI reactant partition exponent"))
-        );
+    fn finite_exponential_rejects_linear_overflow_and_underflow() {
+        assert_eq!(finite_exponential(f64::MAX.ln() + 1.0), None);
+        assert_eq!(finite_exponential(f64::MIN_POSITIVE.ln() - 1.0), None);
     }
 
     #[test]
@@ -2063,7 +2074,7 @@ mod tests {
         assert_eq!(profile.barrier, 0.0);
         let partition = (TAU / curvature).sqrt();
         assert_abs_diff_eq!(
-            profile.reactant_partition,
+            profile.reactant_partition.expect("representable partition"),
             partition,
             epsilon = f64::EPSILON * partition
         );
