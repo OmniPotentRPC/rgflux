@@ -1761,10 +1761,11 @@ fn integrate_spectral_profile(
         for j in 0..n {
             integration_weights[i][j] -= alpha * cubic_scale * (m_basis[i - 1][j] + m_basis[i][j]);
         }
-        let mut fi = 0.0_f64;
-        for j in 0..n {
-            fi += integration_weights[i][j] * gradients[j];
-        }
+        let fi: f64 = integration_weights[i]
+            .iter()
+            .zip(gradients)
+            .map(|(&w, &g)| w * g)
+            .sum();
         if !fi.is_finite() {
             return Err(FluxError::NonFinite("PAFI integrated free energy"));
         }
