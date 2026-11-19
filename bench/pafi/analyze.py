@@ -4,6 +4,7 @@ import json
 import math
 import pathlib
 import statistics
+import sys
 
 REACTANT_PARTITION_ERROR = (
     "invalid configuration: PAFI reactant partition must be finite and positive"
@@ -28,35 +29,97 @@ def load_analysis_dependencies():
     from scipy.stats import fisher_exact, mannwhitneyu
 
 
+class StablePathHelp(argparse.ArgumentDefaultsHelpFormatter):
+    def __init__(self, prog):
+        super().__init__(prog, width=160)
+
+
 def arguments():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--raw-dir", type=pathlib.Path)
-    parser.add_argument("--vacancy-raw-dir", type=pathlib.Path)
-    parser.add_argument("--vacancy-path", type=pathlib.Path)
-    parser.add_argument("--vacancy-static-reference", type=pathlib.Path)
-    parser.add_argument("--metadata", type=pathlib.Path)
+    parser = argparse.ArgumentParser(formatter_class=StablePathHelp)
+    raw = pathlib.Path(__file__).resolve().parent / "raw"
+    parser.add_argument(
+        "--raw-dir",
+        type=pathlib.Path,
+        default=raw / "dimer",
+        help="dimer raw records (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--vacancy-raw-dir",
+        type=pathlib.Path,
+        default=raw / "vacancy",
+        help="vacancy raw records (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--vacancy-path",
+        type=pathlib.Path,
+        default=raw / "vacancy-path.json",
+        help="shared vacancy pathway (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--vacancy-static-reference",
+        type=pathlib.Path,
+        default=raw / "vacancy-static.json",
+        help="static vacancy energies (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--metadata",
+        type=pathlib.Path,
+        default=raw / "metadata.json",
+        help="campaign metadata (default: %(default)s)",
+    )
     parser.add_argument("--output-json", type=pathlib.Path)
     parser.add_argument("--output-markdown", type=pathlib.Path)
     parser.add_argument("--validate-results", type=pathlib.Path)
     args = parser.parse_args()
     if args.validate_results is None:
-        required = (
-            "raw_dir",
-            "vacancy_raw_dir",
-            "vacancy_path",
-            "vacancy_static_reference",
-            "metadata",
-            "output_json",
-            "output_markdown",
-        )
         missing = [
-            name.replace("_", "-")
-            for name in required
-            if getattr(args, name) is None
+            flag
+            for flag, value in (
+                ("--output-json", args.output_json),
+                ("--output-markdown", args.output_markdown),
+            )
+            if value is None
         ]
         if missing:
-            parser.error("the following arguments are required: " + ", ".join(missing))
+            parser.error(
+                "the following arguments are required: " + ", ".join(missing)
+            )
     return args
+
+
+def read_required_json(path, description):
+    path = pathlib.Path(path)
+    if not path.is_file():
+        raise AnalysisError(f"{description} is missing: {path}")
+    try:
+        return json.loads(path.read_text())
+    except json.JSONDecodeError as error:
+        raise AnalysisError(f"{description} is not valid JSON: {path}") from error
+
+
+def load_metadata(path):
+    return read_required_json(path, "metadata.json")
+
+
+def load_campaign_entries(raw_dir):
+    raw_dir = pathlib.Path(raw_dir)
+    manifest_path = raw_dir / "manifest.json"
+    manifest = read_required_json(manifest_path, "campaign manifest")
+    if not isinstance(manifest, list):
+        raise AnalysisError(f"campaign manifest is not a list: {manifest_path}")
+    entries = []
+    for item in manifest:
+        record_path = raw_dir / item["record"]
+        if not record_path.is_file():
+            raise AnalysisError(f"raw record is missing: {record_path}")
+        try:
+            record = json.loads(record_path.read_text())
+        except json.JSONDecodeError as error:
+            raise AnalysisError(
+                f"raw record is not valid JSON: {record_path}"
+            ) from error
+        entries.append((item, record))
+    return entries
 
 
 def finite_values(values, context):
@@ -312,11 +375,7 @@ def rejection_audit(entries):
 
 
 def vacancy_cells(raw_dir, vacancy_path, vacancy_static):
-    manifest = json.loads((raw_dir / "manifest.json").read_text())
-    entries = [
-        (item, json.loads((raw_dir / item["record"]).read_text()))
-        for item in manifest
-    ]
+    entries = load_campaign_entries(raw_dir)
     for item, record in entries:
         if item["engine"] == "rgflux":
             record["effective_threads"] = 1
@@ -860,14 +919,27 @@ def verdict_section(statistics, result):
 
 def main():
     args = arguments()
+    try:
+        run(args)
+    except AnalysisError as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def run(args):
     if args.validate_results is not None:
         result = json.loads(args.validate_results.read_text())
         print(json.dumps(validate_result(result), sort_keys=True))
         return
+    metadata = load_metadata(args.metadata)
+    entries = load_campaign_entries(args.raw_dir)
+    load_campaign_entries(args.vacancy_raw_dir)
+    vacancy_path = read_required_json(args.vacancy_path, "vacancy path")
+    vacancy_static = read_required_json(
+        args.vacancy_static_reference, "vacancy static reference"
+    )
     load_analysis_dependencies()
-    metadata = json.loads(args.metadata.read_text())
-    vacancy_path = json.loads(args.vacancy_path.read_text())
-    vacancy_static = json.loads(args.vacancy_static_reference.read_text())
     vacancy_entries, vacancy = vacancy_cells(
         args.vacancy_raw_dir, vacancy_path, vacancy_static
     )
@@ -879,11 +951,6 @@ def main():
         if record.get("status") == "rejected":
             reason = record["error"]
             vacancy_rejections[reason] = vacancy_rejections.get(reason, 0) + 1
-    manifest = json.loads((args.raw_dir / "manifest.json").read_text())
-    entries = []
-    for item in manifest:
-        record = json.loads((args.raw_dir / item["record"]).read_text())
-        entries.append((item, record))
     rejection_reasons = {}
     process_failures = 0
     for _, record in entries:
@@ -1622,4 +1689,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
