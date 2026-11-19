@@ -365,11 +365,11 @@
         "invalid configuration: PAFI reactant partition must be finite and positive": 4
       },
       "rgflux_overhead_seconds_per_plane": {
-        "median": 0.0001509679411764706,
+        "median": 0.0001473924411764706,
         "n": 8,
         "nonfinite_samples": 0,
-        "q1": 0.0001492989705882353,
-        "q3": 0.00015429620588235294
+        "q1": 0.00014555198529411765,
+        "q3": 0.0001487556617647059
       },
       "samples": 64,
       "static_energy_absolute_difference": {
@@ -396,19 +396,19 @@
       "threads": 1,
       "wall_seconds": {
         "lammps_pafi": {
-          "median": 0.05231462849997115,
+          "median": 0.054730858499624446,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.05206911174997231,
-          "q3": 0.05270041349990606
+          "q1": 0.05433755900014603,
+          "q3": 0.0550588232500786
         },
         "mann_whitney_p": 1.5876796062554575e-05,
         "rgflux": {
-          "median": 0.0028896625,
+          "median": 0.002826258,
           "n": 8,
           "nonfinite_samples": 0,
-          "q1": 0.0028613985,
-          "q3": 0.00295676975
+          "q1": 0.0027957150000000003,
+          "q3": 0.00290071
         }
       }
     },
@@ -777,11 +777,11 @@
         "invalid configuration: PAFI reactant partition must be finite and positive": 5
       },
       "rgflux_overhead_seconds_per_plane": {
-        "median": 0.00015079923529411765,
+        "median": 0.00015168852941176473,
         "n": 7,
         "nonfinite_samples": 0,
-        "q1": 0.00014924073529411764,
-        "q3": 0.00021153426470588236
+        "q1": 0.00014914441176470586,
+        "q3": 0.00015443550000000003
       },
       "samples": 64,
       "static_energy_absolute_difference": {
@@ -808,19 +808,19 @@
       "threads": 4,
       "wall_seconds": {
         "lammps_pafi": {
-          "median": 0.06074382650001553,
+          "median": 0.0640127254998788,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.06055789950016788,
-          "q3": 0.06107228675000442
+          "q1": 0.06299494975007747,
+          "q3": 0.0662222699997983
         },
         "mann_whitney_p": 3.9691990156386444e-05,
         "rgflux": {
-          "median": 0.00288898,
+          "median": 0.00291427,
           "n": 7,
           "nonfinite_samples": 0,
-          "q1": 0.002860617,
-          "q3": 0.0039944545
+          "q1": 0.002868884,
+          "q3": 0.0029532459999999996
         }
       }
     },
@@ -1189,11 +1189,11 @@
         "invalid configuration: PAFI reactant partition must be finite and positive": 3
       },
       "rgflux_overhead_seconds_per_plane": {
-        "median": 0.00019925558823529412,
+        "median": 0.00020593611764705883,
         "n": 9,
         "nonfinite_samples": 0,
-        "q1": 0.00019755458823529412,
-        "q3": 0.00019969082352941175
+        "q1": 0.0002049109411764706,
+        "q3": 0.0002077335294117647
       },
       "samples": 128,
       "static_energy_absolute_difference": {
@@ -1220,19 +1220,19 @@
       "threads": 1,
       "wall_seconds": {
         "lammps_pafi": {
-          "median": 0.05242204099988612,
+          "median": 0.06158832849996543,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.05209525399999393,
-          "q3": 0.05259721075003654
+          "q1": 0.05967273899977954,
+          "q3": 0.06330625750001673
         },
         "mann_whitney_p": 0.00014348670002530618,
         "rgflux": {
-          "median": 0.003816029,
+          "median": 0.00394477,
           "n": 9,
           "nonfinite_samples": 0,
-          "q1": 0.00378462,
-          "q3": 0.003817452
+          "q1": 0.003927595,
+          "q3": 0.003977819
         }
       }
     },
@@ -1601,11 +1601,11 @@
         "invalid configuration: PAFI reactant partition must be finite and positive": 7
       },
       "rgflux_overhead_seconds_per_plane": {
-        "median": 0.00019970905882352942,
+        "median": 0.00020723117647058825,
         "n": 5,
         "nonfinite_samples": 0,
-        "q1": 0.000198304,
-        "q3": 0.0002017695882352941
+        "q1": 0.00020433058823529412,
+        "q3": 0.00020984376470588236
       },
       "samples": 128,
       "static_energy_absolute_difference": {
@@ -1632,19 +1632,19 @@
       "threads": 4,
       "wall_seconds": {
         "lammps_pafi": {
-          "median": 0.060868616999982805,
+          "median": 0.0688844529997823,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.06008425024992903,
-          "q3": 0.06171830050010385
+          "q1": 0.06780092250016878,
+          "q3": 0.07007164250001097
         },
         "mann_whitney_p": 0.0003232062055591467,
         "rgflux": {
-          "median": 0.003820285,
+          "median": 0.003968205,
           "n": 5,
           "nonfinite_samples": 0,
-          "q1": 0.00379932,
-          "q3": 0.003864447
+          "q1": 0.00391391,
+          "q3": 0.00401667
         }
       }
     },
@@ -2013,11 +2013,11 @@
         "invalid configuration: PAFI reactant partition must be finite and positive": 5
       },
       "rgflux_overhead_seconds_per_plane": {
-        "median": 0.0002987948235294117,
+        "median": 0.0003106937058823529,
         "n": 7,
         "nonfinite_samples": 0,
-        "q1": 0.00029807820588235296,
-        "q3": 0.00029995938235294117
+        "q1": 0.00030775985294117646,
+        "q3": 0.00033655947058823526
       },
       "samples": 256,
       "static_energy_absolute_difference": {
@@ -2044,19 +2044,19 @@
       "threads": 1,
       "wall_seconds": {
         "lammps_pafi": {
-          "median": 0.05257510100000218,
+          "median": 0.05976169049995406,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.05228063150008211,
-          "q3": 0.052734282250071374
+          "q1": 0.05710812650011121,
+          "q3": 0.06075695574986639
         },
         "mann_whitney_p": 3.9691990156386444e-05,
         "rgflux": {
-          "median": 0.005716855,
+          "median": 0.006140456,
           "n": 7,
           "nonfinite_samples": 0,
-          "q1": 0.005707105,
-          "q3": 0.0057429385
+          "q1": 0.005941572,
+          "q3": 0.0065134535
         }
       }
     },
@@ -2425,11 +2425,11 @@
         "invalid configuration: PAFI reactant partition must be finite and positive": 6
       },
       "rgflux_overhead_seconds_per_plane": {
-        "median": 0.00030537649999999995,
+        "median": 0.00029493091176470583,
         "n": 6,
         "nonfinite_samples": 0,
-        "q1": 0.00029988489705882354,
-        "q3": 0.00030624545588235294
+        "q1": 0.0002926054117647059,
+        "q3": 0.00029697375
       },
       "samples": 256,
       "static_energy_absolute_difference": {
@@ -2456,19 +2456,19 @@
       "threads": 4,
       "wall_seconds": {
         "lammps_pafi": {
-          "median": 0.06112221799992312,
+          "median": 0.065085493999959,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.06084010050000188,
-          "q3": 0.06181870349996643
+          "q1": 0.06365952699979971,
+          "q3": 0.06674017550017197
         },
         "mann_whitney_p": 0.00010773540185304891,
         "rgflux": {
-          "median": 0.005839699,
+          "median": 0.0056590775,
           "n": 6,
           "nonfinite_samples": 0,
-          "q1": 0.00575566625,
-          "q3": 0.0058568865
+          "q1": 0.00562969275,
+          "q3": 0.00570004375
         }
       }
     },
@@ -2837,11 +2837,11 @@
         "invalid configuration: PAFI reactant partition must be finite and positive": 1
       },
       "rgflux_overhead_seconds_per_plane": {
-        "median": 0.00015063994117647057,
+        "median": 0.00014549476470588236,
         "n": 11,
         "nonfinite_samples": 0,
-        "q1": 0.00014775058823529412,
-        "q3": 0.00015566247058823528
+        "q1": 0.00014430332352941176,
+        "q3": 0.00014647067647058823
       },
       "samples": 64,
       "static_energy_absolute_difference": {
@@ -2868,19 +2868,19 @@
       "threads": 1,
       "wall_seconds": {
         "lammps_pafi": {
-          "median": 0.058744949999891105,
+          "median": 0.06003774399982831,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.05868864624994785,
-          "q3": 0.0588889577501277
+          "q1": 0.05953557975010426,
+          "q3": 0.06052681824996853
         },
         "mann_whitney_p": 5.548185695864912e-05,
         "rgflux": {
-          "median": 0.002883682,
+          "median": 0.002804846,
           "n": 11,
           "nonfinite_samples": 0,
-          "q1": 0.0028325215,
-          "q3": 0.002981291
+          "q1": 0.002784,
+          "q3": 0.0028412975
         }
       }
     },
@@ -3249,11 +3249,11 @@
         "invalid configuration: PAFI reactant partition must be finite and positive": 5
       },
       "rgflux_overhead_seconds_per_plane": {
-        "median": 0.00014789047058823529,
+        "median": 0.00014413982352941176,
         "n": 7,
         "nonfinite_samples": 0,
-        "q1": 0.0001458999117647059,
-        "q3": 0.00014953164705882352
+        "q1": 0.00014350164705882355,
+        "q3": 0.00014502888235294118
       },
       "samples": 64,
       "static_energy_absolute_difference": {
@@ -3280,19 +3280,19 @@
       "threads": 4,
       "wall_seconds": {
         "lammps_pafi": {
-          "median": 0.08630763049995949,
+          "median": 0.08697915849984383,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.0858685100001253,
-          "q3": 0.08748648349984478
+          "q1": 0.08617867350028519,
+          "q3": 0.08823892025009172
         },
         "mann_whitney_p": 3.9691990156386444e-05,
         "rgflux": {
-          "median": 0.00283428,
+          "median": 0.002766543,
           "n": 7,
           "nonfinite_samples": 0,
-          "q1": 0.0028025174999999998,
-          "q3": 0.0028625795
+          "q1": 0.0027628204999999998,
+          "q3": 0.002785201
         }
       }
     },
@@ -3661,11 +3661,11 @@
         "invalid configuration: PAFI reactant partition must be finite and positive": 4
       },
       "rgflux_overhead_seconds_per_plane": {
-        "median": 0.00020029161764705883,
+        "median": 0.00019462814705882353,
         "n": 8,
         "nonfinite_samples": 0,
-        "q1": 0.00019916705882352942,
-        "q3": 0.00020523032352941177
+        "q1": 0.00019240750000000002,
+        "q3": 0.0001955000882352941
       },
       "samples": 128,
       "static_energy_absolute_difference": {
@@ -3692,19 +3692,19 @@
       "threads": 1,
       "wall_seconds": {
         "lammps_pafi": {
-          "median": 0.060275978499930716,
+          "median": 0.060879141499981415,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.060068403749937715,
-          "q3": 0.06052682299997514
+          "q1": 0.06072904999984985,
+          "q3": 0.061360850500022934
         },
         "mann_whitney_p": 1.5876796062554575e-05,
         "rgflux": {
-          "median": 0.003845057,
+          "median": 0.0037375595000000003,
           "n": 8,
           "nonfinite_samples": 0,
-          "q1": 0.003815355,
-          "q3": 0.0039246490000000005
+          "q1": 0.00370058725,
+          "q3": 0.0037536135
         }
       }
     },
@@ -4073,11 +4073,11 @@
         "invalid configuration: PAFI reactant partition must be finite and positive": 6
       },
       "rgflux_overhead_seconds_per_plane": {
-        "median": 0.00019789335294117649,
+        "median": 0.0001975239411764706,
         "n": 6,
         "nonfinite_samples": 0,
-        "q1": 0.00019716026470588234,
-        "q3": 0.00020129516176470587
+        "q1": 0.0001948806911764706,
+        "q3": 0.0002054089411764706
       },
       "samples": 128,
       "static_energy_absolute_difference": {
@@ -4104,19 +4104,19 @@
       "threads": 4,
       "wall_seconds": {
         "lammps_pafi": {
-          "median": 0.09279207049996785,
+          "median": 0.10509215350020895,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.0915852172500422,
-          "q3": 0.09394227825004009
+          "q1": 0.10150820375019975,
+          "q3": 0.10745285850020991
         },
         "mann_whitney_p": 0.00010773540185304891,
         "rgflux": {
-          "median": 0.0037915245,
+          "median": 0.003785742,
           "n": 6,
           "nonfinite_samples": 0,
-          "q1": 0.00377631175,
-          "q3": 0.00385290875
+          "q1": 0.00375104125,
+          "q3": 0.00393848
         }
       }
     },
@@ -4485,11 +4485,11 @@
         "invalid configuration: PAFI reactant partition must be finite and positive": 3
       },
       "rgflux_overhead_seconds_per_plane": {
-        "median": 0.00030298829411764703,
+        "median": 0.0002936480588235294,
         "n": 9,
         "nonfinite_samples": 0,
-        "q1": 0.00030164729411764706,
-        "q3": 0.00030424864705882353
+        "q1": 0.00029164217647058825,
+        "q3": 0.0003013037647058824
       },
       "samples": 256,
       "static_energy_absolute_difference": {
@@ -4516,19 +4516,19 @@
       "threads": 1,
       "wall_seconds": {
         "lammps_pafi": {
-          "median": 0.06451729399998385,
+          "median": 0.06739418550000664,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.06422178849993543,
-          "q3": 0.06480385675001799
+          "q1": 0.06660371675013721,
+          "q3": 0.0694010760000765
         },
         "mann_whitney_p": 0.00014348670002530618,
         "rgflux": {
-          "median": 0.005795585,
+          "median": 0.005639888,
           "n": 9,
           "nonfinite_samples": 0,
-          "q1": 0.005766074,
-          "q3": 0.005856355
+          "q1": 0.005594481,
+          "q3": 0.006717087
         }
       }
     },
@@ -4897,11 +4897,11 @@
         "invalid configuration: PAFI reactant partition must be finite and positive": 3
       },
       "rgflux_overhead_seconds_per_plane": {
-        "median": 0.0003021400588235294,
+        "median": 0.000301599,
         "n": 9,
         "nonfinite_samples": 0,
-        "q1": 0.0002998761764705882,
-        "q3": 0.00031939723529411765
+        "q1": 0.0002924934117647059,
+        "q3": 0.0003091865882352941
       },
       "samples": 256,
       "static_energy_absolute_difference": {
@@ -4928,19 +4928,19 @@
       "threads": 4,
       "wall_seconds": {
         "lammps_pafi": {
-          "median": 0.1122643195000137,
+          "median": 0.12342867500001375,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.11155510299994376,
-          "q3": 0.11310720649987616
+          "q1": 0.11807620524984941,
+          "q3": 0.12785112450012548
         },
         "mann_whitney_p": 0.00014348670002530618,
         "rgflux": {
-          "median": 0.005774624,
+          "median": 0.005766244,
           "n": 9,
           "nonfinite_samples": 0,
-          "q1": 0.005737073,
-          "q3": 0.006122137
+          "q1": 0.005627342,
+          "q3": 0.005916492
         }
       }
     },
@@ -5309,11 +5309,11 @@
         "invalid configuration: PAFI reactant partition must be finite and positive": 2
       },
       "rgflux_overhead_seconds_per_plane": {
-        "median": 0.00014941208823529412,
+        "median": 0.0001524314411764706,
         "n": 10,
         "nonfinite_samples": 0,
-        "q1": 0.00014768445588235295,
-        "q3": 0.00015231325
+        "q1": 0.00014709154411764706,
+        "q3": 0.00017262263235294116
       },
       "samples": 64,
       "static_energy_absolute_difference": {
@@ -5340,19 +5340,19 @@
       "threads": 1,
       "wall_seconds": {
         "lammps_pafi": {
-          "median": 0.05909966550007084,
+          "median": 0.06564576300002045,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.058624094750030054,
-          "q3": 0.059809687750089324
+          "q1": 0.06395145974988736,
+          "q3": 0.07116490949988474
         },
         "mann_whitney_p": 8.733926588357827e-05,
         "rgflux": {
-          "median": 0.002860709,
+          "median": 0.0029184594999999997,
           "n": 10,
           "nonfinite_samples": 0,
-          "q1": 0.00284185125,
-          "q3": 0.002913789
+          "q1": 0.0028236705,
+          "q3": 0.003450219
         }
       }
     },
@@ -5721,11 +5721,11 @@
         "invalid configuration: PAFI reactant partition must be finite and positive": 2
       },
       "rgflux_overhead_seconds_per_plane": {
-        "median": 0.00014976335294117647,
+        "median": 0.00014744520588235295,
         "n": 10,
         "nonfinite_samples": 0,
-        "q1": 0.0001475423676470588,
-        "q3": 0.00015235685294117649
+        "q1": 0.00014540608823529412,
+        "q3": 0.00014871532352941176
       },
       "samples": 64,
       "static_energy_absolute_difference": {
@@ -5752,19 +5752,19 @@
       "threads": 4,
       "wall_seconds": {
         "lammps_pafi": {
-          "median": 0.08801017599989791,
+          "median": 0.09189123650003239,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.08707098424991955,
-          "q3": 0.08922787875002314
+          "q1": 0.09050056675016549,
+          "q3": 0.0930889067502676
         },
         "mann_whitney_p": 8.733926588357827e-05,
         "rgflux": {
-          "median": 0.0028694855,
+          "median": 0.0028299915,
           "n": 10,
           "nonfinite_samples": 0,
-          "q1": 0.0028294715,
-          "q3": 0.0029182545
+          "q1": 0.0027880854999999998,
+          "q3": 0.0028552112499999997
         }
       }
     },
@@ -6133,11 +6133,11 @@
         "invalid configuration: PAFI reactant partition must be finite and positive": 3
       },
       "rgflux_overhead_seconds_per_plane": {
-        "median": 0.0001984784117647059,
+        "median": 0.0002027275294117647,
         "n": 9,
         "nonfinite_samples": 0,
-        "q1": 0.00019696082352941178,
-        "q3": 0.00020694629411764707
+        "q1": 0.00019993429411764707,
+        "q3": 0.00021170411764705882
       },
       "samples": 128,
       "static_energy_absolute_difference": {
@@ -6164,19 +6164,19 @@
       "threads": 1,
       "wall_seconds": {
         "lammps_pafi": {
-          "median": 0.06144920099995943,
+          "median": 0.06663402849994782,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.06100076300015189,
-          "q3": 0.06422328724994486
+          "q1": 0.062401280500012035,
+          "q3": 0.0715816127500375
         },
         "mann_whitney_p": 0.00014348670002530618,
         "rgflux": {
-          "median": 0.003799979,
+          "median": 0.003891287,
           "n": 9,
           "nonfinite_samples": 0,
-          "q1": 0.003773179,
-          "q3": 0.003966262
+          "q1": 0.003835784,
+          "q3": 0.004061228
         }
       }
     },
@@ -6545,11 +6545,11 @@
         "invalid configuration: PAFI reactant partition must be finite and positive": 5
       },
       "rgflux_overhead_seconds_per_plane": {
-        "median": 0.00020439364705882355,
+        "median": 0.00020238529411764706,
         "n": 7,
         "nonfinite_samples": 0,
-        "q1": 0.00019798670588235293,
-        "q3": 0.00020750638235294118
+        "q1": 0.0001972508823529412,
+        "q3": 0.00020406788235294117
       },
       "samples": 128,
       "static_energy_absolute_difference": {
@@ -6576,19 +6576,19 @@
       "threads": 4,
       "wall_seconds": {
         "lammps_pafi": {
-          "median": 0.09839495149992672,
+          "median": 0.10184627800003909,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.09688611625000476,
-          "q3": 0.09921603374988308
+          "q1": 0.09841878350016486,
+          "q3": 0.10655932149995806
         },
         "mann_whitney_p": 3.9691990156386444e-05,
         "rgflux": {
-          "median": 0.003915843,
+          "median": 0.003872263,
           "n": 7,
           "nonfinite_samples": 0,
-          "q1": 0.0037939825,
-          "q3": 0.0039705485
+          "q1": 0.0037868345,
+          "q3": 0.003913529
         }
       }
     },
@@ -6957,11 +6957,11 @@
         "invalid configuration: PAFI reactant partition must be finite and positive": 5
       },
       "rgflux_overhead_seconds_per_plane": {
-        "median": 0.00033363164705882355,
+        "median": 0.00029347852941176466,
         "n": 7,
         "nonfinite_samples": 0,
-        "q1": 0.00032187900000000007,
-        "q3": 0.00033996108823529413
+        "q1": 0.00028985655882352945,
+        "q3": 0.00030329994117647056
       },
       "samples": 256,
       "static_energy_absolute_difference": {
@@ -6988,19 +6988,19 @@
       "threads": 1,
       "wall_seconds": {
         "lammps_pafi": {
-          "median": 0.06832834199985882,
+          "median": 0.06475686499993571,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.06723540724993882,
-          "q3": 0.07065846875002535
+          "q1": 0.06381265775007705,
+          "q3": 0.06536595999989459
         },
         "mann_whitney_p": 3.9691990156386444e-05,
         "rgflux": {
-          "median": 0.006371088,
+          "median": 0.005633004,
           "n": 7,
           "nonfinite_samples": 0,
-          "q1": 0.0061492035,
-          "q3": 0.00648088
+          "q1": 0.005574218000000001,
+          "q3": 0.005796273500000001
         }
       }
     },
@@ -7369,11 +7369,11 @@
         "invalid configuration: PAFI reactant partition must be finite and positive": 2
       },
       "rgflux_overhead_seconds_per_plane": {
-        "median": 0.00033802638235294114,
+        "median": 0.0002946213823529412,
         "n": 10,
         "nonfinite_samples": 0,
-        "q1": 0.00030572655882352937,
-        "q3": 0.0003436999264705882
+        "q1": 0.0002910251323529412,
+        "q3": 0.0003044141764705882
       },
       "samples": 256,
       "static_energy_absolute_difference": {
@@ -7400,19 +7400,19 @@
       "threads": 4,
       "wall_seconds": {
         "lammps_pafi": {
-          "median": 0.11378700149987253,
+          "median": 0.11180769400016288,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.10989994124997793,
-          "q3": 0.11713542825003742
+          "q1": 0.11002819300017563,
+          "q3": 0.1250014935000081
         },
         "mann_whitney_p": 8.733926588357827e-05,
         "rgflux": {
-          "median": 0.006471987,
+          "median": 0.0056551625,
           "n": 10,
           "nonfinite_samples": 0,
-          "q1": 0.0058493265,
-          "q3": 0.006571267
+          "q1": 0.0055898045,
+          "q3": 0.00583463825
         }
       }
     },
@@ -7973,11 +7973,11 @@
         "invalid configuration: PAFI reactant partition must be finite and positive": 2
       },
       "rgflux_overhead_seconds_per_plane": {
-        "median": 0.0001520810909090909,
+        "median": 0.0001464809393939394,
         "n": 10,
         "nonfinite_samples": 0,
-        "q1": 0.0001479791893939394,
-        "q3": 0.00015559446212121212
+        "q1": 0.00014518539393939395,
+        "q3": 0.00015025646969696972
       },
       "samples": 64,
       "static_energy_absolute_difference": {
@@ -8004,19 +8004,19 @@
       "threads": 1,
       "wall_seconds": {
         "lammps_pafi": {
-          "median": 0.09551724150003338,
+          "median": 0.09848615000009886,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.09478058225010955,
-          "q3": 0.09851134400003048
+          "q1": 0.0963174217500864,
+          "q3": 0.10330666499999097
         },
         "mann_whitney_p": 8.733926588357827e-05,
         "rgflux": {
-          "median": 0.0056482979999999995,
+          "median": 0.0055013755,
           "n": 10,
           "nonfinite_samples": 0,
-          "q1": 0.00550750025,
-          "q3": 0.005792319000000001
+          "q1": 0.00542082675,
+          "q3": 0.00561116675
         }
       }
     },
@@ -8577,11 +8577,11 @@
         "invalid configuration: PAFI reactant partition must be finite and positive": 9
       },
       "rgflux_overhead_seconds_per_plane": {
-        "median": 0.0001474431212121212,
+        "median": 0.0001467019696969697,
         "n": 3,
         "nonfinite_samples": 0,
-        "q1": 0.0001469310606060606,
-        "q3": 0.00014826954545454544
+        "q1": 0.00014601613636363637,
+        "q3": 0.00014679571212121212
       },
       "samples": 64,
       "static_energy_absolute_difference": {
@@ -8608,19 +8608,19 @@
       "threads": 4,
       "wall_seconds": {
         "lammps_pafi": {
-          "median": 0.11032802550005272,
+          "median": 0.11204952099978982,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.10897285474999308,
-          "q3": 0.11121952324998574
+          "q1": 0.10986902975002977,
+          "q3": 0.11318364349983767
         },
         "mann_whitney_p": 0.004395604395604396,
         "rgflux": {
-          "median": 0.005489582,
+          "median": 0.005466498,
           "n": 3,
           "nonfinite_samples": 0,
-          "q1": 0.005473923,
-          "q3": 0.00552319
+          "q1": 0.005442178000000001,
+          "q3": 0.005469863
         }
       }
     },
@@ -9181,11 +9181,11 @@
         "invalid configuration: PAFI reactant partition must be finite and positive": 3
       },
       "rgflux_overhead_seconds_per_plane": {
-        "median": 0.00020296675757575756,
+        "median": 0.00020359287878787878,
         "n": 9,
         "nonfinite_samples": 0,
-        "q1": 0.00020059436363636365,
-        "q3": 0.00023434669696969696
+        "q1": 0.0002024538787878788,
+        "q3": 0.00020973824242424244
       },
       "samples": 128,
       "static_energy_absolute_difference": {
@@ -9212,19 +9212,19 @@
       "threads": 1,
       "wall_seconds": {
         "lammps_pafi": {
-          "median": 0.0953226404999441,
+          "median": 0.11466861950020757,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.094650542749946,
-          "q3": 0.0961062014999925
+          "q1": 0.10742311299998164,
+          "q3": 0.12197919599975648
         },
         "mann_whitney_p": 0.00014348670002530618,
         "rgflux": {
-          "median": 0.007543185,
+          "median": 0.007575939,
           "n": 9,
           "nonfinite_samples": 0,
-          "q1": 0.007458451,
-          "q3": 0.008562226
+          "q1": 0.007542202,
+          "q3": 0.007992036
         }
       }
     },
@@ -9785,11 +9785,11 @@
         "invalid configuration: PAFI reactant partition must be finite and positive": 4
       },
       "rgflux_overhead_seconds_per_plane": {
-        "median": 0.00020118068181818182,
+        "median": 0.00019445543939393937,
         "n": 8,
         "nonfinite_samples": 0,
-        "q1": 0.0001995891287878788,
-        "q3": 0.00020400881060606062
+        "q1": 0.0001907835303030303,
+        "q3": 0.00020024970454545456
       },
       "samples": 128,
       "static_energy_absolute_difference": {
@@ -9816,19 +9816,19 @@
       "threads": 4,
       "wall_seconds": {
         "lammps_pafi": {
-          "median": 0.1115672060000179,
+          "median": 0.11441171000024042,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.10977292350014523,
-          "q3": 0.1149598354999739
+          "q1": 0.11121083324985648,
+          "q3": 0.11731275700014976
         },
         "mann_whitney_p": 1.5876796062554575e-05,
         "rgflux": {
-          "median": 0.0074873075,
+          "median": 0.007263647,
           "n": 8,
           "nonfinite_samples": 0,
-          "q1": 0.0074173545,
-          "q3": 0.0075726955
+          "q1": 0.00712192175,
+          "q3": 0.00746545875
         }
       }
     },
@@ -10389,11 +10389,11 @@
         "invalid configuration: PAFI reactant partition must be finite and positive": 2
       },
       "rgflux_overhead_seconds_per_plane": {
-        "median": 0.0003031998333333333,
+        "median": 0.00029248107575757576,
         "n": 10,
         "nonfinite_samples": 0,
-        "q1": 0.00030261499242424244,
-        "q3": 0.00030738852272727273
+        "q1": 0.00029171543939393937,
+        "q3": 0.0002934460303030303
       },
       "samples": 256,
       "static_energy_absolute_difference": {
@@ -10420,19 +10420,19 @@
       "threads": 1,
       "wall_seconds": {
         "lammps_pafi": {
-          "median": 0.0950057884999751,
+          "median": 0.09618984799999453,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.09421572000002243,
-          "q3": 0.0960771617499745
+          "q1": 0.09547706174976156,
+          "q3": 0.09687633100008952
         },
         "mann_whitney_p": 8.733926588357827e-05,
         "rgflux": {
-          "median": 0.011306503499999999,
+          "median": 0.01089586,
           "n": 10,
           "nonfinite_samples": 0,
-          "q1": 0.01124120675,
-          "q3": 0.01143541825
+          "q1": 0.010869491750000002,
+          "q3": 0.010914526
         }
       }
     },
@@ -10993,11 +10993,11 @@
         "invalid configuration: PAFI reactant partition must be finite and positive": 3
       },
       "rgflux_overhead_seconds_per_plane": {
-        "median": 0.0003027513636363636,
+        "median": 0.0002911111212121212,
         "n": 9,
         "nonfinite_samples": 0,
-        "q1": 0.0003002697878787879,
-        "q3": 0.0003048619090909091
+        "q1": 0.0002900273333333333,
+        "q3": 0.0002924146666666667
       },
       "samples": 256,
       "static_energy_absolute_difference": {
@@ -11024,19 +11024,19 @@
       "threads": 4,
       "wall_seconds": {
         "lammps_pafi": {
-          "median": 0.1112916454999322,
+          "median": 0.11072462699985408,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.10903970774990057,
-          "q3": 0.11284408749986596
+          "q1": 0.10941082050021578,
+          "q3": 0.11253369599990037
         },
         "mann_whitney_p": 0.00014348670002530618,
         "rgflux": {
-          "median": 0.011246269,
+          "median": 0.010844729,
           "n": 9,
           "nonfinite_samples": 0,
-          "q1": 0.011158041,
-          "q3": 0.011317635
+          "q1": 0.010810465,
+          "q3": 0.010906772
         }
       }
     },
@@ -11597,11 +11597,11 @@
         "invalid configuration: PAFI reactant partition must be finite and positive": 4
       },
       "rgflux_overhead_seconds_per_plane": {
-        "median": 0.00015089789393939396,
+        "median": 0.00015765001515151514,
         "n": 8,
         "nonfinite_samples": 0,
-        "q1": 0.00014840884848484848,
-        "q3": 0.00015903107575757574
+        "q1": 0.0001492577803030303,
+        "q3": 0.00017647964393939394
       },
       "samples": 64,
       "static_energy_absolute_difference": {
@@ -11628,19 +11628,19 @@
       "threads": 1,
       "wall_seconds": {
         "lammps_pafi": {
-          "median": 0.10697587950005527,
+          "median": 0.11932702000012796,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.10639185050001743,
-          "q3": 0.10789871750006341
+          "q1": 0.11348234599995521,
+          "q3": 0.12460816850000356
         },
         "mann_whitney_p": 1.5876796062554575e-05,
         "rgflux": {
-          "median": 0.0056217895,
+          "median": 0.0058495785,
           "n": 8,
           "nonfinite_samples": 0,
-          "q1": 0.0055219857500000006,
-          "q3": 0.0058750375
+          "q1": 0.00555920575,
+          "q3": 0.00652396275
         }
       }
     },
@@ -12201,11 +12201,11 @@
         "invalid configuration: PAFI reactant partition must be finite and positive": 4
       },
       "rgflux_overhead_seconds_per_plane": {
-        "median": 0.00014836003030303032,
+        "median": 0.00014699181818181818,
         "n": 8,
         "nonfinite_samples": 0,
-        "q1": 0.00014761698484848487,
-        "q3": 0.00014892752272727274
+        "q1": 0.0001467769772727273,
+        "q3": 0.0001480045227272727
       },
       "samples": 64,
       "static_energy_absolute_difference": {
@@ -12232,19 +12232,19 @@
       "threads": 4,
       "wall_seconds": {
         "lammps_pafi": {
-          "median": 0.16113941100002194,
+          "median": 0.16246727749989986,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.160431910250054,
-          "q3": 0.16223224625002786
+          "q1": 0.15879666500018175,
+          "q3": 0.16932558925020658
         },
         "mann_whitney_p": 1.5876796062554575e-05,
         "rgflux": {
-          "median": 0.0055220995000000005,
+          "median": 0.0054967125000000006,
           "n": 8,
           "nonfinite_samples": 0,
-          "q1": 0.0054983475,
-          "q3": 0.00555583925
+          "q1": 0.00547643325,
+          "q3": 0.00554329525
         }
       }
     },
@@ -12805,11 +12805,11 @@
         "invalid configuration: PAFI reactant partition must be finite and positive": 6
       },
       "rgflux_overhead_seconds_per_plane": {
-        "median": 0.00020082689393939395,
+        "median": 0.00019579690909090909,
         "n": 6,
         "nonfinite_samples": 0,
-        "q1": 0.00019936067424242425,
-        "q3": 0.00022496452272727273
+        "q1": 0.0001945661212121212,
+        "q3": 0.00019736760606060605
       },
       "samples": 128,
       "static_energy_absolute_difference": {
@@ -12836,19 +12836,19 @@
       "threads": 1,
       "wall_seconds": {
         "lammps_pafi": {
-          "median": 0.1104609439998967,
+          "median": 0.11264019999998709,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.1100608277499191,
-          "q3": 0.11127689399995688
+          "q1": 0.11197290624988909,
+          "q3": 0.11362147674992684
         },
         "mann_whitney_p": 0.00010773540185304891,
         "rgflux": {
-          "median": 0.007468983,
+          "median": 0.007329224,
           "n": 6,
           "nonfinite_samples": 0,
-          "q1": 0.0074101225,
-          "q3": 0.0082533935
+          "q1": 0.0072698057499999994,
+          "q3": 0.0073764105
         }
       }
     },
@@ -13409,11 +13409,11 @@
         "invalid configuration: PAFI reactant partition must be finite and positive": 6
       },
       "rgflux_overhead_seconds_per_plane": {
-        "median": 0.00020126116666666666,
+        "median": 0.00019283919696969697,
         "n": 6,
         "nonfinite_samples": 0,
-        "q1": 0.00019861826515151515,
-        "q3": 0.00021600938636363637
+        "q1": 0.00019153332575757575,
+        "q3": 0.0001946404318181818
       },
       "samples": 128,
       "static_energy_absolute_difference": {
@@ -13440,19 +13440,19 @@
       "threads": 4,
       "wall_seconds": {
         "lammps_pafi": {
-          "median": 0.1769717855000863,
+          "median": 0.18158565649991942,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.17663967924983126,
-          "q3": 0.17976631324989967
+          "q1": 0.17868618450017948,
+          "q3": 0.1838740582502396
         },
         "mann_whitney_p": 0.00010773540185304891,
         "rgflux": {
-          "median": 0.0074885865,
+          "median": 0.0072021475000000005,
           "n": 6,
           "nonfinite_samples": 0,
-          "q1": 0.00739465,
-          "q3": 0.008030258
+          "q1": 0.007153155499999999,
+          "q3": 0.00727189425
         }
       }
     },
@@ -14013,11 +14013,11 @@
         "invalid configuration: PAFI reactant partition must be finite and positive": 4
       },
       "rgflux_overhead_seconds_per_plane": {
-        "median": 0.0003541877575757576,
+        "median": 0.000297517303030303,
         "n": 8,
         "nonfinite_samples": 0,
-        "q1": 0.0003121606818181818,
-        "q3": 0.0003858481893939394
+        "q1": 0.00029456928787878787,
+        "q3": 0.0003027994545454545
       },
       "samples": 256,
       "static_energy_absolute_difference": {
@@ -14044,19 +14044,19 @@
       "threads": 1,
       "wall_seconds": {
         "lammps_pafi": {
-          "median": 0.1304217314999505,
+          "median": 0.11801369550016716,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.12179525575010075,
-          "q3": 0.1424199860000499
+          "q1": 0.11585211049998634,
+          "q3": 0.12085395450014857
         },
         "mann_whitney_p": 1.5876796062554575e-05,
         "rgflux": {
-          "median": 0.0131468865,
+          "median": 0.011052778499999999,
           "n": 8,
           "nonfinite_samples": 0,
-          "q1": 0.011655062,
-          "q3": 0.014569955
+          "q1": 0.01096666475,
+          "q3": 0.01127361575
         }
       }
     },
@@ -14617,11 +14617,11 @@
         "invalid configuration: PAFI reactant partition must be finite and positive": 5
       },
       "rgflux_overhead_seconds_per_plane": {
-        "median": 0.00033126533333333334,
+        "median": 0.0002908410303030303,
         "n": 7,
         "nonfinite_samples": 0,
-        "q1": 0.0003200993939393939,
-        "q3": 0.00035935851515151514
+        "q1": 0.0002901937272727273,
+        "q3": 0.0002924874242424242
       },
       "samples": 256,
       "static_energy_absolute_difference": {
@@ -14648,19 +14648,19 @@
       "threads": 4,
       "wall_seconds": {
         "lammps_pafi": {
-          "median": 0.2142537290000064,
+          "median": 0.1990406914999312,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.20931998875011004,
-          "q3": 0.21849311125009763
+          "q1": 0.19868906550004795,
+          "q3": 0.20683253375000277
         },
         "mann_whitney_p": 3.9691990156386444e-05,
         "rgflux": {
-          "median": 0.012328563,
+          "median": 0.010836858,
           "n": 7,
           "nonfinite_samples": 0,
-          "q1": 0.0118825275,
-          "q3": 0.013330106500000001
+          "q1": 0.0108121415,
+          "q3": 0.010893871999999999
         }
       }
     },
@@ -15221,11 +15221,11 @@
         "invalid configuration: PAFI reactant partition must be finite and positive": 4
       },
       "rgflux_overhead_seconds_per_plane": {
-        "median": 0.00015069348484848485,
+        "median": 0.0001468128787878788,
         "n": 8,
         "nonfinite_samples": 0,
-        "q1": 0.0001472385303030303,
-        "q3": 0.0001552184621212121
+        "q1": 0.00014491452272727274,
+        "q3": 0.0001524044015151515
       },
       "samples": 64,
       "static_energy_absolute_difference": {
@@ -15252,19 +15252,19 @@
       "threads": 1,
       "wall_seconds": {
         "lammps_pafi": {
-          "median": 0.10794305600006737,
+          "median": 0.11589172499998313,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.10771321824995539,
-          "q3": 0.10841761925001947
+          "q1": 0.11163801699979103,
+          "q3": 0.11957958900006815
         },
         "mann_whitney_p": 1.5876796062554575e-05,
         "rgflux": {
-          "median": 0.0055961355,
+          "median": 0.005478783500000001,
           "n": 8,
           "nonfinite_samples": 0,
-          "q1": 0.005521796,
-          "q3": 0.00576834275
+          "q1": 0.00541728175,
+          "q3": 0.005682834249999999
         }
       }
     },
@@ -15825,11 +15825,11 @@
         "invalid configuration: PAFI reactant partition must be finite and positive": 2
       },
       "rgflux_overhead_seconds_per_plane": {
-        "median": 0.0001494048787878788,
+        "median": 0.00014531427272727274,
         "n": 10,
         "nonfinite_samples": 0,
-        "q1": 0.0001482118106060606,
-        "q3": 0.00015148023484848485
+        "q1": 0.00014370995454545456,
+        "q3": 0.00014593481818181818
       },
       "samples": 64,
       "static_energy_absolute_difference": {
@@ -15856,19 +15856,19 @@
       "threads": 4,
       "wall_seconds": {
         "lammps_pafi": {
-          "median": 0.16294015450000643,
+          "median": 0.16280011300023034,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.16143488074993684,
-          "q3": 0.16434810924988597
+          "q1": 0.1596593567500122,
+          "q3": 0.16683680324979377
         },
         "mann_whitney_p": 8.733926588357827e-05,
         "rgflux": {
-          "median": 0.005560954,
+          "median": 0.005421029,
           "n": 10,
           "nonfinite_samples": 0,
-          "q1": 0.005519699249999999,
-          "q3": 0.0056566294999999996
+          "q1": 0.0053822275,
+          "q3": 0.005442187750000001
         }
       }
     },
@@ -16429,11 +16429,11 @@
         "invalid configuration: PAFI reactant partition must be finite and positive": 3
       },
       "rgflux_overhead_seconds_per_plane": {
-        "median": 0.00020236121212121214,
+        "median": 0.0001994678787878788,
         "n": 9,
         "nonfinite_samples": 0,
-        "q1": 0.00019925078787878786,
-        "q3": 0.00022853299999999998
+        "q1": 0.0001970760909090909,
+        "q3": 0.00020212578787878787
       },
       "samples": 128,
       "static_energy_absolute_difference": {
@@ -16460,19 +16460,19 @@
       "threads": 1,
       "wall_seconds": {
         "lammps_pafi": {
-          "median": 0.1118997885000681,
+          "median": 0.11537285849999535,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.11143894974986779,
-          "q3": 0.11241085824991615
+          "q1": 0.11394844699987061,
+          "q3": 0.12344149699981699
         },
         "mann_whitney_p": 0.00014348670002530618,
         "rgflux": {
-          "median": 0.007514264,
+          "median": 0.007430416,
           "n": 9,
           "nonfinite_samples": 0,
-          "q1": 0.007404881,
-          "q3": 0.008363052
+          "q1": 0.007339263,
+          "q3": 0.007594027
         }
       }
     },
@@ -17033,11 +17033,11 @@
         "invalid configuration: PAFI reactant partition must be finite and positive": 6
       },
       "rgflux_overhead_seconds_per_plane": {
-        "median": 0.00019857733333333334,
+        "median": 0.0001989573484848485,
         "n": 6,
         "nonfinite_samples": 0,
-        "q1": 0.00019653964393939396,
-        "q3": 0.0002012059090909091
+        "q1": 0.0001947463106060606,
+        "q3": 0.00020824054545454546
       },
       "samples": 128,
       "static_energy_absolute_difference": {
@@ -17064,19 +17064,19 @@
       "threads": 4,
       "wall_seconds": {
         "lammps_pafi": {
-          "median": 0.18004150800004481,
+          "median": 0.19143161650004004,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.17800288549995003,
-          "q3": 0.18171096825000177
+          "q1": 0.18873791600037748,
+          "q3": 0.19235734749975109
         },
         "mann_whitney_p": 0.00010773540185304891,
         "rgflux": {
-          "median": 0.007418869,
+          "median": 0.0074192045,
           "n": 6,
           "nonfinite_samples": 0,
-          "q1": 0.007327147,
-          "q3": 0.007481446
+          "q1": 0.007267564,
+          "q3": 0.007750084500000001
         }
       }
     },
@@ -17637,11 +17637,11 @@
         "invalid configuration: PAFI reactant partition must be finite and positive": 4
       },
       "rgflux_overhead_seconds_per_plane": {
-        "median": 0.00030662469696969693,
+        "median": 0.0002963882121212121,
         "n": 8,
         "nonfinite_samples": 0,
-        "q1": 0.0003008238712121212,
-        "q3": 0.0003103002272727273
+        "q1": 0.00029167312121212123,
+        "q3": 0.0003127233181818182
       },
       "samples": 256,
       "static_energy_absolute_difference": {
@@ -17668,19 +17668,19 @@
       "threads": 1,
       "wall_seconds": {
         "lammps_pafi": {
-          "median": 0.11837782450004397,
+          "median": 0.11689971800001331,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.11795532899992622,
-          "q3": 0.11876853125011166
+          "q1": 0.11596340924961623,
+          "q3": 0.12190776200009168
         },
         "mann_whitney_p": 1.5876796062554575e-05,
         "rgflux": {
-          "median": 0.0113874765,
+          "median": 0.011093736,
           "n": 8,
           "nonfinite_samples": 0,
-          "q1": 0.011219514,
-          "q3": 0.011529885
+          "q1": 0.010891267250000001,
+          "q3": 0.011629982
         }
       }
     },
@@ -18241,11 +18241,11 @@
         "invalid configuration: PAFI reactant partition must be finite and positive": 3
       },
       "rgflux_overhead_seconds_per_plane": {
-        "median": 0.0003014078787878788,
+        "median": 0.0002976217575757576,
         "n": 9,
         "nonfinite_samples": 0,
-        "q1": 0.0003003408484848485,
-        "q3": 0.00030503563636363637
+        "q1": 0.0002924382424242424,
+        "q3": 0.0003006205151515152
       },
       "samples": 256,
       "static_energy_absolute_difference": {
@@ -18272,19 +18272,19 @@
       "threads": 4,
       "wall_seconds": {
         "lammps_pafi": {
-          "median": 0.20553066050013058,
+          "median": 0.2207011110001531,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.203897534250018,
-          "q3": 0.20952183124990142
+          "q1": 0.1998013847500033,
+          "q3": 0.24694335749995844
         },
         "mann_whitney_p": 0.00014348670002530618,
         "rgflux": {
-          "median": 0.011208942,
+          "median": 0.011090884,
           "n": 9,
           "nonfinite_samples": 0,
-          "q1": 0.011158355,
-          "q3": 0.011337626
+          "q1": 0.01088607,
+          "q3": 0.011197459
         }
       }
     },
@@ -18558,11 +18558,11 @@
       "threads": 1,
       "wall_seconds": {
         "lammps_pafi": {
-          "median": 0.03272566599997617,
+          "median": 0.03501779899988833,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.03250238100000047,
-          "q3": 0.03287564325006542
+          "q1": 0.034391168750062207,
+          "q3": 0.03948576100015089
         },
         "mann_whitney_p": null,
         "rgflux": {
@@ -18844,11 +18844,11 @@
       "threads": 4,
       "wall_seconds": {
         "lammps_pafi": {
-          "median": 0.03645384149996289,
+          "median": 0.04034773850003148,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.0360105375000046,
-          "q3": 0.037235871749970784
+          "q1": 0.039560055000151806,
+          "q3": 0.04366402875029962
         },
         "mann_whitney_p": null,
         "rgflux": {
@@ -19130,11 +19130,11 @@
       "threads": 1,
       "wall_seconds": {
         "lammps_pafi": {
-          "median": 0.032913514999961535,
+          "median": 0.034864522499901796,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.03279862475005757,
-          "q3": 0.03329637299998467
+          "q1": 0.034346896000215565,
+          "q3": 0.03523622474995136
         },
         "mann_whitney_p": null,
         "rgflux": {
@@ -19416,11 +19416,11 @@
       "threads": 4,
       "wall_seconds": {
         "lammps_pafi": {
-          "median": 0.03716862800007448,
+          "median": 0.040058246999933544,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.036216353250040356,
-          "q3": 0.03753539574992715
+          "q1": 0.0388151295002217,
+          "q3": 0.08181151349981519
         },
         "mann_whitney_p": null,
         "rgflux": {
@@ -19702,11 +19702,11 @@
       "threads": 1,
       "wall_seconds": {
         "lammps_pafi": {
-          "median": 0.033012748500027556,
+          "median": 0.03474776849998307,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.03242244000003325,
-          "q3": 0.03321918575005611
+          "q1": 0.03450952549985686,
+          "q3": 0.036235310250049224
         },
         "mann_whitney_p": null,
         "rgflux": {
@@ -19988,11 +19988,11 @@
       "threads": 4,
       "wall_seconds": {
         "lammps_pafi": {
-          "median": 0.03641759250007226,
+          "median": 0.16938432350002586,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.036243907999960356,
-          "q3": 0.036666413749941285
+          "q1": 0.04005149975000677,
+          "q3": 0.3736382507501048
         },
         "mann_whitney_p": null,
         "rgflux": {
@@ -20274,11 +20274,11 @@
       "threads": 1,
       "wall_seconds": {
         "lammps_pafi": {
-          "median": 0.03670736850006051,
+          "median": 0.03881480600011855,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.03648384675000216,
-          "q3": 0.0368153530000086
+          "q1": 0.03810504675016091,
+          "q3": 0.0401088102499898
         },
         "mann_whitney_p": null,
         "rgflux": {
@@ -20560,11 +20560,11 @@
       "threads": 4,
       "wall_seconds": {
         "lammps_pafi": {
-          "median": 0.05348870350002244,
+          "median": 0.05804278849996081,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.05310774474995128,
-          "q3": 0.05415956724996818
+          "q1": 0.05717179624991786,
+          "q3": 0.15675580524987254
         },
         "mann_whitney_p": null,
         "rgflux": {
@@ -20846,11 +20846,11 @@
       "threads": 1,
       "wall_seconds": {
         "lammps_pafi": {
-          "median": 0.037446943999952964,
+          "median": 0.03961311750003915,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.03701685424996981,
-          "q3": 0.037698674500006746
+          "q1": 0.03909344224985034,
+          "q3": 0.04104323224987638
         },
         "mann_whitney_p": null,
         "rgflux": {
@@ -21132,11 +21132,11 @@
       "threads": 4,
       "wall_seconds": {
         "lammps_pafi": {
-          "median": 0.05781699950006214,
+          "median": 0.0672073339999315,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.057399115499947584,
-          "q3": 0.05831220074992416
+          "q1": 0.06158736949998911,
+          "q3": 0.10530639149988019
         },
         "mann_whitney_p": null,
         "rgflux": {
@@ -21418,11 +21418,11 @@
       "threads": 1,
       "wall_seconds": {
         "lammps_pafi": {
-          "median": 0.04137519749991725,
+          "median": 0.042964554999798565,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.039339655749984104,
-          "q3": 0.04385386100003075
+          "q1": 0.04184766800028683,
+          "q3": 0.0434461454999564
         },
         "mann_whitney_p": null,
         "rgflux": {
@@ -21704,11 +21704,11 @@
       "threads": 4,
       "wall_seconds": {
         "lammps_pafi": {
-          "median": 0.06466757399999778,
+          "median": 0.06939063449999594,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.06394955950008807,
-          "q3": 0.06537860175006927
+          "q1": 0.06786726225004713,
+          "q3": 0.07193668924981012
         },
         "mann_whitney_p": null,
         "rgflux": {
@@ -21990,11 +21990,11 @@
       "threads": 1,
       "wall_seconds": {
         "lammps_pafi": {
-          "median": 0.036493789000019206,
+          "median": 0.04291998399980912,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.036153571249997185,
-          "q3": 0.03677890499997716
+          "q1": 0.04184919875024207,
+          "q3": 0.0452834595001832
         },
         "mann_whitney_p": null,
         "rgflux": {
@@ -22276,11 +22276,11 @@
       "threads": 4,
       "wall_seconds": {
         "lammps_pafi": {
-          "median": 0.05388816599997881,
+          "median": 0.05771364699990045,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.05297263275002706,
-          "q3": 0.054271021500085226
+          "q1": 0.05533707500001128,
+          "q3": 0.05900909450008385
         },
         "mann_whitney_p": null,
         "rgflux": {
@@ -22562,11 +22562,11 @@
       "threads": 1,
       "wall_seconds": {
         "lammps_pafi": {
-          "median": 0.03788254850002204,
+          "median": 0.03888898950026487,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.03771443800005159,
-          "q3": 0.038109521749930764
+          "q1": 0.03861191449993839,
+          "q3": 0.050947807499824194
         },
         "mann_whitney_p": null,
         "rgflux": {
@@ -22848,11 +22848,11 @@
       "threads": 4,
       "wall_seconds": {
         "lammps_pafi": {
-          "median": 0.05667724800002816,
+          "median": 0.07303853700000218,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.05637167974998647,
-          "q3": 0.05823136600002954
+          "q1": 0.06979444474995944,
+          "q3": 0.10795370900018497
         },
         "mann_whitney_p": null,
         "rgflux": {
@@ -23134,11 +23134,11 @@
       "threads": 1,
       "wall_seconds": {
         "lammps_pafi": {
-          "median": 0.0394919300000538,
+          "median": 0.04142242599982637,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.039296906250001484,
-          "q3": 0.04013199625001107
+          "q1": 0.041042667750161854,
+          "q3": 0.042907183749889555
         },
         "mann_whitney_p": null,
         "rgflux": {
@@ -23420,11 +23420,11 @@
       "threads": 4,
       "wall_seconds": {
         "lammps_pafi": {
-          "median": 0.0672767694999834,
+          "median": 0.07911051750011211,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.06505355899994925,
-          "q3": 0.07002373825000063
+          "q1": 0.07098321324986046,
+          "q3": 0.0869220097501966
         },
         "mann_whitney_p": null,
         "rgflux": {
@@ -23799,11 +23799,11 @@
       },
       "rejection_reasons": {},
       "rgflux_overhead_seconds_per_plane": {
-        "median": 0.00014997488235294118,
+        "median": 0.00015111382352941177,
         "n": 12,
         "nonfinite_samples": 0,
-        "q1": 0.00014910426470588238,
-        "q3": 0.00015156261764705882
+        "q1": 0.00014905163235294115,
+        "q3": 0.00015763433823529413
       },
       "samples": 64,
       "static_energy_absolute_difference": {
@@ -23830,19 +23830,19 @@
       "threads": 1,
       "wall_seconds": {
         "lammps_pafi": {
-          "median": 0.05201818299997285,
+          "median": 0.06032647999995788,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.05193736075000288,
-          "q3": 0.052648312499940175
+          "q1": 0.057746846749864744,
+          "q3": 0.061118903249962386
         },
         "mann_whitney_p": 3.6584553538971e-05,
         "rgflux": {
-          "median": 0.002879689,
+          "median": 0.0029038825,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.002866519,
-          "q3": 0.002900658
+          "q1": 0.00286683225,
+          "q3": 0.0030232742499999997
         }
       }
     },
@@ -24209,11 +24209,11 @@
       },
       "rejection_reasons": {},
       "rgflux_overhead_seconds_per_plane": {
-        "median": 0.00014898229411764704,
+        "median": 0.00014775382352941174,
         "n": 12,
         "nonfinite_samples": 0,
-        "q1": 0.00014791905882352943,
-        "q3": 0.00015090064705882352
+        "q1": 0.0001435529705882353,
+        "q3": 0.00015145948529411764
       },
       "samples": 64,
       "static_energy_absolute_difference": {
@@ -24240,19 +24240,19 @@
       "threads": 4,
       "wall_seconds": {
         "lammps_pafi": {
-          "median": 0.059225668999999925,
+          "median": 0.06307424349984103,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.05838568625003404,
-          "q3": 0.05958293000000481
+          "q1": 0.06148046425028042,
+          "q3": 0.06602066424989061
         },
         "mann_whitney_p": 3.6584553538971e-05,
         "rgflux": {
-          "median": 0.0028565785,
+          "median": 0.00284414,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.00283567825,
-          "q3": 0.00288763725
+          "q1": 0.0027628567499999998,
+          "q3": 0.00291421925
         }
       }
     },
@@ -24619,11 +24619,11 @@
       },
       "rejection_reasons": {},
       "rgflux_overhead_seconds_per_plane": {
-        "median": 0.00020056038235294118,
+        "median": 0.00019545667647058825,
         "n": 12,
         "nonfinite_samples": 0,
-        "q1": 0.0001988061911764706,
-        "q3": 0.00020456297058823528
+        "q1": 0.00019289692647058825,
+        "q3": 0.00019744654411764706
       },
       "samples": 128,
       "static_energy_absolute_difference": {
@@ -24650,19 +24650,19 @@
       "threads": 1,
       "wall_seconds": {
         "lammps_pafi": {
-          "median": 0.0533452939999961,
+          "median": 0.0537321394999708,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.05280240600001207,
-          "q3": 0.05421021599997289
+          "q1": 0.053392593249782294,
+          "q3": 0.05713647749973916
         },
         "mann_whitney_p": 3.6584553538971e-05,
         "rgflux": {
-          "median": 0.0038381565000000003,
+          "median": 0.003751679,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.00380752225,
-          "q3": 0.0039134215
+          "q1": 0.0037054979999999998,
+          "q3": 0.003820184
         }
       }
     },
@@ -25029,11 +25029,11 @@
       },
       "rejection_reasons": {},
       "rgflux_overhead_seconds_per_plane": {
-        "median": 0.00019907597058823527,
+        "median": 0.00019896129411764706,
         "n": 12,
         "nonfinite_samples": 0,
-        "q1": 0.0001971434411764706,
-        "q3": 0.00020244811764705883
+        "q1": 0.00019541236764705883,
+        "q3": 0.00020530560294117648
       },
       "samples": 128,
       "static_energy_absolute_difference": {
@@ -25060,19 +25060,19 @@
       "threads": 4,
       "wall_seconds": {
         "lammps_pafi": {
-          "median": 0.06004537199993365,
+          "median": 0.06588841249958932,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.05899517249994801,
-          "q3": 0.06072644325007559
+          "q1": 0.06137996574977933,
+          "q3": 0.06892994450015522
         },
         "mann_whitney_p": 3.6584553538971e-05,
         "rgflux": {
-          "median": 0.0038369700000000003,
+          "median": 0.0038176105,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.00377607775,
-          "q3": 0.0038820235
+          "q1": 0.0037513195,
+          "q3": 0.003960429
         }
       }
     },
@@ -25439,11 +25439,11 @@
       },
       "rejection_reasons": {},
       "rgflux_overhead_seconds_per_plane": {
-        "median": 0.00030851076470588234,
+        "median": 0.00029448629411764707,
         "n": 12,
         "nonfinite_samples": 0,
-        "q1": 0.00030420132352941174,
-        "q3": 0.0003143799852941176
+        "q1": 0.00029284082352941176,
+        "q3": 0.00029592726470588235
       },
       "samples": 256,
       "static_energy_absolute_difference": {
@@ -25470,19 +25470,19 @@
       "threads": 1,
       "wall_seconds": {
         "lammps_pafi": {
-          "median": 0.05295352899992167,
+          "median": 0.05297211150013936,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.052713819000047124,
-          "q3": 0.05393705725001041
+          "q1": 0.0527097787501134,
+          "q3": 0.05338414224991084
         },
         "mann_whitney_p": 3.6584553538971e-05,
         "rgflux": {
-          "median": 0.0058899995,
+          "median": 0.0056608395,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.00581096125,
-          "q3": 0.00600185025
+          "q1": 0.00562491975,
+          "q3": 0.0056721615
         }
       }
     },
@@ -25849,11 +25849,11 @@
       },
       "rejection_reasons": {},
       "rgflux_overhead_seconds_per_plane": {
-        "median": 0.0003058800588235294,
+        "median": 0.00029485911764705883,
         "n": 12,
         "nonfinite_samples": 0,
-        "q1": 0.000302994,
-        "q3": 0.0003093674705882353
+        "q1": 0.0002932112794117647,
+        "q3": 0.00030774185294117645
       },
       "samples": 256,
       "static_energy_absolute_difference": {
@@ -25880,19 +25880,19 @@
       "threads": 4,
       "wall_seconds": {
         "lammps_pafi": {
-          "median": 0.059213278000015634,
+          "median": 0.0675608149999789,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.05894827574999795,
-          "q3": 0.06020192675003955
+          "q1": 0.06376933425008247,
+          "q3": 0.08134138424998127
         },
         "mann_whitney_p": 3.6584553538971e-05,
         "rgflux": {
-          "median": 0.0058530895,
+          "median": 0.005650674,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.00579249275,
-          "q3": 0.00591933625
+          "q1": 0.00562636775,
+          "q3": 0.00589399275
         }
       }
     },
@@ -26259,11 +26259,11 @@
       },
       "rejection_reasons": {},
       "rgflux_overhead_seconds_per_plane": {
-        "median": 0.00014970802941176471,
+        "median": 0.00014466032352941177,
         "n": 12,
         "nonfinite_samples": 0,
-        "q1": 0.0001484324705882353,
-        "q3": 0.0001512276176470588
+        "q1": 0.00014356005882352942,
+        "q3": 0.0001458439411764706
       },
       "samples": 64,
       "static_energy_absolute_difference": {
@@ -26290,19 +26290,19 @@
       "threads": 1,
       "wall_seconds": {
         "lammps_pafi": {
-          "median": 0.06062448500000528,
+          "median": 0.06134750049977811,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.05966174125001089,
-          "q3": 0.06161319275003052
+          "q1": 0.06085109775028741,
+          "q3": 0.06231937425002343
         },
         "mann_whitney_p": 3.6584553538971e-05,
         "rgflux": {
-          "median": 0.002876488,
+          "median": 0.002793215,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.0028607995,
-          "q3": 0.0028983462500000003
+          "q1": 0.00276849175,
+          "q3": 0.00281276675
         }
       }
     },
@@ -26669,11 +26669,11 @@
       },
       "rejection_reasons": {},
       "rgflux_overhead_seconds_per_plane": {
-        "median": 0.00014822420588235296,
+        "median": 0.00015133967647058824,
         "n": 12,
         "nonfinite_samples": 0,
-        "q1": 0.00014710255882352942,
-        "q3": 0.0001512933088235294
+        "q1": 0.0001453975588235294,
+        "q3": 0.00015564679411764705
       },
       "samples": 64,
       "static_energy_absolute_difference": {
@@ -26700,19 +26700,19 @@
       "threads": 4,
       "wall_seconds": {
         "lammps_pafi": {
-          "median": 0.09124535199998718,
+          "median": 0.10040160149992516,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.09060586324997644,
-          "q3": 0.09288087449994009
+          "q1": 0.09898746875035158,
+          "q3": 0.10254658499991365
         },
         "mann_whitney_p": 3.6584553538971e-05,
         "rgflux": {
-          "median": 0.002841621,
+          "median": 0.0029055465,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.0028222489999999998,
-          "q3": 0.0029006295000000002
+          "q1": 0.00279245175,
+          "q3": 0.002981114
         }
       }
     },
@@ -27079,11 +27079,11 @@
       },
       "rejection_reasons": {},
       "rgflux_overhead_seconds_per_plane": {
-        "median": 0.00020135364705882352,
+        "median": 0.00019801535294117648,
         "n": 12,
         "nonfinite_samples": 0,
-        "q1": 0.00019982107352941176,
-        "q3": 0.0002067594705882353
+        "q1": 0.00019572845588235294,
+        "q3": 0.00020420186764705885
       },
       "samples": 128,
       "static_energy_absolute_difference": {
@@ -27110,19 +27110,19 @@
       "threads": 1,
       "wall_seconds": {
         "lammps_pafi": {
-          "median": 0.061510064000003695,
+          "median": 0.06505198250010835,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.061125821500013444,
-          "q3": 0.061976420000064536
+          "q1": 0.06248424874979719,
+          "q3": 0.06758823624988963
         },
         "mann_whitney_p": 3.6584553538971e-05,
         "rgflux": {
-          "median": 0.0038547779999999997,
+          "median": 0.003820908,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.00382479075,
-          "q3": 0.00395504925
+          "q1": 0.0037579465,
+          "q3": 0.00391080175
         }
       }
     },
@@ -27489,11 +27489,11 @@
       },
       "rejection_reasons": {},
       "rgflux_overhead_seconds_per_plane": {
-        "median": 0.00020064461764705884,
+        "median": 0.00019423276470588235,
         "n": 12,
         "nonfinite_samples": 0,
-        "q1": 0.00019907882352941176,
-        "q3": 0.00020503554411764708
+        "q1": 0.00019219382352941177,
+        "q3": 0.00019830736764705882
       },
       "samples": 128,
       "static_energy_absolute_difference": {
@@ -27520,19 +27520,19 @@
       "threads": 4,
       "wall_seconds": {
         "lammps_pafi": {
-          "median": 0.09840848999999707,
+          "median": 0.10074484400001893,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.09758124725001949,
-          "q3": 0.10072111399998107
+          "q1": 0.09922727999992276,
+          "q3": 0.25683081749991743
         },
         "mann_whitney_p": 3.6584553538971e-05,
         "rgflux": {
-          "median": 0.003843695,
+          "median": 0.0037372215000000004,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.0038104784999999997,
-          "q3": 0.0039225625
+          "q1": 0.00369313575,
+          "q3": 0.003802438
         }
       }
     },
@@ -27899,11 +27899,11 @@
       },
       "rejection_reasons": {},
       "rgflux_overhead_seconds_per_plane": {
-        "median": 0.00031331723529411765,
+        "median": 0.00029261929411764705,
         "n": 12,
         "nonfinite_samples": 0,
-        "q1": 0.0003092463529411765,
-        "q3": 0.0003379327205882353
+        "q1": 0.0002915326617647059,
+        "q3": 0.00029475664705882354
       },
       "samples": 256,
       "static_energy_absolute_difference": {
@@ -27930,19 +27930,19 @@
       "threads": 1,
       "wall_seconds": {
         "lammps_pafi": {
-          "median": 0.06608819300004143,
+          "median": 0.06520672100009506,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.0656343025000865,
-          "q3": 0.0671464074999335
+          "q1": 0.06482867525005531,
+          "q3": 0.06556200850013738
         },
         "mann_whitney_p": 3.6584553538971e-05,
         "rgflux": {
-          "median": 0.005979038000000001,
+          "median": 0.005645703,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.0059095137499999995,
-          "q3": 0.00638716325
+          "q1": 0.0055999065,
+          "q3": 0.0056815615
         }
       }
     },
@@ -28309,11 +28309,11 @@
       },
       "rejection_reasons": {},
       "rgflux_overhead_seconds_per_plane": {
-        "median": 0.0003073211764705883,
+        "median": 0.0003004371764705882,
         "n": 12,
         "nonfinite_samples": 0,
-        "q1": 0.0003058418970588235,
-        "q3": 0.0003110226176470588
+        "q1": 0.0002951718235294118,
+        "q3": 0.00030875638235294123
       },
       "samples": 256,
       "static_energy_absolute_difference": {
@@ -28340,19 +28340,19 @@
       "threads": 4,
       "wall_seconds": {
         "lammps_pafi": {
-          "median": 0.11516729800007397,
+          "median": 0.13283245599996008,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.11484003224995831,
-          "q3": 0.11736910949986168
+          "q1": 0.12392994550009462,
+          "q3": 0.1354876189998322
         },
         "mann_whitney_p": 3.6584553538971e-05,
         "rgflux": {
-          "median": 0.005878716500000001,
+          "median": 0.0057592995000000004,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.00584518525,
-          "q3": 0.00593854175
+          "q1": 0.00566345375,
+          "q3": 0.005906344
         }
       }
     },
@@ -28719,11 +28719,11 @@
       },
       "rejection_reasons": {},
       "rgflux_overhead_seconds_per_plane": {
-        "median": 0.00014969202941176473,
+        "median": 0.00015303776470588235,
         "n": 12,
         "nonfinite_samples": 0,
-        "q1": 0.00014853797058823532,
-        "q3": 0.0001509668823529412
+        "q1": 0.00014901610294117647,
+        "q3": 0.000161647
       },
       "samples": 64,
       "static_energy_absolute_difference": {
@@ -28750,19 +28750,19 @@
       "threads": 1,
       "wall_seconds": {
         "lammps_pafi": {
-          "median": 0.06002991599996221,
+          "median": 0.06571927400000277,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.05969909949993735,
-          "q3": 0.060351330999935726
+          "q1": 0.06411646100025337,
+          "q3": 0.06725049724980181
         },
         "mann_whitney_p": 3.6584553538971e-05,
         "rgflux": {
-          "median": 0.0028711085,
+          "median": 0.002934338,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.00284758175,
-          "q3": 0.002896027
+          "q1": 0.002864161,
+          "q3": 0.00308063325
         }
       }
     },
@@ -29129,11 +29129,11 @@
       },
       "rejection_reasons": {},
       "rgflux_overhead_seconds_per_plane": {
-        "median": 0.00015156008823529412,
+        "median": 0.00015251117647058825,
         "n": 12,
         "nonfinite_samples": 0,
-        "q1": 0.00014783139705882353,
-        "q3": 0.0001540256911764706
+        "q1": 0.00015041038235294118,
+        "q3": 0.00016224660294117646
       },
       "samples": 64,
       "static_energy_absolute_difference": {
@@ -29160,19 +29160,19 @@
       "threads": 4,
       "wall_seconds": {
         "lammps_pafi": {
-          "median": 0.09218866750006782,
+          "median": 0.10338650350013268,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.09064499924994607,
-          "q3": 0.09319788374989457
+          "q1": 0.10107546024983094,
+          "q3": 0.11658833924991541
         },
         "mann_whitney_p": 3.6584553538971e-05,
         "rgflux": {
-          "median": 0.0029028385,
+          "median": 0.002944987,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.0028367080000000003,
-          "q3": 0.00295150875
+          "q1": 0.0029156335,
+          "q3": 0.00309993225
         }
       }
     },
@@ -29539,11 +29539,11 @@
       },
       "rejection_reasons": {},
       "rgflux_overhead_seconds_per_plane": {
-        "median": 0.0002044434117647059,
+        "median": 0.00020470011764705883,
         "n": 12,
         "nonfinite_samples": 0,
-        "q1": 0.0002005698235294118,
-        "q3": 0.0002093041911764706
+        "q1": 0.00020031988235294116,
+        "q3": 0.00020831414705882353
       },
       "samples": 128,
       "static_energy_absolute_difference": {
@@ -29570,19 +29570,19 @@
       "threads": 1,
       "wall_seconds": {
         "lammps_pafi": {
-          "median": 0.06357614000000922,
+          "median": 0.07082044999992831,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.06325581649991818,
-          "q3": 0.0642664832500941
+          "q1": 0.06505694500015125,
+          "q3": 0.0742616862498835
         },
         "mann_whitney_p": 3.6584553538971e-05,
         "rgflux": {
-          "median": 0.0039475035,
+          "median": 0.0039447395,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.00384584375,
-          "q3": 0.004001961
+          "q1": 0.00384098575,
+          "q3": 0.004035924
         }
       }
     },
@@ -29949,11 +29949,11 @@
       },
       "rejection_reasons": {},
       "rgflux_overhead_seconds_per_plane": {
-        "median": 0.0002074315588235294,
+        "median": 0.00019467788235294118,
         "n": 12,
         "nonfinite_samples": 0,
-        "q1": 0.000200972,
-        "q3": 0.00022893282352941176
+        "q1": 0.0001936148823529412,
+        "q3": 0.00020034274999999999
       },
       "samples": 128,
       "static_energy_absolute_difference": {
@@ -29980,19 +29980,19 @@
       "threads": 4,
       "wall_seconds": {
         "lammps_pafi": {
-          "median": 0.10219714200002272,
+          "median": 0.10080497100011598,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.10142198824991056,
-          "q3": 0.10309477449993665
+          "q1": 0.09737320649992398,
+          "q3": 0.1034478747499179
         },
         "mann_whitney_p": 3.6584553538971e-05,
         "rgflux": {
-          "median": 0.0039684335,
+          "median": 0.0037387375,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.003849092,
-          "q3": 0.004364179500000001
+          "q1": 0.00372352575,
+          "q3": 0.003851199
         }
       }
     },
@@ -30359,11 +30359,11 @@
       },
       "rejection_reasons": {},
       "rgflux_overhead_seconds_per_plane": {
-        "median": 0.00030997052941176466,
+        "median": 0.0002965518529411765,
         "n": 12,
         "nonfinite_samples": 0,
-        "q1": 0.00030605614705882353,
-        "q3": 0.00031163357352941175
+        "q1": 0.0002934721764705883,
+        "q3": 0.00029843649999999997
       },
       "samples": 256,
       "static_energy_absolute_difference": {
@@ -30390,19 +30390,19 @@
       "threads": 1,
       "wall_seconds": {
         "lammps_pafi": {
-          "median": 0.06634854550009095,
+          "median": 0.07312160450010197,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.06450737425001307,
-          "q3": 0.06663558700006433
+          "q1": 0.07173732324997673,
+          "q3": 0.07342608975000076
         },
         "mann_whitney_p": 3.6584553538971e-05,
         "rgflux": {
-          "median": 0.005913545500000001,
+          "median": 0.005683162,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.00586089025,
-          "q3": 0.00595103125
+          "q1": 0.00563639825,
+          "q3": 0.00572281075
         }
       }
     },
@@ -30769,11 +30769,11 @@
       },
       "rejection_reasons": {},
       "rgflux_overhead_seconds_per_plane": {
-        "median": 0.000308744,
+        "median": 0.0003163107352941177,
         "n": 12,
         "nonfinite_samples": 0,
-        "q1": 0.0002999841029411765,
-        "q3": 0.00031016083823529414
+        "q1": 0.00029954545588235294,
+        "q3": 0.0003339403676470588
       },
       "samples": 256,
       "static_energy_absolute_difference": {
@@ -30800,19 +30800,19 @@
       "threads": 4,
       "wall_seconds": {
         "lammps_pafi": {
-          "median": 0.11245169700009683,
+          "median": 0.14731392799990317,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.1114748797498919,
-          "q3": 0.1139375362500914
+          "q1": 0.1403347500001928,
+          "q3": 0.15828014824990078
         },
         "mann_whitney_p": 3.6584553538971e-05,
         "rgflux": {
-          "median": 0.0059009545,
+          "median": 0.0060422984999999995,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.0057355737499999995,
-          "q3": 0.00592204425
+          "q1": 0.00573382375,
+          "q3": 0.0064385595
         }
       }
     }
@@ -30956,18 +30956,18 @@
         ],
         "rejection_reasons": {},
         "rgflux_overhead_seconds_per_plane": {
-          "median": 0.019294003117647056,
+          "median": 0.019534492823529412,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.019194992823529412,
-          "q3": 0.019579012823529415
+          "q1": 0.019477657279411767,
+          "q3": 0.01958676369117647
         },
         "rgflux_potential_seconds_per_plane": {
-          "median": 0.07297223476470588,
+          "median": 0.07178712223529413,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.07234877239705882,
-          "q3": 0.07394165076470588
+          "q1": 0.07134786317647059,
+          "q3": 0.07217909511764706
         },
         "sampled_profiles": {
           "lammps_pafi": {
@@ -31076,19 +31076,19 @@
         "threads": 1,
         "wall_seconds": {
           "lammps_pafi": {
-            "median": 1.334759646999828,
+            "median": 1.3508817954998449,
             "n": 12,
             "nonfinite_samples": 0,
-            "q1": 1.3245294700001295,
-            "q3": 1.343600534499842
+            "q1": 1.3207484687500255,
+            "q3": 1.3754602779999914
           },
           "mann_whitney_p": 3.6584553538971e-05,
           "rgflux": {
-            "median": 1.568526044,
+            "median": 1.55323556,
             "n": 12,
             "nonfinite_samples": 0,
-            "q1": 1.55614226075,
-            "q3": 1.58977278
+            "q1": 1.544798487,
+            "q3": 1.5597448665
           }
         }
       },
@@ -31186,18 +31186,18 @@
         ],
         "rejection_reasons": {},
         "rgflux_overhead_seconds_per_plane": {
-          "median": 0.019250214470588237,
+          "median": 0.019316777911764706,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.019202490161764705,
-          "q3": 0.019332442014705884
+          "q1": 0.01919412780882353,
+          "q3": 0.01952044613235294
         },
         "rgflux_potential_seconds_per_plane": {
-          "median": 0.07185821520588236,
+          "median": 0.06905090135294117,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.07169509476470588,
-          "q3": 0.07241241294117648
+          "q1": 0.06820181861764706,
+          "q3": 0.07025627008823529
         },
         "sampled_profiles": {
           "lammps_pafi": {
@@ -31306,19 +31306,19 @@
         "threads": 4,
         "wall_seconds": {
           "lammps_pafi": {
-            "median": 0.7484705164999923,
+            "median": 0.8294283789998644,
             "n": 12,
             "nonfinite_samples": 0,
-            "q1": 0.7405580577502633,
-            "q3": 0.7741724725000267
+            "q1": 0.7478017604998968,
+            "q3": 0.8564366847499514
           },
           "mann_whitney_p": 3.6584553538971e-05,
           "rgflux": {
-            "median": 1.548347333,
+            "median": 1.501657319,
             "n": 12,
             "nonfinite_samples": 0,
-            "q1": 1.5451497735,
-            "q3": 1.559723118
+            "q1": 1.4855787095,
+            "q3": 1.52741464625
           }
         }
       },
@@ -31416,18 +31416,18 @@
         ],
         "rejection_reasons": {},
         "rgflux_overhead_seconds_per_plane": {
-          "median": 0.019214585411764705,
+          "median": 0.01912520805882353,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.01915472725,
-          "q3": 0.01929288563235294
+          "q1": 0.019108116220588237,
+          "q3": 0.019275404441176473
         },
         "rgflux_potential_seconds_per_plane": {
-          "median": 0.07211246002941177,
+          "median": 0.06783456888235294,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.07186740202941176,
-          "q3": 0.07272126614705882
+          "q1": 0.06742809597058823,
+          "q3": 0.06890322047058824
         },
         "sampled_profiles": {
           "lammps_pafi": {
@@ -31536,19 +31536,19 @@
         "threads": 1,
         "wall_seconds": {
           "lammps_pafi": {
-            "median": 1.345634313499886,
+            "median": 1.327362987000015,
             "n": 12,
             "nonfinite_samples": 0,
-            "q1": 1.3364508917499052,
-            "q3": 1.358666132000053
+            "q1": 1.3221987837498546,
+            "q3": 1.3338911219998408
           },
           "mann_whitney_p": 3.6584553538971e-05,
           "rgflux": {
-            "median": 1.5529105890000001,
+            "median": 1.4775589930000002,
             "n": 12,
             "nonfinite_samples": 0,
-            "q1": 1.5473482495,
-            "q3": 1.5649584547500002
+            "q1": 1.4712871032500001,
+            "q3": 1.4990366234999999
           }
         }
       },
@@ -31646,18 +31646,18 @@
         ],
         "rejection_reasons": {},
         "rgflux_overhead_seconds_per_plane": {
-          "median": 0.019157963411764706,
+          "median": 0.019458215764705883,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.019132504529411766,
-          "q3": 0.019190982970588237
+          "q1": 0.019188467955882353,
+          "q3": 0.0200360745
         },
         "rgflux_potential_seconds_per_plane": {
-          "median": 0.07171798329411765,
+          "median": 0.07104710597058823,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.07159641501470589,
-          "q3": 0.07188724197058823
+          "q1": 0.06817963376470589,
+          "q3": 0.0725632505
         },
         "sampled_profiles": {
           "lammps_pafi": {
@@ -31766,19 +31766,19 @@
         "threads": 4,
         "wall_seconds": {
           "lammps_pafi": {
-            "median": 0.7482455359997857,
+            "median": 0.9235922210002627,
             "n": 12,
             "nonfinite_samples": 0,
-            "q1": 0.7421385032499757,
-            "q3": 0.7553905720002376
+            "q1": 0.8709429177497441,
+            "q3": 0.9652299850000645
           },
           "mann_whitney_p": 3.6584553538971e-05,
           "rgflux": {
-            "median": 1.5442874930000001,
+            "median": 1.538759836,
             "n": 12,
             "nonfinite_samples": 0,
-            "q1": 1.5424456217500002,
-            "q3": 1.5485260002499999
+            "q1": 1.4849538115,
+            "q3": 1.5741885249999998
           }
         }
       },
@@ -31876,18 +31876,18 @@
         ],
         "rejection_reasons": {},
         "rgflux_overhead_seconds_per_plane": {
-          "median": 0.01920120944117647,
+          "median": 0.019266738058823528,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.019149858411764704,
-          "q3": 0.01925583582352941
+          "q1": 0.019178612220588233,
+          "q3": 0.019387191544117645
         },
         "rgflux_potential_seconds_per_plane": {
-          "median": 0.07219469529411765,
+          "median": 0.0691518924117647,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.07191218960294117,
-          "q3": 0.07255947614705882
+          "q1": 0.06838439473529412,
+          "q3": 0.07007437639705882
         },
         "sampled_profiles": {
           "lammps_pafi": {
@@ -31996,19 +31996,19 @@
         "threads": 1,
         "wall_seconds": {
           "lammps_pafi": {
-            "median": 1.3498353210000005,
+            "median": 1.3650291205001395,
             "n": 12,
             "nonfinite_samples": 0,
-            "q1": 1.3486765192500343,
-            "q3": 1.3558041739997861
+            "q1": 1.3530219259999967,
+            "q3": 1.4196696540000175
           },
-          "mann_whitney_p": 3.6584553538971e-05,
+          "mann_whitney_p": 7.658289467492398e-05,
           "rgflux": {
-            "median": 1.5534167700000001,
+            "median": 1.504470359,
             "n": 12,
             "nonfinite_samples": 0,
-            "q1": 1.5490679522500002,
-            "q3": 1.5608603035
+            "q1": 1.490088089,
+            "q3": 1.51751225875
           }
         }
       },
@@ -32106,18 +32106,18 @@
         ],
         "rejection_reasons": {},
         "rgflux_overhead_seconds_per_plane": {
-          "median": 0.019203493941176472,
+          "median": 0.01949347032352941,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.01918365730882353,
-          "q3": 0.019267661338235296
+          "q1": 0.019366424911764706,
+          "q3": 0.01997198382352941
         },
         "rgflux_potential_seconds_per_plane": {
-          "median": 0.07192827397058824,
+          "median": 0.0709346149117647,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.07165214913235295,
-          "q3": 0.07241732398529412
+          "q1": 0.0696598795,
+          "q3": 0.07175978272058824
         },
         "sampled_profiles": {
           "lammps_pafi": {
@@ -32226,19 +32226,19 @@
         "threads": 4,
         "wall_seconds": {
           "lammps_pafi": {
-            "median": 0.7579866625001159,
+            "median": 0.8719793925001795,
             "n": 12,
             "nonfinite_samples": 0,
-            "q1": 0.7530204387498998,
-            "q3": 0.7743475092497647
+            "q1": 0.8666889027500702,
+            "q3": 0.881629741249867
           },
           "mann_whitney_p": 3.6584553538971e-05,
           "rgflux": {
-            "median": 1.5492125395,
+            "median": 1.5419270025,
             "n": 12,
             "nonfinite_samples": 0,
-            "q1": 1.54392137875,
-            "q3": 1.55877965575
+            "q1": 1.519058195,
+            "q3": 1.55391188925
           }
         }
       },
@@ -32352,18 +32352,18 @@
         ],
         "rejection_reasons": {},
         "rgflux_overhead_seconds_per_plane": {
-          "median": 0.019202058515151516,
+          "median": 0.01925841240909091,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.01916112268939394,
-          "q3": 0.019246643477272726
+          "q1": 0.019177413174242423,
+          "q3": 0.019448264818181817
         },
         "rgflux_potential_seconds_per_plane": {
-          "median": 0.07175536762121212,
+          "median": 0.06887653733333333,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.07151788452272727,
-          "q3": 0.07198010928787879
+          "q1": 0.06754645527272728,
+          "q3": 0.0699937395378788
         },
         "sampled_profiles": {
           "lammps_pafi": {
@@ -32536,19 +32536,19 @@
         "threads": 1,
         "wall_seconds": {
           "lammps_pafi": {
-            "median": 2.557195723999939,
+            "median": 2.556371829999989,
             "n": 12,
             "nonfinite_samples": 0,
-            "q1": 2.5407690597497776,
-            "q3": 2.57080232300018
+            "q1": 2.5397932800000262,
+            "q3": 2.622709441500092
           },
           "mann_whitney_p": 3.6584553538971e-05,
           "rgflux": {
-            "median": 3.0015603295,
+            "median": 2.9081046985,
             "n": 12,
             "nonfinite_samples": 0,
-            "q1": 2.99282161,
-            "q3": 3.0101629025000003
+            "q1": 2.86115009125,
+            "q3": 2.95327646275
           }
         }
       },
@@ -32662,18 +32662,18 @@
         ],
         "rejection_reasons": {},
         "rgflux_overhead_seconds_per_plane": {
-          "median": 0.019259204348484847,
+          "median": 0.019315692348484848,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.019185714189393938,
-          "q3": 0.019353856242424243
+          "q1": 0.01914355059090909,
+          "q3": 0.0195415364469697
         },
         "rgflux_potential_seconds_per_plane": {
-          "median": 0.07221390251515153,
+          "median": 0.06878379212121213,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.07162645423484848,
-          "q3": 0.07272478931818181
+          "q1": 0.06692797312878788,
+          "q3": 0.06947247570454546
         },
         "sampled_profiles": {
           "lammps_pafi": {
@@ -32846,19 +32846,19 @@
         "threads": 4,
         "wall_seconds": {
           "lammps_pafi": {
-            "median": 1.441944919999969,
+            "median": 1.6676633929998843,
             "n": 12,
             "nonfinite_samples": 0,
-            "q1": 1.4277469630000041,
-            "q3": 1.466510995750241
+            "q1": 1.59539518400004,
+            "q3": 1.702229914749978
           },
           "mann_whitney_p": 3.6584553538971e-05,
           "rgflux": {
-            "median": 3.01856001,
+            "median": 2.9075257895,
             "n": 12,
             "nonfinite_samples": 0,
-            "q1": 2.99715351075,
-            "q3": 3.04073728025
+            "q1": 2.840350808,
+            "q3": 2.9432807
           }
         }
       },
@@ -32972,18 +32972,18 @@
         ],
         "rejection_reasons": {},
         "rgflux_overhead_seconds_per_plane": {
-          "median": 0.019164786227272725,
+          "median": 0.019170769803030303,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.01914517425,
-          "q3": 0.019203368696969696
+          "q1": 0.019067903765151512,
+          "q3": 0.01926594409848485
         },
         "rgflux_potential_seconds_per_plane": {
-          "median": 0.07177397342424242,
+          "median": 0.06749708215151515,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.07165853184090909,
-          "q3": 0.07202156153030304
+          "q1": 0.06702912986363636,
+          "q3": 0.06848700875
         },
         "sampled_profiles": {
           "lammps_pafi": {
@@ -33156,19 +33156,19 @@
         "threads": 1,
         "wall_seconds": {
           "lammps_pafi": {
-            "median": 2.600593807999985,
+            "median": 2.5713215454998135,
             "n": 12,
             "nonfinite_samples": 0,
-            "q1": 2.5908418459999893,
-            "q3": 2.6040519545000507
+            "q1": 2.5597587424998665,
+            "q3": 2.604905823499962
           },
           "mann_whitney_p": 3.6584553538971e-05,
           "rgflux": {
-            "median": 3.0019521715,
+            "median": 2.8600391145,
             "n": 12,
             "nonfinite_samples": 0,
-            "q1": 2.995530003,
-            "q3": 3.0105644395
+            "q1": 2.8410255875,
+            "q3": 2.8963476422500003
           }
         }
       },
@@ -33282,18 +33282,18 @@
         ],
         "rejection_reasons": {},
         "rgflux_overhead_seconds_per_plane": {
-          "median": 0.019233535530303034,
+          "median": 0.019580769515151517,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.019192162189393937,
-          "q3": 0.019354522439393937
+          "q1": 0.019425649060606058,
+          "q3": 0.020283864893939393
         },
         "rgflux_potential_seconds_per_plane": {
-          "median": 0.07179205489393939,
+          "median": 0.07106496618181818,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.07141376067424243,
-          "q3": 0.07206961585606061
+          "q1": 0.07034249981818182,
+          "q3": 0.0721906446439394
         },
         "sampled_profiles": {
           "lammps_pafi": {
@@ -33466,19 +33466,19 @@
         "threads": 4,
         "wall_seconds": {
           "lammps_pafi": {
-            "median": 1.485489298000175,
+            "median": 1.564668648000179,
             "n": 12,
             "nonfinite_samples": 0,
-            "q1": 1.4555558927499987,
-            "q3": 1.5064535412498117
+            "q1": 1.548823642000002,
+            "q3": 1.5924910024997416
           },
           "mann_whitney_p": 3.6584553538971e-05,
           "rgflux": {
-            "median": 3.005807413,
+            "median": 2.9887854029999996,
             "n": 12,
             "nonfinite_samples": 0,
-            "q1": 2.9896429475,
-            "q3": 3.014718633
+            "q1": 2.966762831,
+            "q3": 3.0472277345
           }
         }
       },
@@ -33592,18 +33592,18 @@
         ],
         "rejection_reasons": {},
         "rgflux_overhead_seconds_per_plane": {
-          "median": 0.019316000924242425,
+          "median": 0.019610254696969698,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.019275459787878788,
-          "q3": 0.01940396823484848
+          "q1": 0.01948096934848485,
+          "q3": 0.02057041446969697
         },
         "rgflux_potential_seconds_per_plane": {
-          "median": 0.07244297393939395,
+          "median": 0.071644932,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.07219591665909092,
-          "q3": 0.07331611651515152
+          "q1": 0.06905964434848484,
+          "q3": 0.07467101125757575
         },
         "sampled_profiles": {
           "lammps_pafi": {
@@ -33776,19 +33776,19 @@
         "threads": 1,
         "wall_seconds": {
           "lammps_pafi": {
-            "median": 2.6356824540000616,
+            "median": 2.723190569500048,
             "n": 12,
             "nonfinite_samples": 0,
-            "q1": 2.6291543410002305,
-            "q3": 2.659751997499825
+            "q1": 2.649785929000018,
+            "q3": 2.7833203794998553
           },
           "mann_whitney_p": 3.6584553538971e-05,
           "rgflux": {
-            "median": 3.0280988275,
+            "median": 3.022257799,
             "n": 12,
             "nonfinite_samples": 0,
-            "q1": 3.0181973967499998,
-            "q3": 3.0629464247500002
+            "q1": 2.92655880575,
+            "q3": 3.142967049
           }
         }
       },
@@ -33902,18 +33902,18 @@
         ],
         "rejection_reasons": {},
         "rgflux_overhead_seconds_per_plane": {
-          "median": 0.02020247992424242,
+          "median": 0.019270959575757574,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.019378015825757572,
-          "q3": 0.02120381493181818
+          "q1": 0.019103135795454546,
+          "q3": 0.019527482924242424
         },
         "rgflux_potential_seconds_per_plane": {
-          "median": 0.0754264446969697,
+          "median": 0.06816642460606061,
           "n": 12,
           "nonfinite_samples": 0,
-          "q1": 0.07267173101515151,
-          "q3": 0.07944857306818182
+          "q1": 0.06725910412121211,
+          "q3": 0.06908556968939394
         },
         "sampled_profiles": {
           "lammps_pafi": {
@@ -34086,19 +34086,19 @@
         "threads": 4,
         "wall_seconds": {
           "lammps_pafi": {
-            "median": 1.6313679014999707,
+            "median": 1.7332525140000143,
             "n": 12,
             "nonfinite_samples": 0,
-            "q1": 1.531177863249809,
-            "q3": 1.699044832750019
+            "q1": 1.695279222000181,
+            "q3": 1.7495728387501686
           },
           "mann_whitney_p": 3.6584553538971e-05,
           "rgflux": {
-            "median": 3.151193942,
+            "median": 2.8862717829999998,
             "n": 12,
             "nonfinite_samples": 0,
-            "q1": 3.03798473325,
-            "q3": 3.31820833625
+            "q1": 2.8514626869999997,
+            "q3": 2.92323273325
           }
         }
       }
@@ -34143,10 +34143,124 @@
     }
   },
   "metadata": {
-    "build": "release; rustc 1.100.0; cargo 1.100.0; GCC 13.3.0; CMake 3.28.3; Open MPI 4.1.6; MPI and OpenMP enabled; rgpot runtime ISA dispatch disabled",
+    "build": "rustc 1.100.0 (0ef1bc386 2026-11-09); cargo 1.100.0 (3acc79c0c 2026-11-05)",
+    "command_lines": {
+      "dimer": [
+        [
+          "bench/pafi/run_campaign.py",
+          "--native-bin",
+          "<native-dimer-build-dir>/target/release/rgflux-pafi-bench",
+          "--python",
+          "<python-executable>",
+          "--reference-script",
+          "bench/pafi/run_reference.py",
+          "--rgflux-source",
+          "<rgflux-source>",
+          "--rgpot-source",
+          "<rgpot-source>",
+          "--rgsaddle-source",
+          "<rgsaddle-source>",
+          "--lammps-source",
+          "<lammps-source>",
+          "--pafi-source",
+          "<pafi-source>",
+          "--raw-dir",
+          "bench/pafi/raw/dimer",
+          "--metadata",
+          "bench/pafi/raw/metadata.json",
+          "--straight-planes",
+          "9,17",
+          "--curved-planes",
+          "17,33",
+          "--temperatures",
+          "0.05,0.1,0.2",
+          "--sample-counts",
+          "64,128,256",
+          "--burn-in",
+          "128",
+          "--replicates",
+          "12",
+          "--time-step",
+          "0.002",
+          "--friction",
+          "1.0",
+          "--zero-temperature-tolerance",
+          "0.01",
+          "--high-threads",
+          "4",
+          "--native-effective-threads",
+          "1",
+          "--one-core-set",
+          "0",
+          "--high-core-set",
+          "0-3"
+        ]
+      ],
+      "vacancy": [
+        [
+          "bench/pafi/run_vacancy_campaign.py",
+          "--native-bin",
+          "<native-vacancy-build-dir>/target/release/rgflux-pafi-bench",
+          "--site-packages",
+          "<rgpot-site-packages>",
+          "--path",
+          "bench/pafi/raw/vacancy-path.json",
+          "--python",
+          "<python-executable>",
+          "--reference-script",
+          "bench/pafi/run_vacancy_reference.py",
+          "--rgflux-source",
+          "<rgflux-source>",
+          "--rgpot-source",
+          "<rgpot-source>",
+          "--rgsaddle-source",
+          "<rgsaddle-source>",
+          "--lammps-source",
+          "<lammps-source>",
+          "--pafi-source",
+          "<pafi-source>",
+          "--raw-dir",
+          "bench/pafi/raw/vacancy",
+          "--metadata",
+          "bench/pafi/raw/metadata.json",
+          "--planes",
+          "17,33",
+          "--temperatures",
+          "0.025,0.05,0.075",
+          "--samples",
+          "256",
+          "--burn-in",
+          "128",
+          "--replicates",
+          "12",
+          "--time-step",
+          "0.002",
+          "--friction",
+          "1.0",
+          "--zero-temperature-tolerance",
+          "0.01",
+          "--high-threads",
+          "4",
+          "--native-effective-threads",
+          "1",
+          "--one-core-set",
+          "0",
+          "--high-core-set",
+          "0-3"
+        ]
+      ]
+    },
     "cpu_affinity": {
       "four_threads": "0-3",
+      "high_thread_cores": "0-3",
+      "high_threads": 4,
       "one_thread": "0"
+    },
+    "host": {
+      "hostname": "cursor",
+      "machine": "x86_64",
+      "platform": "Linux-6.12.113+-x86_64-with-glibc2.39",
+      "python": "3.12.3"
     },
     "lammps_sha": "9c5ab448c78a14fd534619622162ba418d6a1fb1",
     "lammps_tag": "stable_22Jul2025_update6",
@@ -34159,6 +34273,7 @@
     "packages": {
       "mpi4py": "4.1.2",
       "numpy": "2.5.5",
+      "pafi": "0.9.9.1",
       "pandas": "3.1.1",
       "rgpot": "3.7.0",
       "scipy": "1.18.1"
@@ -34168,20 +34283,1048 @@
     "pafi_version": "0.9.9.1",
     "potential": "Dimer: Morse D=1, rho=6, r_e=1, cutoff=4. Vacancy: shifted Morse D_e=0.7102 eV, a=1.6047 1/Angstrom, r_e=2.897 Angstrom, cutoff=5.5 Angstrom; rgpot 3.7.0 and LAMMPS morse/omp",
     "python": "3.12.3",
-    "rgflux_sha": "5949ac5e905a221acbc5cd3d9345e51db1bb3fcd",
+    "rgflux_sha": "6b29c62bd63b29e788dd5a30387c07ee4c1a3d67",
     "rgmin_sha": "eb8d3e4123183bd3f5ca82852332eeddb5d17f54",
-    "rgpot_build_dependencies": {
-      "libpython3.12-dev": "3.12.3-1ubuntu0.17",
-      "meson": "1.12.1",
-      "meson-python": "0.22.1",
-      "nanobind": "3.1.0",
-      "ninja": "1.13.2",
-      "openblas": "0.3.26+ds-1ubuntu0.1",
-      "patchelf": "0.18.0-1.1build1",
-      "python3-dev": "3.12.3-0ubuntu2.1"
-    },
     "rgpot_sha": "424629e5ba9c0948b8d6224f5b49c014ffb4ac7c",
-    "rgsaddle_sha": "92a74493d16364a1ba8542a63598ce8bcee5387c"
+    "rgsaddle_sha": "92a74493d16364a1ba8542a63598ce8bcee5387c",
+    "seeds": {
+      "dimer": [
+        1000003,
+        1000004,
+        1000005,
+        1000006,
+        1000007,
+        1000008,
+        1000009,
+        1000010,
+        1000011,
+        1000012,
+        1000013,
+        1000014,
+        1001012,
+        1001013,
+        1001014,
+        1001015,
+        1001016,
+        1001017,
+        1001018,
+        1001019,
+        1001020,
+        1001021,
+        1001022,
+        1001023,
+        1002021,
+        1002022,
+        1002023,
+        1002024,
+        1002025,
+        1002026,
+        1002027,
+        1002028,
+        1002029,
+        1002030,
+        1002031,
+        1002032,
+        1003030,
+        1003031,
+        1003032,
+        1003033,
+        1003034,
+        1003035,
+        1003036,
+        1003037,
+        1003038,
+        1003039,
+        1003040,
+        1003041,
+        1004039,
+        1004040,
+        1004041,
+        1004042,
+        1004043,
+        1004044,
+        1004045,
+        1004046,
+        1004047,
+        1004048,
+        1004049,
+        1004050,
+        1005048,
+        1005049,
+        1005050,
+        1005051,
+        1005052,
+        1005053,
+        1005054,
+        1005055,
+        1005056,
+        1005057,
+        1005058,
+        1005059,
+        1006057,
+        1006058,
+        1006059,
+        1006060,
+        1006061,
+        1006062,
+        1006063,
+        1006064,
+        1006065,
+        1006066,
+        1006067,
+        1006068,
+        1007066,
+        1007067,
+        1007068,
+        1007069,
+        1007070,
+        1007071,
+        1007072,
+        1007073,
+        1007074,
+        1007075,
+        1007076,
+        1007077,
+        1008075,
+        1008076,
+        1008077,
+        1008078,
+        1008079,
+        1008080,
+        1008081,
+        1008082,
+        1008083,
+        1008084,
+        1008085,
+        1008086,
+        1009084,
+        1009085,
+        1009086,
+        1009087,
+        1009088,
+        1009089,
+        1009090,
+        1009091,
+        1009092,
+        1009093,
+        1009094,
+        1009095,
+        1010093,
+        1010094,
+        1010095,
+        1010096,
+        1010097,
+        1010098,
+        1010099,
+        1010100,
+        1010101,
+        1010102,
+        1010103,
+        1010104,
+        1011102,
+        1011103,
+        1011104,
+        1011105,
+        1011106,
+        1011107,
+        1011108,
+        1011109,
+        1011110,
+        1011111,
+        1011112,
+        1011113,
+        1012111,
+        1012112,
+        1012113,
+        1012114,
+        1012115,
+        1012116,
+        1012117,
+        1012118,
+        1012119,
+        1012120,
+        1012121,
+        1012122,
+        1013120,
+        1013121,
+        1013122,
+        1013123,
+        1013124,
+        1013125,
+        1013126,
+        1013127,
+        1013128,
+        1013129,
+        1013130,
+        1013131,
+        1014129,
+        1014130,
+        1014131,
+        1014132,
+        1014133,
+        1014134,
+        1014135,
+        1014136,
+        1014137,
+        1014138,
+        1014139,
+        1014140,
+        1015138,
+        1015139,
+        1015140,
+        1015141,
+        1015142,
+        1015143,
+        1015144,
+        1015145,
+        1015146,
+        1015147,
+        1015148,
+        1015149,
+        1016147,
+        1016148,
+        1016149,
+        1016150,
+        1016151,
+        1016152,
+        1016153,
+        1016154,
+        1016155,
+        1016156,
+        1016157,
+        1016158,
+        1017156,
+        1017157,
+        1017158,
+        1017159,
+        1017160,
+        1017161,
+        1017162,
+        1017163,
+        1017164,
+        1017165,
+        1017166,
+        1017167,
+        1018165,
+        1018166,
+        1018167,
+        1018168,
+        1018169,
+        1018170,
+        1018171,
+        1018172,
+        1018173,
+        1018174,
+        1018175,
+        1018176,
+        1019174,
+        1019175,
+        1019176,
+        1019177,
+        1019178,
+        1019179,
+        1019180,
+        1019181,
+        1019182,
+        1019183,
+        1019184,
+        1019185,
+        1020183,
+        1020184,
+        1020185,
+        1020186,
+        1020187,
+        1020188,
+        1020189,
+        1020190,
+        1020191,
+        1020192,
+        1020193,
+        1020194,
+        1021192,
+        1021193,
+        1021194,
+        1021195,
+        1021196,
+        1021197,
+        1021198,
+        1021199,
+        1021200,
+        1021201,
+        1021202,
+        1021203,
+        1022201,
+        1022202,
+        1022203,
+        1022204,
+        1022205,
+        1022206,
+        1022207,
+        1022208,
+        1022209,
+        1022210,
+        1022211,
+        1022212,
+        1023210,
+        1023211,
+        1023212,
+        1023213,
+        1023214,
+        1023215,
+        1023216,
+        1023217,
+        1023218,
+        1023219,
+        1023220,
+        1023221,
+        1024219,
+        1024220,
+        1024221,
+        1024222,
+        1024223,
+        1024224,
+        1024225,
+        1024226,
+        1024227,
+        1024228,
+        1024229,
+        1024230,
+        1025228,
+        1025229,
+        1025230,
+        1025231,
+        1025232,
+        1025233,
+        1025234,
+        1025235,
+        1025236,
+        1025237,
+        1025238,
+        1025239,
+        1026237,
+        1026238,
+        1026239,
+        1026240,
+        1026241,
+        1026242,
+        1026243,
+        1026244,
+        1026245,
+        1026246,
+        1026247,
+        1026248,
+        1027246,
+        1027247,
+        1027248,
+        1027249,
+        1027250,
+        1027251,
+        1027252,
+        1027253,
+        1027254,
+        1027255,
+        1027256,
+        1027257,
+        1028255,
+        1028256,
+        1028257,
+        1028258,
+        1028259,
+        1028260,
+        1028261,
+        1028262,
+        1028263,
+        1028264,
+        1028265,
+        1028266,
+        1029264,
+        1029265,
+        1029266,
+        1029267,
+        1029268,
+        1029269,
+        1029270,
+        1029271,
+        1029272,
+        1029273,
+        1029274,
+        1029275,
+        1030273,
+        1030274,
+        1030275,
+        1030276,
+        1030277,
+        1030278,
+        1030279,
+        1030280,
+        1030281,
+        1030282,
+        1030283,
+        1030284,
+        1031282,
+        1031283,
+        1031284,
+        1031285,
+        1031286,
+        1031287,
+        1031288,
+        1031289,
+        1031290,
+        1031291,
+        1031292,
+        1031293,
+        1032291,
+        1032292,
+        1032293,
+        1032294,
+        1032295,
+        1032296,
+        1032297,
+        1032298,
+        1032299,
+        1032300,
+        1032301,
+        1032302,
+        1033300,
+        1033301,
+        1033302,
+        1033303,
+        1033304,
+        1033305,
+        1033306,
+        1033307,
+        1033308,
+        1033309,
+        1033310,
+        1033311,
+        1034309,
+        1034310,
+        1034311,
+        1034312,
+        1034313,
+        1034314,
+        1034315,
+        1034316,
+        1034317,
+        1034318,
+        1034319,
+        1034320,
+        1035318,
+        1035319,
+        1035320,
+        1035321,
+        1035322,
+        1035323,
+        1035324,
+        1035325,
+        1035326,
+        1035327,
+        1035328,
+        1035329,
+        1036327,
+        1036328,
+        1036329,
+        1036330,
+        1036331,
+        1036332,
+        1036333,
+        1036334,
+        1036335,
+        1036336,
+        1036337,
+        1036338,
+        1037336,
+        1037337,
+        1037338,
+        1037339,
+        1037340,
+        1037341,
+        1037342,
+        1037343,
+        1037344,
+        1037345,
+        1037346,
+        1037347,
+        1038345,
+        1038346,
+        1038347,
+        1038348,
+        1038349,
+        1038350,
+        1038351,
+        1038352,
+        1038353,
+        1038354,
+        1038355,
+        1038356,
+        1039354,
+        1039355,
+        1039356,
+        1039357,
+        1039358,
+        1039359,
+        1039360,
+        1039361,
+        1039362,
+        1039363,
+        1039364,
+        1039365,
+        1040363,
+        1040364,
+        1040365,
+        1040366,
+        1040367,
+        1040368,
+        1040369,
+        1040370,
+        1040371,
+        1040372,
+        1040373,
+        1040374,
+        1041372,
+        1041373,
+        1041374,
+        1041375,
+        1041376,
+        1041377,
+        1041378,
+        1041379,
+        1041380,
+        1041381,
+        1041382,
+        1041383,
+        1042381,
+        1042382,
+        1042383,
+        1042384,
+        1042385,
+        1042386,
+        1042387,
+        1042388,
+        1042389,
+        1042390,
+        1042391,
+        1042392,
+        1043390,
+        1043391,
+        1043392,
+        1043393,
+        1043394,
+        1043395,
+        1043396,
+        1043397,
+        1043398,
+        1043399,
+        1043400,
+        1043401,
+        1044399,
+        1044400,
+        1044401,
+        1044402,
+        1044403,
+        1044404,
+        1044405,
+        1044406,
+        1044407,
+        1044408,
+        1044409,
+        1044410,
+        1045408,
+        1045409,
+        1045410,
+        1045411,
+        1045412,
+        1045413,
+        1045414,
+        1045415,
+        1045416,
+        1045417,
+        1045418,
+        1045419,
+        1046417,
+        1046418,
+        1046419,
+        1046420,
+        1046421,
+        1046422,
+        1046423,
+        1046424,
+        1046425,
+        1046426,
+        1046427,
+        1046428,
+        1047426,
+        1047427,
+        1047428,
+        1047429,
+        1047430,
+        1047431,
+        1047432,
+        1047433,
+        1047434,
+        1047435,
+        1047436,
+        1047437,
+        1048435,
+        1048436,
+        1048437,
+        1048438,
+        1048439,
+        1048440,
+        1048441,
+        1048442,
+        1048443,
+        1048444,
+        1048445,
+        1048446,
+        1049444,
+        1049445,
+        1049446,
+        1049447,
+        1049448,
+        1049449,
+        1049450,
+        1049451,
+        1049452,
+        1049453,
+        1049454,
+        1049455,
+        1050453,
+        1050454,
+        1050455,
+        1050456,
+        1050457,
+        1050458,
+        1050459,
+        1050460,
+        1050461,
+        1050462,
+        1050463,
+        1050464,
+        1051462,
+        1051463,
+        1051464,
+        1051465,
+        1051466,
+        1051467,
+        1051468,
+        1051469,
+        1051470,
+        1051471,
+        1051472,
+        1051473,
+        1052471,
+        1052472,
+        1052473,
+        1052474,
+        1052475,
+        1052476,
+        1052477,
+        1052478,
+        1052479,
+        1052480,
+        1052481,
+        1052482,
+        1053480,
+        1053481,
+        1053482,
+        1053483,
+        1053484,
+        1053485,
+        1053486,
+        1053487,
+        1053488,
+        1053489,
+        1053490,
+        1053491,
+        1054489,
+        1054490,
+        1054491,
+        1054492,
+        1054493,
+        1054494,
+        1054495,
+        1054496,
+        1054497,
+        1054498,
+        1054499,
+        1054500,
+        1055498,
+        1055499,
+        1055500,
+        1055501,
+        1055502,
+        1055503,
+        1055504,
+        1055505,
+        1055506,
+        1055507,
+        1055508,
+        1055509,
+        1056507,
+        1056508,
+        1056509,
+        1056510,
+        1056511,
+        1056512,
+        1056513,
+        1056514,
+        1056515,
+        1056516,
+        1056517,
+        1056518,
+        1057516,
+        1057517,
+        1057518,
+        1057519,
+        1057520,
+        1057521,
+        1057522,
+        1057523,
+        1057524,
+        1057525,
+        1057526,
+        1057527,
+        1058525,
+        1058526,
+        1058527,
+        1058528,
+        1058529,
+        1058530,
+        1058531,
+        1058532,
+        1058533,
+        1058534,
+        1058535,
+        1058536,
+        1059534,
+        1059535,
+        1059536,
+        1059537,
+        1059538,
+        1059539,
+        1059540,
+        1059541,
+        1059542,
+        1059543,
+        1059544,
+        1059545,
+        1060543,
+        1060544,
+        1060545,
+        1060546,
+        1060547,
+        1060548,
+        1060549,
+        1060550,
+        1060551,
+        1060552,
+        1060553,
+        1060554,
+        1061552,
+        1061553,
+        1061554,
+        1061555,
+        1061556,
+        1061557,
+        1061558,
+        1061559,
+        1061560,
+        1061561,
+        1061562,
+        1061563,
+        1062561,
+        1062562,
+        1062563,
+        1062564,
+        1062565,
+        1062566,
+        1062567,
+        1062568,
+        1062569,
+        1062570,
+        1062571,
+        1062572,
+        1063570,
+        1063571,
+        1063572,
+        1063573,
+        1063574,
+        1063575,
+        1063576,
+        1063577,
+        1063578,
+        1063579,
+        1063580,
+        1063581,
+        1064579,
+        1064580,
+        1064581,
+        1064582,
+        1064583,
+        1064584,
+        1064585,
+        1064586,
+        1064587,
+        1064588,
+        1064589,
+        1064590,
+        1065588,
+        1065589,
+        1065590,
+        1065591,
+        1065592,
+        1065593,
+        1065594,
+        1065595,
+        1065596,
+        1065597,
+        1065598,
+        1065599,
+        1066597,
+        1066598,
+        1066599,
+        1066600,
+        1066601,
+        1066602,
+        1066603,
+        1066604,
+        1066605,
+        1066606,
+        1066607,
+        1066608,
+        1067606,
+        1067607,
+        1067608,
+        1067609,
+        1067610,
+        1067611,
+        1067612,
+        1067613,
+        1067614,
+        1067615,
+        1067616,
+        1067617,
+        1068615,
+        1068616,
+        1068617,
+        1068618,
+        1068619,
+        1068620,
+        1068621,
+        1068622,
+        1068623,
+        1068624,
+        1068625,
+        1068626,
+        1069624,
+        1069625,
+        1069626,
+        1069627,
+        1069628,
+        1069629,
+        1069630,
+        1069631,
+        1069632,
+        1069633,
+        1069634,
+        1069635,
+        1070633,
+        1070634,
+        1070635,
+        1070636,
+        1070637,
+        1070638,
+        1070639,
+        1070640,
+        1070641,
+        1070642,
+        1070643,
+        1070644,
+        1071642,
+        1071643,
+        1071644,
+        1071645,
+        1071646,
+        1071647,
+        1071648,
+        1071649,
+        1071650,
+        1071651,
+        1071652,
+        1071653
+      ],
+      "vacancy": [
+        2000003,
+        2000004,
+        2000005,
+        2000006,
+        2000007,
+        2000008,
+        2000009,
+        2000010,
+        2000011,
+        2000012,
+        2000013,
+        2000014,
+        2001012,
+        2001013,
+        2001014,
+        2001015,
+        2001016,
+        2001017,
+        2001018,
+        2001019,
+        2001020,
+        2001021,
+        2001022,
+        2001023,
+        2002021,
+        2002022,
+        2002023,
+        2002024,
+        2002025,
+        2002026,
+        2002027,
+        2002028,
+        2002029,
+        2002030,
+        2002031,
+        2002032,
+        2003030,
+        2003031,
+        2003032,
+        2003033,
+        2003034,
+        2003035,
+        2003036,
+        2003037,
+        2003038,
+        2003039,
+        2003040,
+        2003041,
+        2004039,
+        2004040,
+        2004041,
+        2004042,
+        2004043,
+        2004044,
+        2004045,
+        2004046,
+        2004047,
+        2004048,
+        2004049,
+        2004050,
+        2005048,
+        2005049,
+        2005050,
+        2005051,
+        2005052,
+        2005053,
+        2005054,
+        2005055,
+        2005056,
+        2005057,
+        2005058,
+        2005059,
+        2006057,
+        2006058,
+        2006059,
+        2006060,
+        2006061,
+        2006062,
+        2006063,
+        2006064,
+        2006065,
+        2006066,
+        2006067,
+        2006068,
+        2007066,
+        2007067,
+        2007068,
+        2007069,
+        2007070,
+        2007071,
+        2007072,
+        2007073,
+        2007074,
+        2007075,
+        2007076,
+        2007077,
+        2008075,
+        2008076,
+        2008077,
+        2008078,
+        2008079,
+        2008080,
+        2008081,
+        2008082,
+        2008083,
+        2008084,
+        2008085,
+        2008086,
+        2009084,
+        2009085,
+        2009086,
+        2009087,
+        2009088,
+        2009089,
+        2009090,
+        2009091,
+        2009092,
+        2009093,
+        2009094,
+        2009095,
+        2010093,
+        2010094,
+        2010095,
+        2010096,
+        2010097,
+        2010098,
+        2010099,
+        2010100,
+        2010101,
+        2010102,
+        2010103,
+        2010104,
+        2011102,
+        2011103,
+        2011104,
+        2011105,
+        2011106,
+        2011107,
+        2011108,
+        2011109,
+        2011110,
+        2011111,
+        2011112,
+        2011113
+      ]
+    },
+    "source_commits": {
+      "lammps": "9c5ab448c78a14fd534619622162ba418d6a1fb1",
+      "pafi": "3a9070058bfaf86bcdeb4ec14023ee084376d291",
+      "rgflux": "6b29c62bd63b29e788dd5a30387c07ee4c1a3d67",
+      "rgpot": "424629e5ba9c0948b8d6224f5b49c014ffb4ac7c",
+      "rgsaddle": "92a74493d16364a1ba8542a63598ce8bcee5387c"
+    },
+    "versions": {
+      "native_harness_crates": {
+        "ndarray": "0.17.2",
+        "pyo3": "0.27.2",
+        "serde": "1.0.229",
+        "serde_json": "1.0.154"
+      },
+      "packages": {
+        "mpi4py": "4.1.2",
+        "numpy": "2.5.5",
+        "pafi": "0.9.9.1",
+        "pandas": "3.1.1",
+        "rgpot": "3.7.0",
+        "scipy": "1.18.1"
+      },
+      "python": "3.12.3"
+    }
   },
   "protocol": {
     "aa_noise": "absolute profile differences between adjacent independent rgflux replicates",

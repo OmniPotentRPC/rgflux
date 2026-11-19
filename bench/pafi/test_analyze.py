@@ -2,12 +2,20 @@
 import ast
 import copy
 import importlib.util
+import io
 import json
 import pathlib
+import subprocess
+import sys
+import tarfile
+import tempfile
 import unittest
 
 
 ROOT = pathlib.Path(__file__).resolve().parent
+PACK_SPEC = importlib.util.spec_from_file_location("pafi_pack", ROOT / "pack_raw.py")
+PACK = importlib.util.module_from_spec(PACK_SPEC)
+PACK_SPEC.loader.exec_module(PACK)
 SPEC = importlib.util.spec_from_file_location("pafi_analyze", ROOT / "analyze.py")
 ANALYZE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(ANALYZE)
@@ -121,6 +129,83 @@ class VerdictProseTests(unittest.TestCase):
             ANALYZE.AnalysisError, "planned executions"
         ):
             ANALYZE.verdict_statistics(result)
+
+
+def write_campaign(directory, count):
+    (directory / "records").mkdir(parents=True)
+    manifest = []
+    for index in range(count):
+        name = f"records/run-{index:02d}.json"
+        manifest.append({"record": name, "seed": index})
+        (directory / name).write_text(json.dumps({"status": "ok", "n": index}))
+    (directory / "manifest.json").write_text(json.dumps(manifest))
+    return manifest
+
+
+class RawArchiveTests(unittest.TestCase):
+    def test_archive_yields_the_directory_entries(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = pathlib.Path(scratch)
+            write_campaign(root / "live", 3)
+            PACK.pack(root / "live", root / "archived.tar.xz")
+            from_directory = ANALYZE.load_campaign_entries(root / "live")
+            from_archive = ANALYZE.load_campaign_entries(root / "archived")
+        self.assertEqual(len(from_archive), 3)
+        self.assertEqual(from_archive, from_directory)
+
+    def test_packing_twice_gives_the_same_bytes(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = pathlib.Path(scratch)
+            write_campaign(root / "campaign", 4)
+            PACK.pack(root / "campaign", root / "one.tar.xz")
+            PACK.pack(root / "campaign", root / "two.tar.xz")
+            self.assertEqual(
+                (root / "one.tar.xz").read_bytes(),
+                (root / "two.tar.xz").read_bytes(),
+            )
+
+    def test_record_absent_from_the_archive_is_reported(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = pathlib.Path(scratch)
+            manifest = json.dumps([{"record": "records/run-00.json"}]).encode()
+            with tarfile.open(root / "campaign.tar.xz", "w:xz") as bundle:
+                member = tarfile.TarInfo("manifest.json")
+                member.size = len(manifest)
+                bundle.addfile(member, io.BytesIO(manifest))
+            with self.assertRaisesRegex(
+                ANALYZE.AnalysisError, "raw record is missing"
+            ):
+                ANALYZE.load_campaign_entries(root / "campaign")
+
+    def test_missing_campaign_is_reported(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            with self.assertRaisesRegex(
+                ANALYZE.AnalysisError, "campaign manifest is missing"
+            ):
+                ANALYZE.load_campaign_entries(pathlib.Path(scratch) / "absent")
+
+
+class RegenerationTests(unittest.TestCase):
+    def test_committed_raw_records_regenerate_the_committed_results(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = pathlib.Path(scratch)
+            subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "analyze.py"),
+                    "--output-json",
+                    str(root / "results.json"),
+                    "--output-markdown",
+                    str(root / "results.md"),
+                ],
+                check=True,
+                capture_output=True,
+            )
+            for name in ("results.json", "results.md"):
+                with self.subTest(name=name):
+                    self.assertEqual(
+                        (root / name).read_text(), (ROOT / name).read_text()
+                    )
 
 
 class StrictPairingTests(unittest.TestCase):
