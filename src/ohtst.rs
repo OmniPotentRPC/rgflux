@@ -52,7 +52,7 @@
 //! ## Assumptions
 //!
 //! - Single reaction coordinate along the fixed unit normal `n` (`||n||_2 = 1`);
-//!   variational rotation of `n` on the unit sphere moves from `rgsaddle`.
+//!   variational rotation of `n` on the unit sphere is not yet implemented.
 //! - Positive barrier `ΔV > 0` above the reactant minimum and positive harmonic
 //!   reactant curvature `κ > 0` at the probe offset `c_probe`.
 //! - Strictly positive thermal energy `k_B * T > 0` and masses `m_i > 0`.

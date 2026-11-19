@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
-"""Fail on a git dependency not pinned by full rev, or a second copy of our crates."""
+"""Fail on a git source, a patch override, a non-caret requirement, or a second copy of our crates.
+
+The published manifest asks crates.io for caret requirements, so downstream
+patch releases unify. `Cargo.lock` must resolve every package from crates.io,
+and the manifest must carry no git dependency and no `[patch]` table, so a
+local build resolves what `cargo publish` verifies. Each locked version must
+satisfy the requirement that asks for it.
+"""
 
 from __future__ import annotations
 
@@ -9,7 +16,6 @@ import subprocess
 import sys
 import tomllib
 from pathlib import Path
-from urllib.parse import parse_qsl
 
 ROOT = Path(__file__).resolve().parents[1]
 OWN = frozenset(
@@ -26,10 +32,7 @@ OWN = frozenset(
         "rgsaddle",
     }
 )
-SHA = re.compile(r"[0-9a-f]{40}")
-LOCKED_GIT = re.compile(
-    r"git\+(?P<url>[^?#]+)\?rev=(?P<rev>[0-9a-f]{40})#(?P<precise>[0-9a-f]{40})"
-)
+VERSION = re.compile(r"(\d+)(?:\.(\d+))?(?:\.(\d+))?")
 TREE_LINE = re.compile(r"(?P<name>\S+) v(?P<version>\S+)(?P<rest>.*)")
 # `lammpc` links liblammpc. The duplicate check runs in the test job, which
 # does not install that library, so the tree stays on the library features.
@@ -54,6 +57,55 @@ def cargo(args: list[str], cwd: Path) -> str:
     return proc.stdout
 
 
+def parse_version(text: str) -> tuple[int, int, int]:
+    m = VERSION.fullmatch(text.strip())
+    if m is None:
+        raise ValueError(f"unsupported version {text!r}")
+    return tuple(int(part or 0) for part in m.groups())  # type: ignore[return-value]
+
+
+def caret_upper(low: tuple[int, int, int], given: int) -> tuple[int, int, int]:
+    major, minor, patch = low
+    if major > 0 or given == 1:
+        return (major + 1, 0, 0)
+    if minor > 0 or given == 2:
+        return (0, minor + 1, 0)
+    return (0, 0, patch + 1)
+
+
+def satisfies(version: str, req: str) -> bool:
+    """Whether `version` meets a Cargo requirement made of comparators."""
+    have = parse_version(version)
+    for comparator in req.split(","):
+        comparator = comparator.strip()
+        if comparator in ("", "*"):
+            continue
+        m = re.fullmatch(r"(\^|~|=|>=|<=|>|<)?\s*(\S+)", comparator)
+        if m is None:
+            raise ValueError(f"unsupported requirement {req!r}")
+        op, text = m[1] or "^", m[2]
+        want = parse_version(text)
+        given = len(text.split("."))
+        if op == "=":
+            ok = have == want if given == 3 else have[:given] == want[:given]
+        elif op == "^":
+            ok = want <= have < caret_upper(want, given)
+        elif op == "~":
+            upper = (want[0], want[1] + 1, 0) if given > 1 else (want[0] + 1, 0, 0)
+            ok = want <= have < upper
+        elif op == ">=":
+            ok = have >= want
+        elif op == ">":
+            ok = have > want
+        elif op == "<=":
+            ok = have <= want
+        else:
+            ok = have < want
+        if not ok:
+            return False
+    return True
+
+
 def lock_packages(where: Path) -> list[dict]:
     with open(where / "Cargo.lock", "rb") as fh:
         return tomllib.load(fh).get("package", [])
@@ -63,53 +115,52 @@ def check_lock(where: Path, label: str) -> list[str]:
     errors = []
     for pkg in lock_packages(where):
         source = pkg.get("source", "")
-        if not source.startswith("git+"):
-            continue
-        m = LOCKED_GIT.fullmatch(source)
-        if m is None or m["rev"] != m["precise"]:
+        if source.startswith("git+"):
             errors.append(
                 f"{label}/Cargo.lock: {pkg['name']} {pkg['version']} is locked from "
-                f"{source}, not a full rev"
+                f"{source}; resolve it from crates.io"
             )
     return errors
 
 
 def check_manifests(where: Path, label: str) -> list[str]:
     errors = []
+    with open(where / "Cargo.toml", "rb") as fh:
+        manifest = tomllib.load(fh)
+    if "patch" in manifest:
+        errors.append(
+            f"{label}/Cargo.toml: remove the [patch] table; dependencies resolve from crates.io"
+        )
     meta = json.loads(cargo(["metadata", "--no-deps", "--format-version", "1"], where))
-    locked = {
-        (pkg["name"], pkg["source"].split("#", 1)[0]): pkg["version"]
-        for pkg in lock_packages(where)
-        if pkg.get("source", "").startswith("git+")
-    }
-    seen: dict[str, set[tuple[str, str]]] = {}
+    locked: dict[str, set[str]] = {}
+    for pkg in lock_packages(where):
+        locked.setdefault(pkg["name"], set()).add(pkg["version"])
     for member in meta["packages"]:
-        manifest = Path(member["manifest_path"]).relative_to(ROOT)
+        manifest_path = Path(member["manifest_path"]).relative_to(ROOT)
         for dep in member["dependencies"]:
-            source = dep.get("source") or ""
-            if not source.startswith("git+"):
-                continue
             name = dep["name"]
-            what = f"{manifest}: {name}"
-            url, _, query = source.partition("?")
-            reference = dict(parse_qsl(query))
-            if set(reference) != {"rev"} or not SHA.fullmatch(reference["rev"]):
-                shown = query or "the default branch"
-                errors.append(f"{what} follows {shown}; pin rev to a full 40-hex commit")
+            what = f"{manifest_path}: {name}"
+            source = dep.get("source") or ""
+            if source.startswith("git+"):
+                errors.append(f"{what} is a git dependency; use a crates.io version")
+                continue
+            if dep.get("path"):
+                continue
             req = dep["req"]
-            version = locked.get((name, source))
-            if version is None:
-                errors.append(f"{what} from {source} is not in {label}/Cargo.lock")
-            elif req != f"={version}":
+            if re.search(r"(^|,)\s*=", req):
                 errors.append(
-                    f"{what} asks for {req!r}, but the crate at that rev is {version}; "
-                    f"use '={version}'"
+                    f"{what} asks for {req!r}; use a caret requirement so downstream "
+                    f"patch releases unify"
                 )
-            seen.setdefault(name, set()).add((url, reference.get("rev", "")))
-    for name, sources in sorted(seen.items()):
-        if len(sources) > 1:
-            listed = ", ".join(f"{url}@{rev or '?'}" for url, rev in sorted(sources))
-            errors.append(f"{label}: {name} is taken from more than one git source: {listed}")
+            versions = locked.get(name)
+            if versions is None:
+                if not dep.get("optional"):
+                    errors.append(f"{what} is not in {label}/Cargo.lock")
+            elif not any(satisfies(version, req) for version in versions):
+                errors.append(
+                    f"{what} asks for {req!r}, but {label}/Cargo.lock has "
+                    f"{', '.join(sorted(versions))}"
+                )
     return errors
 
 
@@ -152,12 +203,15 @@ def main() -> int:
     if errors:
         print("dependency pins:\n" + "\n".join(errors), file=sys.stderr)
         return 1
-    pins = sorted(
-        f"{pkg['name']} {pkg['version']} @ {LOCKED_GIT.fullmatch(pkg['source'])['rev']}"
-        for pkg in lock_packages(ROOT)
-        if pkg.get("source", "").startswith("git+")
+    shown = sorted(
+        f"{name} {version}"
+        for name, version in (
+            (pkg["name"], pkg["version"])
+            for pkg in lock_packages(ROOT)
+            if pkg["name"] in OWN and pkg["name"] != "rgflux"
+        )
     )
-    print("dependency pins ok: " + "; ".join(pins))
+    print("dependency pins ok: " + "; ".join(shown) + " (all from crates.io)")
     return 0
 
 

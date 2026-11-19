@@ -5,12 +5,19 @@
 //! [`rgsaddle::PointSurface`], [`eindir_core::DifferentiableObjective`], or
 //! the optional `rgpot` feature, while samplers drive [`engine::DynamicsEngine`].
 //!
+//! ## Features
+//!
+//! - `rgpot`: static potential surfaces over `rgpot-core` callbacks.
+//! - `rgpot-session`: engine-agnostic MD session adapter over `rgpot-core`.
+//! - `lammpc`: direct LAMMPS engine, `engine::lammpc::LammpcEngine`, over
+//!   `liblammpc`. It needs the `capnp` CLI at build time.
+//!
 //! ## Modules
 //!
 //! - [`engine`]: [`DynamicsEngine`] trait, [`ForceSurface`], the pure-Rust
 //!   [`engine::native`] BAOAB + RATTLE/SHAKE backend, the optional
-//!   `engine::lammpc` backend over `lammpc_session_*`, and optional `rgpot`
-//!   and `rgpot-session` adapters.
+//!   `engine::lammpc` backend over `lammpc_session_*` (the `lammpc` feature),
+//!   and optional `rgpot` and `rgpot-session` adapters.
 //! - [`stats`]: non-overlapping batch means, Geyer effective sample size
 //!   (`n_eff`), and Geweke two-window stationarity checks.
 //! - [`kappa`] and [`kappa::bennett_chandler`]: Bennett-Chandler reactive-flux
@@ -21,11 +28,12 @@
 //! - [`pafi`]: Projected Average Force Integration along reaction paths
 //!   ([`pafi::PafiConfig`], [`pafi::FreeEnergyProfile`], [`pafi::pafi_profile`]).
 //! - [`ohtst`]: OH-TST with a fixed hyperplane normal via
-//!   [`ohtst::optimize_hyperplane`]; variational normal optimization moves
-//!   from `rgsaddle`.
+//!   [`ohtst::optimize_hyperplane`]; variational normal optimization is not
+//!   yet implemented.
 //! - [`ffs`]: direct Forward Flux Sampling across ordered interfaces via
 //!   [`ffs::forward_flux_rate`].
-//! - [`network`]: symmetry-resolved kinetic networks and kMC rate tables.
+//! - [`network`]: symmetry-resolved kinetic networks and kMC rate tables
+//!   (`build_rate_table` is not yet implemented).
 //!
 //! ## Quick example
 //!

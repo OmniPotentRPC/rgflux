@@ -72,7 +72,7 @@ jobs:
         run: python3 docs/check_paths.py
       - name: Verify documentation structure, stubs, and DOIs
         run: python3 ci/check_links.py
-      - name: Git dependencies pin a full rev and resolve once
+      - name: Dependencies resolve from crates.io with caret requirements and one copy
         run: python3 ci/check_dependency_pins.py
 
   msrv:
