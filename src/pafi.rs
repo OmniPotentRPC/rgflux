@@ -47,9 +47,11 @@
 //!    the first to the last image. Each carries its anchor `X(s_k)`, the
 //!    normal, and the curvature `n'`.
 //! 3. A zero-temperature check integrates `dV/ds` over the anchors with the
-//!    trapezoid rule and compares it with the end-to-end energy change
-//!    `Delta E_0`, see [`PafiConfig::zero_temperature_tol`]. A mismatch
-//!    returns [`FluxError::InvalidConfig`] before any sampling.
+//!    trapezoid rule. It divides the absolute disagreement with the end-to-end
+//!    energy change `Delta E_0` by `max(E_unit, |Delta E_0|)`, where `E_unit`
+//!    is one energy unit of the engine, and compares that dimensionless value
+//!    with [`PafiConfig::zero_temperature_tol`]. A mismatch returns
+//!    [`FluxError::InvalidConfig`] before any sampling.
 //! 4. On each plane the engine is constrained, placed at the anchor, given
 //!    Maxwell-Boltzmann velocities, run for `burn_in_steps`, and then run for
 //!    `sample_steps` steps that each record
@@ -270,18 +272,26 @@ pub struct PafiConfig {
     ///
     /// Default: `4`.
     pub max_rounds: usize,
-    /// Relative tolerance on the zero-temperature path-force integral versus
-    /// `Delta E_0`, in units of `max(1, |Delta E_0|)`.
+    /// Dimensionless tolerance for the zero-temperature path-force check.
     ///
-    /// The check integrates `dV/ds` over the planes with the trapezoid rule,
-    /// so its error falls as `(planes - 1)^-2` and the default only suits the
-    /// default plane count. On a quarter-turn circular arc through a harmonic
-    /// well the relative error is `pi^2 / (12 (planes - 1)^2)`: 1.29% at 9
-    /// planes, 0.32% at 17 and 0.08% at 33. The default, about 2.6%, is twice
-    /// the 9-plane value. Paths that turn through more than a quarter circle,
-    /// or fewer planes, need a proportionally larger tolerance. Larger values
-    /// weaken the guard against inconsistent forces and tangents. Must be
-    /// finite and `>= 0`.
+    /// Let `I_T` be the trapezoid integral of `dV/ds` over the plane anchors
+    /// and `Delta E_0` the endpoint energy change, both in the engine's energy
+    /// units. The check compares
+    /// `|I_T - Delta E_0| / max(E_unit, |Delta E_0|)` with the effective
+    /// tolerance, where `E_unit` is one energy unit of the engine. Thus the
+    /// check is relative when `|Delta E_0| >= E_unit` and otherwise bounds the
+    /// absolute discrepancy in engine energy units.
+    ///
+    /// The stored default is `2 * (pi^2 / 12) / 8^2`, about `0.0257`, for the
+    /// default 9 planes. If this field retains that default value, changing
+    /// `planes` changes the effective tolerance to
+    /// `2 * (pi^2 / 12) / (planes - 1)^2`. An explicitly different value is
+    /// used unchanged and does not scale with `planes`.
+    ///
+    /// The scaling follows the trapezoid error on a quarter-turn circular arc
+    /// through a harmonic well. Paths that turn through more than a quarter
+    /// circle can need a larger tolerance. Larger values weaken the guard
+    /// against inconsistent forces and tangents. Must be finite and `>= 0`.
     ///
     /// Default: `2 * (pi^2 / 12) / 8^2`, about `0.0257`.
     pub zero_temperature_tol: f64,
