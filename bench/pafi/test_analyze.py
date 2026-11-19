@@ -9,7 +9,9 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import types
 import unittest
+import unittest.mock
 
 
 ROOT = pathlib.Path(__file__).resolve().parent
@@ -58,6 +60,26 @@ class AnalysisFailureTests(unittest.TestCase):
             ANALYZE.AnalysisError, "profile disagreement exceeds energy scale"
         ):
             ANALYZE.validate_result(result)
+
+    def test_missing_analysis_dependency_is_reported(self):
+        for package, blocked in (
+            ("numpy", {"numpy": None}),
+            (
+                "scipy",
+                {
+                    "numpy": types.ModuleType("numpy"),
+                    "scipy": None,
+                    "scipy.integrate": None,
+                },
+            ),
+        ):
+            with self.subTest(package=package):
+                with unittest.mock.patch.dict(sys.modules, blocked):
+                    with self.assertRaisesRegex(
+                        ANALYZE.AnalysisError,
+                        rf"{package} is required to regenerate PAFI results",
+                    ):
+                        ANALYZE.load_analysis_dependencies()
 
 
 class VerdictProseTests(unittest.TestCase):
@@ -197,7 +219,7 @@ class RegenerationTests(unittest.TestCase):
     def test_committed_raw_records_regenerate_the_committed_results(self):
         with tempfile.TemporaryDirectory() as scratch:
             root = pathlib.Path(scratch)
-            subprocess.run(
+            completed = subprocess.run(
                 [
                     sys.executable,
                     str(ROOT / "analyze.py"),
@@ -206,9 +228,10 @@ class RegenerationTests(unittest.TestCase):
                     "--output-markdown",
                     str(root / "results.md"),
                 ],
-                check=True,
                 capture_output=True,
+                text=True,
             )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
             for name in ("results.json", "results.md"):
                 with self.subTest(name=name):
                     self.assertEqual(

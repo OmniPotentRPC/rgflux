@@ -71,6 +71,21 @@ class RetainedInputTests(unittest.TestCase):
         self.assertEqual(path["neb_max_force"], neb["max_force"])
         self.assertEqual(len(path["images"][0]), 3 * len(path["atomic_numbers"]))
 
+    def test_requirements_match_the_committed_python_lock(self):
+        requirements = [
+            line.strip()
+            for line in (ROOT / "requirements.txt").read_text().splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
+        ]
+        locked = {
+            line.strip()
+            for line in (RAW / "python-lock.txt").read_text().splitlines()
+            if line.strip()
+        }
+        self.assertEqual(requirements, ["numpy==2.5.5", "scipy==1.18.1"])
+        for entry in requirements:
+            self.assertIn(entry, locked)
+
 
 class MissingInputTests(unittest.TestCase):
     def analyze(self, root):

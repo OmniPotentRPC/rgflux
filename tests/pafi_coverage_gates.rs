@@ -155,12 +155,22 @@ fn zero_width_reactant_partition_repro_passes() {
     assert_eq!(record["error"], REACTANT_PARTITION_ERROR, "{record}");
 }
 
+#[cfg(feature = "pafi-python")]
+const ANALYZER_TEST_ARGS: &[&str] = &["bench/pafi/test_analyze.py"];
+
+#[cfg(not(feature = "pafi-python"))]
+const ANALYZER_TEST_ARGS: &[&str] = &[
+    "bench/pafi/test_analyze.py",
+    "AnalysisFailureTests",
+    "VerdictProseTests",
+    "RawArchiveTests",
+    "RejectionClassificationTests",
+    "StrictPairingTests",
+];
+
 #[test]
 fn analyzer_negative_tests_pass() {
-    let (_, stderr) = assert_success(
-        run_python(&["bench/pafi/test_analyze.py"]),
-        "analyzer negative tests",
-    );
+    let (_, stderr) = assert_success(run_python(ANALYZER_TEST_ARGS), "analyzer negative tests");
     let tests = unittest_summary(&stderr).unwrap_or_else(|error| panic!("{error}"));
     assert!(tests > 0, "unittest ran no tests:\n{stderr}");
 }

@@ -38,9 +38,17 @@ class AnalysisError(RuntimeError):
 
 def load_analysis_dependencies():
     global np, quad, fisher_exact, mannwhitneyu
-    import numpy as np
-    from scipy.integrate import quad
-    from scipy.stats import fisher_exact, mannwhitneyu
+    try:
+        import numpy as np
+        from scipy.integrate import quad
+        from scipy.stats import fisher_exact, mannwhitneyu
+    except ModuleNotFoundError as error:
+        package = (error.name or "numpy/scipy").split(".", 1)[0]
+        raise AnalysisError(
+            f"{package} is required to regenerate PAFI results; "
+            "install bench/pafi/requirements.txt "
+            "(numpy==2.5.5 and scipy==1.18.1)"
+        ) from error
 
 
 class StablePathHelp(argparse.ArgumentDefaultsHelpFormatter):
