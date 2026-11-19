@@ -1722,6 +1722,19 @@ mod tests {
     }
 
     #[test]
+    fn hermite_rejects_non_finite_gradients() {
+        let nan = HermiteIntegral
+            .cumulative(&[0.0, 1.0, 2.0], &[0.0, f64::NAN, 1.0])
+            .expect_err("nan gradient");
+        assert_eq!(nan, FluxError::NonFinite("PAFI Hermite mean force"));
+
+        let inf = HermiteIntegral
+            .cumulative(&[0.0, 1.0, 2.0], &[0.0, f64::INFINITY, 1.0])
+            .expect_err("infinite gradient");
+        assert_eq!(inf, FluxError::NonFinite("PAFI Hermite mean force"));
+    }
+
+    #[test]
     fn simpson_rejects_an_even_plane_count_and_integrates_cubics() {
         let even = SimpsonIntegral
             .cumulative(&[0.0, 1.0, 2.0, 3.0], &[0.0, 1.0, 2.0, 3.0])
