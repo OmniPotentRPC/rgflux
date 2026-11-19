@@ -1,11 +1,23 @@
 //! Analytic PAFI checks through the native constrained dynamics engine.
+//!
+//! Every statistical bound is derived in `tests/pafi_support/mod.rs` from a
+//! suite false failure rate of one in a thousand shared by all
+//! `FAMILY_SIZE` statistical assertions. Coverage targets the Hermite
+//! integral, which is the expectation of the estimator. Reproducible with
+//! `cargo test --features rgpot --test pafi_native -- --nocapture`; set
+//! `PAFI_SEED_OFFSET` to draw an independent suite.
 
-use std::f64::consts::PI;
+mod pafi_support;
+
+use std::f64::consts::{PI, TAU};
 
 use ndarray::{Array1, Array2, ArrayView1};
+use pafi_support::{FAMILY_SIZE, Z_CRIT, assert_below, assert_coverage, block_stats, se_cap, seed};
 use rgflux::engine::native::{NativeConfig, NativeEngine};
 use rgflux::engine::{DynamicsEngine, ThermostatConfig};
-use rgflux::pafi::{FreeEnergyProfile, PafiConfig, pafi_profile};
+use rgflux::pafi::{
+    FreeEnergyProfile, HermiteIntegral, MeanForceIntegral, PafiConfig, pafi_profile,
+};
 use rgflux::stats::StatsConfig;
 
 struct WideningDoubleWell;
@@ -399,5 +411,376 @@ fn arc_lengths_reflect_mass_weighting() {
     assert!(
         (s1 - s2).abs() > 1.0e-3,
         "mass-weighted arc lengths should differ: s1={s1}, s2={s2}",
+    );
+}
+
+const THERMAL: f64 = 0.2;
+const PLANES: usize = 21;
+const TIME_STEP: f64 = 0.05;
+const BURN_IN: usize = 200;
+
+const ISO_SAMPLES: usize = 10_000;
+const ANISO_SAMPLES: usize = 20_000;
+const RATE_SAMPLES: usize = 20_000;
+const REFINE_COARSE_SAMPLES: usize = 5_000;
+const REFINE_FINE_SAMPLES: usize = 20_000;
+
+const CURVED_BURN_IN: usize = 3_000;
+const CURVED_SAMPLES: usize = 54_000;
+// A block of `CURVED_SAMPLES / 40` steps has to be long compared with the
+// autocorrelation time. At the default step `0.002` a block spans `2.7` time
+// units. At `0.01` it spans `13.5`.
+const CURVED_TIME_STEP: f64 = 0.01;
+const CURVED_SE_CAP: f64 = se_cap(3.28e-3, 0.072);
+
+/// Exact mean force `dF/dx` of the widening double well on the plane `x`.
+fn widening_mean_force(x: f64) -> f64 {
+    -4.0 * x * (1.0 - x * x) + 0.25 * THERMAL / (1.5 + 0.5 * x)
+}
+
+/// Continuum barrier `F(0) - F(-1)` of the widening double well.
+fn widening_analytic_barrier() -> f64 {
+    1.0 + 0.5 * THERMAL * 1.5_f64.ln()
+}
+
+/// Hermite integral of [`widening_mean_force`] from `x = -1` to `x = 0`.
+fn widening_hermite_barrier(planes: usize) -> f64 {
+    let denominator = (planes - 1) as f64;
+    let arcs: Vec<f64> = (0..planes).map(|i| (i as f64) / denominator).collect();
+    let gradients: Vec<f64> = arcs
+        .iter()
+        .map(|arc| widening_mean_force(-1.0 + *arc))
+        .collect();
+    HermiteIntegral
+        .cumulative(&arcs, &gradients)
+        .expect("widening hermite barrier")
+        .values[planes - 1]
+}
+
+fn widening_profile(
+    masses: Vec<f64>,
+    gamma: f64,
+    seed_base: u64,
+    samples: usize,
+) -> FreeEnergyProfile {
+    let seed_value = seed(seed_base);
+    let path = line_path(-1.0, 0.0, PLANES);
+    let config = PafiConfig::default()
+        .with_planes(PLANES)
+        .with_burn_in_steps(BURN_IN)
+        .with_sample_steps(samples)
+        .with_time_step(TIME_STEP)
+        .with_stats(block_stats(samples))
+        .with_seed(seed_value);
+    let mut engine = NativeEngine::new(
+        WideningDoubleWell,
+        NativeConfig::default()
+            .with_masses(Array1::from_vec(masses))
+            .with_seed(seed_value)
+            .with_thermostat(
+                ThermostatConfig::default()
+                    .with_gamma(gamma)
+                    .with_temperature(THERMAL)
+                    .with_boltzmann(1.0),
+            ),
+    )
+    .expect("native engine");
+    engine
+        .shoot_velocities(seed_value)
+        .expect("initial velocities");
+    pafi_profile(&mut engine, path.view(), &config).expect("widening profile")
+}
+
+/// End sample of a profile that rises to its last plane, with the interpolant
+/// maximum agreeing to rounding.
+fn end_point(profile: &FreeEnergyProfile) -> (f64, f64) {
+    let last = profile.free_energy.len() - 1;
+    assert_eq!(
+        profile.dividing_index, last,
+        "dividing plane should be the last sample"
+    );
+    let scale = profile.barrier.abs().max(1.0);
+    let allowance = 1024.0 * f64::EPSILON * scale;
+    let gap = (profile.barrier - profile.free_energy[last]).abs();
+    assert!(
+        gap <= allowance,
+        "barrier {:.16e} and last sample {:.16e} differ by more than rounding",
+        profile.barrier,
+        profile.free_energy[last]
+    );
+    // The interpolant maximum and a stored sample can disagree by a unit in
+    // the last place. The sample maximum is the barrier within that rounding.
+    assert!(
+        profile
+            .free_energy
+            .iter()
+            .all(|&value| value <= profile.barrier + allowance),
+        "barrier must be the profile maximum"
+    );
+    (profile.free_energy[last], profile.standard_error[last])
+}
+
+#[test]
+fn widening_mean_force_integrates_to_analytic_barrier() {
+    let intervals = 20_000usize;
+    let dx = 1.0 / (intervals as f64);
+    let mut sum = 0.0_f64;
+    for i in 0..=intervals {
+        let weight = if i == 0 || i == intervals {
+            1.0
+        } else if i % 2 == 0 {
+            2.0
+        } else {
+            4.0
+        };
+        sum += weight * widening_mean_force(-1.0 + (i as f64) * dx);
+    }
+    let simpson = dx * sum / 3.0;
+    let tolerance = 1024.0 * f64::EPSILON;
+    assert!(
+        (simpson - widening_analytic_barrier()).abs() <= tolerance,
+        "mean force integral {simpson:.16} differs from analytic barrier {:.16}",
+        widening_analytic_barrier()
+    );
+}
+
+#[test]
+fn error_budget_isotropic_barrier_covers_hermite_expectation() {
+    let profile = widening_profile(vec![1.0, 1.0], 1.5, 11, ISO_SAMPLES);
+    let (barrier, standard_error) = end_point(&profile);
+    assert_coverage(
+        "isotropic barrier",
+        barrier,
+        standard_error,
+        widening_hermite_barrier(PLANES),
+    );
+}
+
+#[test]
+fn error_budget_anisotropic_barrier_covers_hermite_expectation() {
+    let profile = widening_profile(vec![1.0, 4.0], 1.5, 21, ANISO_SAMPLES);
+    let (barrier, standard_error) = end_point(&profile);
+    assert_coverage(
+        "anisotropic barrier",
+        barrier,
+        standard_error,
+        widening_hermite_barrier(PLANES),
+    );
+}
+
+fn budget_curved_profile(extra_images: usize, seed_value: u64) -> FreeEnergyProfile {
+    let theta_start = PI * 0.5;
+    let theta_end = 0.0_f64;
+    let images = CURVED_PLANES + extra_images;
+    let spacing = (theta_end - theta_start) / ((CURVED_PLANES - 1) as f64);
+    let path = mass_weighted_circular_path(
+        CURVED_RADIUS,
+        theta_start,
+        theta_end + spacing * (extra_images as f64),
+        images,
+    );
+    let config = PafiConfig::default()
+        .with_planes(images)
+        .with_burn_in_steps(CURVED_BURN_IN)
+        .with_sample_steps(CURVED_SAMPLES)
+        .with_time_step(CURVED_TIME_STEP)
+        .with_stats(block_stats(CURVED_SAMPLES))
+        .with_seed(seed_value);
+    let mut engine = NativeEngine::new(
+        AnisotropicHarmonic {
+            ax: CURVED_FORCE_CONSTANT_X,
+            ay: CURVED_FORCE_CONSTANT_Y,
+        },
+        NativeConfig::default()
+            .with_masses(Array1::from_vec(vec![1.0, 4.0]))
+            .with_seed(seed_value)
+            .with_thermostat(
+                ThermostatConfig::default()
+                    .with_gamma(1.5)
+                    .with_temperature(THERMAL)
+                    .with_boltzmann(1.0),
+            ),
+    )
+    .expect("native engine");
+    engine
+        .shoot_velocities(seed_value)
+        .expect("initial velocities");
+    pafi_profile(&mut engine, path.view(), &config).expect("curved profile")
+}
+
+/// Exact mean force `-dF/dtheta` on the plane at angle `theta`.
+fn curved_mean_force(theta: f64) -> f64 {
+    let (sin, cos) = theta.sin_cos();
+    THERMAL * (CURVED_FORCE_CONSTANT_X - CURVED_FORCE_CONSTANT_Y) * sin * cos
+        / (CURVED_FORCE_CONSTANT_X * cos * cos + CURVED_FORCE_CONSTANT_Y * sin * sin)
+}
+
+fn curved_hermite_barrier() -> f64 {
+    let step = PI * 0.5 / ((CURVED_PLANES - 1) as f64);
+    let arcs: Vec<f64> = (0..CURVED_PLANES).map(|k| (k as f64) * step).collect();
+    let gradients: Vec<f64> = (0..CURVED_PLANES)
+        .map(|k| curved_mean_force(PI * 0.5 - (k as f64) * step))
+        .collect();
+    HermiteIntegral
+        .cumulative(&arcs, &gradients)
+        .expect("curved hermite barrier")
+        .values[CURVED_PLANES - 1]
+}
+
+#[test]
+fn error_budget_curved_profile_covers_hermite_expectation() {
+    let seed_value = seed(CURVED_SEED);
+    let profile = budget_curved_profile(0, seed_value);
+    let (barrier, standard_error) = end_point(&profile);
+    let expected = curved_hermite_barrier();
+    // Without the Jacobian term the canonical mean barrier is zero. The
+    // coverage window around `expected`, using the standard error cap as an
+    // upper bound, excludes that limit.
+    assert!(
+        expected > Z_CRIT * CURVED_SE_CAP,
+        "expected barrier {expected:.8} is not separated from the zero Jacobian limit"
+    );
+    assert_below("curved barrier SE", standard_error, CURVED_SE_CAP);
+    assert_coverage("curved barrier", barrier, standard_error, expected);
+}
+
+#[test]
+fn error_budget_normalized_rate_covers_hermite_expectation() {
+    let profile = widening_profile(vec![1.0, 4.0], 1.3, 7, RATE_SAMPLES);
+    assert_eq!(profile.dividing_index, PLANES - 1);
+    let omega_0 = 8.0_f64.sqrt();
+    assert!((profile.reactant_frequency - omega_0).abs() <= 1.0e-6 * omega_0);
+
+    let omega = profile.reactant_frequency;
+    let gaussian = (TAU * THERMAL).sqrt() / omega;
+    let rounding = 1024.0 * f64::EPSILON;
+    assert!(
+        (profile.reactant_partition - gaussian).abs() <= rounding * gaussian.abs().max(1.0),
+        "reactant partition {:.16e} vs closed form {:.16e}",
+        profile.reactant_partition,
+        gaussian
+    );
+    assert!(
+        (profile.reactant_log_partition - gaussian.ln()).abs()
+            <= rounding * gaussian.ln().abs().max(1.0),
+        "reactant log partition {:.16e} vs closed form {:.16e}",
+        profile.reactant_log_partition,
+        gaussian.ln()
+    );
+    let closed_rate = omega / TAU * (-profile.barrier / THERMAL).exp();
+    assert!(
+        (profile.normalized_rate - closed_rate).abs() <= rounding * closed_rate.abs().max(1.0),
+        "normalized rate {:.16e} vs closed form {:.16e}",
+        profile.normalized_rate,
+        closed_rate
+    );
+    assert!(
+        (profile.normalized_log_rate - closed_rate.ln()).abs()
+            <= rounding * closed_rate.ln().abs().max(1.0),
+        "normalized log rate {:.16e} vs closed form {:.16e}",
+        profile.normalized_log_rate,
+        closed_rate.ln()
+    );
+
+    let expected_barrier = widening_hermite_barrier(PLANES);
+    let expected_rate = omega_0 / TAU * (-expected_barrier / THERMAL).exp();
+    assert_coverage(
+        "normalized rate",
+        profile.normalized_rate,
+        profile.normalized_rate_error,
+        expected_rate,
+    );
+}
+
+#[test]
+fn error_budget_refinement_covers_hermite_expectation() {
+    let coarse = widening_profile(vec![1.0, 1.0], 1.5, 91, REFINE_COARSE_SAMPLES);
+    let fine = widening_profile(vec![1.0, 1.0], 1.5, 92, REFINE_FINE_SAMPLES);
+    let (coarse_barrier, coarse_se) = end_point(&coarse);
+    let (fine_barrier, fine_se) = end_point(&fine);
+    let expected = widening_hermite_barrier(PLANES);
+    assert_coverage("coarse barrier", coarse_barrier, coarse_se, expected);
+    assert_coverage("fine barrier", fine_barrier, fine_se, expected);
+}
+
+#[test]
+fn arc_lengths_match_the_mass_weighted_chord() {
+    let thermal = 0.03_f64;
+    let planes = 9usize;
+    let slope = 0.3_f64;
+    let path = tilted_path(-1.0, 0.0, planes, slope);
+    let spacing = 1.0 / ((planes - 1) as f64);
+    let third_derivative_bound = 4.0 * 3.0 * 2.0 * 1.0 + 3.0 * 2.0 * 0.5 * 0.5 * slope * slope;
+    let trapezoid_error_bound = spacing * spacing * 1.0 * third_derivative_bound / 12.0;
+    let config = PafiConfig::default()
+        .with_planes(planes)
+        .with_burn_in_steps(32)
+        .with_sample_steps(32)
+        .with_time_step(0.01)
+        .with_zero_temperature_tol(trapezoid_error_bound)
+        .with_stats(StatsConfig::default().with_min_batches(2))
+        .with_seed(seed(99));
+
+    let make_engine = |masses: Vec<f64>, seed_base: u64| {
+        let seed_value = seed(seed_base);
+        let mut engine = NativeEngine::new(
+            WideningDoubleWell,
+            NativeConfig::default()
+                .with_masses(Array1::from_vec(masses))
+                .with_seed(seed_value)
+                .with_thermostat(
+                    ThermostatConfig::default()
+                        .with_gamma(1.3)
+                        .with_temperature(thermal)
+                        .with_boltzmann(1.0),
+                ),
+        )
+        .expect("native engine");
+        engine
+            .shoot_velocities(seed_value)
+            .expect("initial velocities");
+        engine
+    };
+
+    let mut unit_mass = make_engine(vec![1.0, 1.0], 99);
+    let mut skew_mass = make_engine(vec![1.0, 4.0], 100);
+    let p1 = pafi_profile(&mut unit_mass, path.view(), &config).expect("profile unit");
+    let p2 = pafi_profile(&mut skew_mass, path.view(), &config).expect("profile skew");
+    let s1 = *p1.arc_lengths.last().expect("last arc");
+    let s2 = *p2.arc_lengths.last().expect("last arc");
+    let expected_s1 = (1.0 + slope * slope).sqrt();
+    let expected_s2 = (1.0 + 4.0 * slope * slope).sqrt();
+    let tolerance = 1024.0 * f64::EPSILON * expected_s2;
+    assert!(
+        (s1 - expected_s1).abs() <= tolerance,
+        "unit mass arc length mismatch: s1={s1:.16}, expected={expected_s1:.16}"
+    );
+    assert!(
+        (s2 - expected_s2).abs() <= tolerance,
+        "skew mass arc length mismatch: s2={s2:.16}, expected={expected_s2:.16}"
+    );
+    assert!(
+        (s1 - s2).abs() > 1.0e-3,
+        "mass weighted arc lengths should differ: s1={s1}, s2={s2}"
+    );
+}
+
+#[test]
+fn statistical_family_size_matches_call_sites() {
+    let native = include_str!("pafi_native.rs");
+    let rgpot = include_str!("pafi_engine_trait_rgpot.rs");
+    let coverage = concat!("assert_", "coverage(");
+    let below = concat!("assert_", "below(");
+    let count = |source: &str| -> usize {
+        source
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("//") && !line.contains("fn "))
+            .map(|line| line.matches(coverage).count() + line.matches(below).count())
+            .sum()
+    };
+    assert_eq!(
+        count(native) + count(rgpot),
+        FAMILY_SIZE,
+        "FAMILY_SIZE must equal the number of statistical assertion call sites"
     );
 }
