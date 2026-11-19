@@ -27,7 +27,7 @@
 //!   dividing-surface configuration sampling via [`hyperplane::sample_hyperplane`].
 //! - [`pafi`]: Projected Average Force Integration along reaction paths
 //!   ([`pafi::PafiConfig`], [`pafi::FreeEnergyProfile`], [`pafi::pafi_profile`],
-//!   [`pafi::MeanForceIntegral`]).
+//!   [`pafi::pafi_profile`]).
 //! - [`ohtst`]: OH-TST with a fixed hyperplane normal via
 //!   [`ohtst::optimize_hyperplane`]; variational normal optimization is not
 //!   yet implemented.
