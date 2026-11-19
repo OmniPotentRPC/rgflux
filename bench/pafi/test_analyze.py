@@ -76,12 +76,20 @@ class VerdictProseTests(unittest.TestCase):
         )
         self.assertEqual(statistics["vacancy_rejections"], 0)
         buckets = summary["rejection_buckets"]
-        self.assertEqual(buckets["genuine_exp_overflow"]["count"], 0)
         self.assertEqual(buckets["other"]["count"], 0)
         self.assertEqual(
             statistics["dimer_rejections"],
             buckets["zero_temperature_tol"]["count"]
-            + buckets["zero_reactant_partition"]["count"],
+            + buckets["reproduced_reactant_partition"]["count"]
+            + buckets["unclassified_reactant_partition"]["count"],
+        )
+        self.assertEqual(buckets["reproduced_reactant_partition"]["count"], 1)
+        self.assertEqual(
+            summary["raw_rejection_errors"]["dimer"][
+                ANALYZE.REACTANT_PARTITION_ERROR
+            ],
+            buckets["reproduced_reactant_partition"]["count"]
+            + buckets["unclassified_reactant_partition"]["count"],
         )
         self.assertEqual(
             statistics["dimer_executions"] + statistics["vacancy_executions"],
@@ -206,6 +214,89 @@ class RegenerationTests(unittest.TestCase):
                     self.assertEqual(
                         (root / name).read_text(), (ROOT / name).read_text()
                     )
+
+
+def reactant_partition_entry(item_changes=None, record_changes=None):
+    configuration = ANALYZE.REPRODUCED_REJECTION
+    item = {
+        "engine": "rgflux",
+        "case": configuration["case"],
+        "planes": configuration["planes"],
+        "temperature": configuration["temperature"],
+        "samples": configuration["samples"],
+        "threads": configuration["threads"],
+        "seed": configuration["seed"],
+    }
+    record = {
+        "status": "rejected",
+        "error": ANALYZE.REACTANT_PARTITION_ERROR,
+        "burn_in": configuration["burn_in"],
+        "effective_threads": configuration["effective_threads"],
+        "time_step": configuration["time_step"],
+        "friction": configuration["friction"],
+        "zero_temperature_tolerance": configuration["zero_temperature_tolerance"],
+        "minimum_energy": -1.0,
+        "saddle_energy": -1.0,
+    }
+    item.update(item_changes or {})
+    record.update(record_changes or {})
+    return item, record
+
+
+class RejectionClassificationTests(unittest.TestCase):
+    def counts(self, *entries):
+        buckets = ANALYZE.rejection_audit(list(entries))
+        return (
+            buckets["reproduced_reactant_partition"]["count"],
+            buckets["unclassified_reactant_partition"]["count"],
+        )
+
+    def test_the_reproduced_configuration_is_classified(self):
+        self.assertEqual(self.counts(reactant_partition_entry()), (1, 0))
+
+    def test_other_seed_with_constant_energy_is_unclassified(self):
+        entry = reactant_partition_entry({"seed": 1036331})
+        self.assertEqual(entry[1]["minimum_energy"], entry[1]["saddle_energy"])
+        self.assertEqual(self.counts(entry), (0, 1))
+
+    def test_any_changed_setting_is_unclassified(self):
+        changes = (
+            ({"case": "straight"}, {}),
+            ({"planes": 33}, {}),
+            ({"temperature": 0.1}, {}),
+            ({"samples": 128}, {}),
+            ({"threads": 4}, {}),
+            ({}, {"burn_in": 64}),
+            ({}, {"time_step": 0.001}),
+            ({}, {"friction": 2.0}),
+            ({}, {"zero_temperature_tolerance": 0.02}),
+            ({"engine": "lammps-pafi"}, {}),
+        )
+        for item_changes, record_changes in changes:
+            with self.subTest(item_changes=item_changes, record=record_changes):
+                entry = reactant_partition_entry(item_changes, record_changes)
+                self.assertEqual(self.counts(entry), (0, 1))
+
+    def test_other_errors_are_not_reactant_partition_rejections(self):
+        item, record = reactant_partition_entry()
+        record["error"] = ANALYZE.ZERO_TEMPERATURE_TOL_ERROR
+        buckets = ANALYZE.rejection_audit([(item, record)])
+        self.assertEqual(buckets["zero_temperature_tol"]["count"], 1)
+        self.assertEqual(self.counts((item, record)), (0, 0))
+
+    def test_reproducer_runs_the_classified_configuration(self):
+        spec = importlib.util.spec_from_file_location(
+            "pafi_repro", ROOT / "repro_zero_width_reactant_partition.py"
+        )
+        reproducer = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(reproducer)
+        arguments = reproducer.command("native")
+        self.assertEqual(arguments[0], "native")
+        flags = dict(zip(arguments[1::2], arguments[2::2], strict=True))
+        configuration = ANALYZE.REPRODUCED_REJECTION
+        self.assertEqual(len(flags), len(configuration))
+        for key, flag in reproducer.FLAGS.items():
+            self.assertEqual(flags[flag], str(configuration[key]))
 
 
 class StrictPairingTests(unittest.TestCase):

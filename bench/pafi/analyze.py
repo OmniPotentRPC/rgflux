@@ -10,6 +10,19 @@ import tarfile
 REACTANT_PARTITION_ERROR = (
     "invalid configuration: PAFI reactant partition must be finite and positive"
 )
+REPRODUCED_REJECTION = {
+    "case": "curved",
+    "planes": 17,
+    "temperature": 0.05,
+    "samples": 64,
+    "burn_in": 128,
+    "seed": 1036330,
+    "threads": 1,
+    "effective_threads": 1,
+    "time_step": 0.002,
+    "friction": 1.0,
+    "zero_temperature_tolerance": 0.01,
+}
 ZERO_TEMPERATURE_TOL_ERROR = (
     "invalid configuration: PAFI zero-temperature path-force quadrature exceeds tolerance"
 )
@@ -352,13 +365,22 @@ def profile_error(record, exact):
     )
 
 
+def is_reproduced_rejection(item, record):
+    if item["engine"] != "rgflux":
+        return False
+    return all(
+        (item[key] if key in item else record.get(key)) == value
+        for key, value in REPRODUCED_REJECTION.items()
+    )
+
+
 def rejection_audit(entries):
     buckets = {
-        "zero_reactant_partition": {
+        "reproduced_reactant_partition": {
             "count": 0,
             "error_strings": [REACTANT_PARTITION_ERROR],
         },
-        "genuine_exp_overflow": {
+        "unclassified_reactant_partition": {
             "count": 0,
             "error_strings": [],
         },
@@ -373,17 +395,11 @@ def rejection_audit(entries):
             continue
         reason = record["error"]
         if reason == REACTANT_PARTITION_ERROR:
-            constant_energy_path = math.isclose(
-                record["minimum_energy"],
-                record["saddle_energy"],
-                rel_tol=0.0,
-                abs_tol=1.0e-14,
-            )
-            if item["case"] == "curved" and constant_energy_path:
-                buckets["zero_reactant_partition"]["count"] += 1
+            if is_reproduced_rejection(item, record):
+                buckets["reproduced_reactant_partition"]["count"] += 1
             else:
-                buckets["genuine_exp_overflow"]["count"] += 1
-                buckets["genuine_exp_overflow"]["error_strings"] = [
+                buckets["unclassified_reactant_partition"]["count"] += 1
+                buckets["unclassified_reactant_partition"]["error_strings"] = [
                     REACTANT_PARTITION_ERROR
                 ]
         elif reason == ZERO_TEMPERATURE_TOL_ERROR:
@@ -943,7 +959,7 @@ def verdict_section(statistics, result):
         f'- Accepted 17-plane straight profiles have median maximum pairwise differences of {format_range(statistics["straight_17_errors"])}.',
         f'- The native global straight-path equilibrium is undefined. LAMMPS finite-periodic median maximum errors are {format_range(statistics["periodic_exact_errors"])}; the common interacting-basin comparison remains a regularized diagnostic.',
         f'- Vacancy median maximum profile differences are {format_range(statistics["vacancy_profile_errors"])} eV and barrier differences are {format_range(statistics["vacancy_barrier_errors"])} eV. Static minimum and saddle differences are {statistics["vacancy_static_minimum_error"]:.3g} and {statistics["vacancy_static_saddle_error"]:.3g} eV.',
-        f'- Rejections split into {buckets["zero_temperature_tol"]["count"]} zero-temperature-tolerance cases, {buckets["zero_reactant_partition"]["count"]} zero-width reactant partitions, {buckets["genuine_exp_overflow"]["count"]} genuine exponential overflows, and {buckets["other"]["count"]} other cases.',
+        f'- Rejections by bucket: zero-temperature tolerance {buckets["zero_temperature_tol"]["count"]}, reproduced reactant partition {buckets["reproduced_reactant_partition"]["count"]}, unclassified reactant partition {buckets["unclassified_reactant_partition"]["count"]}, other {buckets["other"]["count"]}.',
     ]
     return lines
 
@@ -957,15 +973,18 @@ def render_markdown(result):
     cells = result["cells"]
     rejection_buckets = result["execution_summary"]["rejection_buckets"]
     statistics = verdict_statistics(result)
-    genuine_overflows = rejection_buckets["genuine_exp_overflow"]["count"]
-    if genuine_overflows:
-        overflow_sentence = (
-            f"{genuine_overflows} retained cells are classified as genuine "
-            "exponential overflows."
+    reproduced = rejection_buckets["reproduced_reactant_partition"]["count"]
+    unclassified = rejection_buckets["unclassified_reactant_partition"]["count"]
+    if unclassified:
+        unclassified_sentence = (
+            f"{unclassified} other rejections carry the same error but are "
+            "unclassified: the guards do not cover their configurations, and "
+            "no retained record shows whether the cause is a dividing plane "
+            "at index zero, an exponential overflow or something else."
         )
     else:
-        overflow_sentence = (
-            "No retained cell is classified as a genuine exponential overflow."
+        unclassified_sentence = (
+            "No other retained rejection carries the same error."
         )
     headline = statistics["headline"]
     straight_exact = statistics["straight_exact"]
@@ -1168,17 +1187,17 @@ def render_markdown(result):
             "",
             "| bucket | count | exact error string |",
             "|---|---:|---|",
-            f'| zero_reactant_partition | {rejection_buckets["zero_reactant_partition"]["count"]} | `{REACTANT_PARTITION_ERROR}` |',
+            f'| reproduced_reactant_partition | {rejection_buckets["reproduced_reactant_partition"]["count"]} | `{REACTANT_PARTITION_ERROR}` |',
             f'| zero_temperature_tol | {rejection_buckets["zero_temperature_tol"]["count"]} | `{ZERO_TEMPERATURE_TOL_ERROR}` |',
-            f'| genuine_exp_overflow | {rejection_buckets["genuine_exp_overflow"]["count"]} | '
+            f'| unclassified_reactant_partition | {rejection_buckets["unclassified_reactant_partition"]["count"]} | '
             + (
                 ", ".join(
                     f"`{value}`"
-                    for value in rejection_buckets["genuine_exp_overflow"][
+                    for value in rejection_buckets["unclassified_reactant_partition"][
                         "error_strings"
                     ]
                 )
-                if rejection_buckets["genuine_exp_overflow"]["error_strings"]
+                if rejection_buckets["unclassified_reactant_partition"]["error_strings"]
                 else "none"
             )
             + " |",
@@ -1221,7 +1240,7 @@ def render_markdown(result):
             "",
             "## Per-cell acceptance",
             "",
-            "| case | planes | T | threads | samples | rgflux hits | reference hits | zero_temperature_tol | zero_reactant_partition | genuine_exp_overflow | other | Fisher p |",
+            "| case | planes | T | threads | samples | rgflux hits | reference hits | zero_temperature_tol | reproduced_reactant_partition | unclassified_reactant_partition | other | Fisher p |",
             "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
         ]
     )
@@ -1229,8 +1248,8 @@ def render_markdown(result):
         buckets = cell["rejection_counts"]
         lines.append(
             "| {case} | {planes} | {temperature:g} | {threads} | {samples} | "
-            "{native}/12 | {reference}/12 | {quadrature} | {zero_partition} | "
-            "{overflow} | "
+            "{native}/12 | {reference}/12 | {quadrature} | {reproduced} | "
+            "{unclassified} | "
             "{other} | {p:.3g} |".format(
                 case=cell["case"],
                 planes=cell["planes"],
@@ -1242,8 +1261,8 @@ def render_markdown(result):
                 quadrature=cell["rejection_reasons"].get(
                     ZERO_TEMPERATURE_TOL_ERROR, 0
                 ),
-                zero_partition=buckets["zero_reactant_partition"],
-                overflow=buckets["genuine_exp_overflow"],
+                reproduced=buckets["reproduced_reactant_partition"],
+                unclassified=buckets["unclassified_reactant_partition"],
                 other=buckets["other"],
                 p=cell["hit_rate_fisher_p"],
             )
@@ -1354,11 +1373,11 @@ def render_markdown(result):
             "",
             "## Guard for the rgflux reactant partition rejection",
             "",
-            "The curved, 17 plane, kBT=0.05, 64 sample run with seed 1036330 is rejected with `PAFI reactant partition must be finite and positive`. The cargo test `reproduces_zero_width_reactant_partition` and `repro_zero_width_reactant_partition.py` are guard tests of that existing behaviour. They exercise unchanged rgflux library code and check only the rejection status and error string, not its cause. A dividing plane at index zero would leave the reactant integration without an interval and give a partition of zero, but the guards do not observe the dividing index. " + overflow_sentence,
+            f"The guarded configuration is curved, 17 planes, kBT=0.05, 64 samples, seed 1036330. Retained rgflux rejections of it with `PAFI reactant partition must be finite and positive`: {reproduced}. The cargo test `reproduces_zero_width_reactant_partition` and `repro_zero_width_reactant_partition.py` are guard tests of that existing behaviour. They exercise unchanged rgflux library code and check only the rejection status and error string, not its cause. A dividing plane at index zero would leave the reactant integration without an interval and give a partition of zero, but the guards do not observe the dividing index. " + unclassified_sentence,
             "",
             "## Reproduction",
             "",
-            "Build and run commands are documented in `bench/pafi/README.md`. Raw logs are intentionally excluded.",
+            "Build and run commands are documented in `bench/pafi/README.md`. The raw records, metadata and toolchain notes are in `bench/pafi/raw`; per run logs and work directories are not kept.",
         ]
     )
     return "\n".join(lines) + "\n"
@@ -1685,7 +1704,7 @@ def run(args):
                 "rgflux": "measured potential invocations",
                 "lammps_pafi": "derived as planes times configured thermalization plus production steps; setup evaluations are excluded",
             },
-            "rejection_classification": "The generic non-positive reactant-partition error is zero_reactant_partition for retained curved constant-energy paths; any occurrence outside that verified class is counted as genuine_exp_overflow.",
+            "rejection_classification": "A reactant-partition rejection is reproduced_reactant_partition only when the rgflux run has exactly the configuration that the cargo test and repro_zero_width_reactant_partition.py reject with that error; every other run with that error is unclassified_reactant_partition. No record is attributed to a cause the guards do not observe.",
             "exact_dimer_reference": {
                 "basin_cutoff": 4.0,
                 "straight_partition": "2*pi*integral_r^4 R*exp(-U(R)/T)dR",
