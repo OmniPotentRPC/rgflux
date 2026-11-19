@@ -17,6 +17,8 @@
 //! - Goswami, R., et al. (2026). *TheochemUI/eOn: v2.9.0.1*. Zenodo.
 //!   <https://doi.org/10.5281/zenodo.18529496>
 
+use std::ffi::{CStr, CString, c_char, c_int, c_void};
+use std::path::Path;
 use std::sync::Mutex;
 
 use ndarray::{Array1, ArrayView1};
@@ -30,6 +32,144 @@ use rgpot_core::types::{rgpot_force_input_t, rgpot_force_out_t};
 
 use crate::engine::{ForceSurface, validate_finite_slice};
 use crate::error::FluxError;
+
+unsafe extern "C" {
+    fn rgflux_eam_table_open_file(
+        path: *const c_char,
+        format: c_int,
+        periodic: c_int,
+        skin: f64,
+        err_buf: *mut c_char,
+        err_cap: usize,
+    ) -> *mut c_void;
+
+    fn rgflux_eam_table_open_memory(
+        z: c_int,
+        nrho: c_int,
+        drho: f64,
+        nr: c_int,
+        dr: f64,
+        cutoff: f64,
+        frho: *const f64,
+        rhor: *const f64,
+        z2r: *const f64,
+        periodic: c_int,
+        skin: f64,
+        err_buf: *mut c_char,
+        err_cap: usize,
+    ) -> *mut c_void;
+
+    fn rgflux_eam_table_close(handle: *mut c_void);
+
+    fn rgflux_eam_table_eval(
+        handle: *const c_void,
+        n_atoms: usize,
+        pos: *const f64,
+        atmnrs: *const c_int,
+        box9: *const f64,
+        energy: *mut f64,
+        forces: *mut f64,
+        err_buf: *mut c_char,
+        err_cap: usize,
+    ) -> c_int;
+}
+
+/// DYNAMO file format for [`RgpotSurface::from_eam_table_file`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum EamTableFormat {
+    /// Single-element `funcfl` (`pair_style eam`).
+    Funcfl,
+    /// Multi-element alloy `setfl` (`pair_style eam/alloy`).
+    #[default]
+    Setfl,
+    /// Finnis-Sinclair `eam/fs` (`pair_style eam/fs`).
+    FinnisSinclair,
+}
+
+impl EamTableFormat {
+    const fn code(self) -> c_int {
+        match self {
+            Self::Funcfl => 0,
+            Self::Setfl => 1,
+            Self::FinnisSinclair => 2,
+        }
+    }
+}
+
+struct EamCallbackState {
+    handle: *mut c_void,
+    forces_scratch: Vec<f64>,
+}
+
+impl Drop for EamCallbackState {
+    fn drop(&mut self) {
+        if !self.handle.is_null() {
+            unsafe { rgflux_eam_table_close(self.handle) };
+        }
+    }
+}
+
+unsafe extern "C" fn drop_eam_state(user_data: *mut c_void) {
+    if !user_data.is_null() {
+        let _ = unsafe { Box::from_raw(user_data.cast::<EamCallbackState>()) };
+    }
+}
+
+unsafe extern "C" fn eval_eam_callback(
+    user_data: *mut c_void,
+    input: *const rgpot_force_input_t,
+    output: *mut rgpot_force_out_t,
+) -> rgpot_status_t {
+    if user_data.is_null() || input.is_null() || output.is_null() {
+        return rgpot_status_t::RGPOT_INVALID_PARAMETER;
+    }
+    let state = unsafe { &mut *user_data.cast::<EamCallbackState>() };
+    let inp = unsafe { &*input };
+    let Some(n_atoms) = (unsafe { inp.n_atoms() }) else {
+        return rgpot_status_t::RGPOT_INVALID_PARAMETER;
+    };
+    let Ok(n_atoms_i64) = i64::try_from(n_atoms) else {
+        return rgpot_status_t::RGPOT_INVALID_PARAMETER;
+    };
+    if inp.positions.is_null() || inp.atomic_numbers.is_null() || inp.box_matrix.is_null() {
+        return rgpot_status_t::RGPOT_INVALID_PARAMETER;
+    }
+    let pos_ptr = unsafe { (*inp.positions).dl_tensor.data } as *const f64;
+    let atm_ptr = unsafe { (*inp.atomic_numbers).dl_tensor.data } as *const c_int;
+    let box_ptr = unsafe { (*inp.box_matrix).dl_tensor.data } as *const f64;
+    if pos_ptr.is_null() || atm_ptr.is_null() || box_ptr.is_null() {
+        return rgpot_status_t::RGPOT_INVALID_PARAMETER;
+    }
+    let dof = 3 * n_atoms;
+    if state.forces_scratch.len() != dof {
+        state.forces_scratch.resize(dof, 0.0);
+    }
+    let mut energy = 0.0_f64;
+    let mut err_buf = [0 as c_char; 256];
+    let rc = unsafe {
+        rgflux_eam_table_eval(
+            state.handle,
+            n_atoms,
+            pos_ptr,
+            atm_ptr,
+            box_ptr,
+            &mut energy,
+            state.forces_scratch.as_mut_ptr(),
+            err_buf.as_mut_ptr(),
+            err_buf.len(),
+        )
+    };
+    if rc != 0 {
+        return rgpot_status_t::RGPOT_INTERNAL_ERROR;
+    }
+    let out = unsafe { &mut *output };
+    out.energy = energy;
+    out.variance = 0.0;
+    out.forces =
+        unsafe { rgpot_tensor_cpu_f64_2d(state.forces_scratch.as_mut_ptr(), n_atoms_i64, 3) };
+    rgpot_status_t::RGPOT_SUCCESS
+}
 
 /// Default cubic box edge (Angstrom) used when no periodic cell is supplied.
 pub const DEFAULT_RGPOT_BOX_EDGE: f64 = 100.0;
@@ -105,6 +245,107 @@ impl RgpotSurface {
     /// Number of atoms configured on this surface.
     pub fn n_atoms(&self) -> usize {
         self.atomic_numbers.len()
+    }
+
+    /// Construct an in-process `rgpot::EAMTablePot` surface from a DYNAMO table file.
+    pub fn from_eam_table_file(
+        path: &Path,
+        format: EamTableFormat,
+        periodic: bool,
+        skin: f64,
+        config: RgpotConfig,
+    ) -> Result<Self, FluxError> {
+        let path_str = path.to_str().ok_or(FluxError::InvalidConfig(
+            "EAM table path is not valid UTF-8",
+        ))?;
+        let c_path = CString::new(path_str)
+            .map_err(|_| FluxError::InvalidConfig("EAM table path contains interior NUL"))?;
+        let mut err_buf = [0 as c_char; 256];
+        let handle = unsafe {
+            rgflux_eam_table_open_file(
+                c_path.as_ptr(),
+                format.code(),
+                i32::from(periodic),
+                skin,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+            )
+        };
+        if handle.is_null() {
+            let msg = unsafe { CStr::from_ptr(err_buf.as_ptr()) }
+                .to_string_lossy()
+                .into_owned();
+            return Err(FluxError::Surface(msg));
+        }
+        let state = Box::new(EamCallbackState {
+            handle,
+            forces_scratch: vec![0.0; 3 * config.atomic_numbers.len()],
+        });
+        let potential = PotentialImpl::new(
+            eval_eam_callback,
+            Box::into_raw(state).cast::<c_void>(),
+            Some(drop_eam_state),
+        );
+        Self::new(potential, config)
+    }
+
+    /// Construct an in-process `rgpot::EAMTablePot` surface from tabulated arrays in memory.
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_eam_table_memory(
+        atomic_number: i32,
+        drho: f64,
+        dr: f64,
+        cutoff: f64,
+        frho: &[f64],
+        rhor: &[f64],
+        z2r: &[f64],
+        periodic: bool,
+        skin: f64,
+        config: RgpotConfig,
+    ) -> Result<Self, FluxError> {
+        if frho.len() < 5 || rhor.len() < 5 || z2r.len() != rhor.len() {
+            return Err(FluxError::InvalidConfig(
+                "EAM table arrays require at least 5 knots and matching rhor/z2r lengths",
+            ));
+        }
+        let nrho = c_int::try_from(frho.len())
+            .map_err(|_| FluxError::InvalidConfig("EAM nrho overflows c_int"))?;
+        let nr = c_int::try_from(rhor.len())
+            .map_err(|_| FluxError::InvalidConfig("EAM nr overflows c_int"))?;
+        let mut err_buf = [0 as c_char; 256];
+        let handle = unsafe {
+            rgflux_eam_table_open_memory(
+                atomic_number,
+                nrho,
+                drho,
+                nr,
+                dr,
+                cutoff,
+                frho.as_ptr(),
+                rhor.as_ptr(),
+                z2r.as_ptr(),
+                i32::from(periodic),
+                skin,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+            )
+        };
+        if handle.is_null() {
+            let msg = unsafe { CStr::from_ptr(err_buf.as_ptr()) }
+                .to_string_lossy()
+                .into_owned();
+            return Err(FluxError::Surface(msg));
+        }
+        let state = Box::new(EamCallbackState {
+            handle,
+            forces_scratch: vec![0.0; 3 * config.atomic_numbers.len()],
+        });
+        let potential = PotentialImpl::new(
+            eval_eam_callback,
+            Box::into_raw(state).cast::<c_void>(),
+            Some(drop_eam_state),
+        );
+        Self::new(potential, config)
     }
 }
 
@@ -262,5 +503,32 @@ mod tests {
         let (e, f) = surf.energy_and_forces(x.view(), None).expect("rgpot eval");
         assert_eq!(e, 2.625);
         assert_eq!(f, Array1::from_vec(vec![-1.0, 2.0, -0.5]));
+    }
+
+    #[test]
+    fn eam_table_memory_surface_evaluates_pair_interaction() {
+        let frho = vec![0.0_f64; 16];
+        let rhor = vec![0.0_f64; 16];
+        // Linearly decaying r * phi(r) inside cutoff = 4.0.
+        let dr = 4.0 / 15.0;
+        let z2r: Vec<f64> = (0..16)
+            .map(|i| {
+                let r = (i as f64) * dr;
+                (4.0 - r).max(0.0)
+            })
+            .collect();
+        let cfg = RgpotConfig::default()
+            .with_atomic_numbers(vec![29, 29])
+            .with_default_cell([20.0, 0.0, 0.0, 0.0, 20.0, 0.0, 0.0, 0.0, 20.0]);
+        let surf = RgpotSurface::from_eam_table_memory(
+            29, 0.1, dr, 4.0, &frho, &rhor, &z2r, true, 0.5, cfg,
+        )
+        .expect("in-memory EAMTablePot");
+        let pos = Array1::from_vec(vec![0.0, 0.0, 0.0, 2.0, 0.0, 0.0]);
+        let (energy, forces) = surf
+            .energy_and_forces(pos.view(), None)
+            .expect("eval eam pair");
+        assert!(energy.is_finite() && energy > 0.0);
+        assert!(forces[0] < 0.0 && (forces[0] + forces[3]).abs() <= 1.0e-12);
     }
 }

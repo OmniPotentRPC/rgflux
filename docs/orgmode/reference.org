@@ -21,7 +21,7 @@
 | Feature | Dependencies | Description |
 |---+---+---|
 | =default= | none | Pure-Rust =engine::native=, =stats=, =kappa=, =hyperplane=, =ohtst=, =ffs=, =pafi=, and =network= over =rgsaddle= and =rgmin= |
-| =rgpot= | =dep:rgpot-core= | Enables =engine::rgpot::RgpotSurface= and =RgpotConfig= over =rgpot_core::potential::PotentialImpl= DLPack callbacks |
+| =rgpot= | =dep:rgpot-core= | Enables =engine::rgpot::RgpotSurface=, =RgpotConfig=, and =EamTableFormat= over =rgpot_core::potential::PotentialImpl= DLPack callbacks and in-process =rgpot::EAMTablePot= tables |
 | =rgpot-session= | =dep:rgpot-core= | Enables =engine::rgpot_session::RgpotSessionEngine=, =RgpotSessionConfig=, and =SessionEngineKind= (=OpenMm=, =NbLib=, =Lammps=) |
 | =lammpc= | =dep:rgpot-core=, =dep:capnp= | Enables =engine::lammpc::LammpcEngine=, =LammpcConfig=, and =MASS_VELOCITY_TO_EV= over =liblammpc= (=lammpc_session_*=) |
 
