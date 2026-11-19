@@ -197,13 +197,13 @@ Constructors and methods: =HyperplaneConstraint::new(normal, offset)=, =from_dir
 | =time_step= | =f64= | =0.002= | Integration timestep \(\Delta t > 0\) in engine time units |
 | =target_error= | =Option<f64>= | =None= | Optional target standard error on \(\Delta F\) (finite, \(\ge 0\)); =None= runs one round |
 | =max_rounds= | =usize= | =4= | Maximum sampling rounds (\(\ge 1\)); later rounds run only while =target_error= is set and not reached, and missing it is not an error |
-| =zero_temperature_tol= | =f64= | \(2 (\pi^2 / 12) / 8^2 \approx 0.0257\) | Dimensionless tolerance for \(\lvert I_T - \Delta E_0\rvert / \max(E_{\mathrm{unit}}, \lvert\Delta E_0\rvert)\), where both energies use engine energy units and \(E_{\mathrm{unit}}\) is one such unit (finite, \(\ge 0\)); see the scaling note below |
+| =zero_temperature_tol= | =Option<f64>= | =None= | Dimensionless tolerance for \(\lvert I_T - \Delta E_0\rvert / \max(E_{\mathrm{unit}}, \lvert\Delta E_0\rvert)\), where both energies use engine energy units and \(E_{\mathrm{unit}}\) is one such unit. =None= uses \(2 (\pi^2 / 12) / (\text{planes} - 1)^2\) (\(\approx 0.0257\) at 9 planes). =Some(value)= uses that finite value (\(\ge 0\)) at every plane count, including the 9-plane value; see the scaling note below |
 | =seed= | =u64= | =1= | Base of the per-plane seeds =seed + 4099 * plane + 1000003 * round= (wrapping) |
 | =stats= | =StatsConfig= | =StatsConfig::default()= | Batch-means settings for the per-plane force series |
 
 Here \(I_T\) is the trapezoid integral of \(dV/ds\) over the plane anchors and \(\Delta E_0\) is the endpoint energy change. The ratio is relative to \(\lvert\Delta E_0\rvert\) at or above one engine energy unit and bounds the absolute discrepancy below that scale.
 
-The value stored by =PafiConfig::default()= is the 9-plane value shown in the table. While the field retains that value, the effective tolerance is \(2 (\pi^2 / 12) / (\text{planes} - 1)^2\), so changing =planes= scales the tolerance with the trapezoid error. An explicitly different value is used unchanged. The scaling follows a quarter-turn circular arc through a harmonic well. A path that turns further can need a larger explicit tolerance.
+=None=, the value stored by =PafiConfig::default()=, sets the effective tolerance to \(2 (\pi^2 / 12) / (\text{planes} - 1)^2\). At the default 9 planes that is the \(\approx 0.0257\) in the table, and changing =planes= scales the tolerance with the trapezoid error. =Some(value)= uses =value= at every plane count, including a value equal to the 9-plane tolerance. The scaling follows a quarter-turn circular arc through a harmonic well. A path that turns further can need a larger explicit tolerance.
 
 ** =pafi::FreeEnergyProfile=
 

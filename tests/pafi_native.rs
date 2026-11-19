@@ -437,8 +437,10 @@ const RATE_GAMMA: f64 = 1.3;
 #[test]
 fn normalized_pafi_rate_matches_analytic_profile() {
     let profile = widening_profile(vec![1.0, 4.0], 1.3, 7, RATE_SAMPLES);
-    let rate = profile.normalized_rate;
-    let rate_error = profile.normalized_rate_error;
+    let rate = profile.normalized_rate.expect("representable rate");
+    let rate_error = profile
+        .normalized_rate_error
+        .expect("representable rate error");
     assert_dividing_plane("rate dividing plane", profile.dividing_index, PLANES - 1);
 
     // Reactant Hessian at x = -1: V_xx = 8 along the unit normal, mass 1.
@@ -451,7 +453,10 @@ fn normalized_pafi_rate_matches_analytic_profile() {
     let omega_0 = 8.0_f64.sqrt();
     assert!((profile.reactant_frequency - omega_0).abs() <= 1.0e-6 * omega_0);
     let gaussian = (TAU * THERMAL).sqrt() / profile.reactant_frequency;
-    assert!((profile.reactant_partition - gaussian).abs() <= 1.0e-6 * gaussian);
+    assert!(
+        (profile.reactant_partition.expect("representable partition") - gaussian).abs()
+            <= 1.0e-6 * gaussian
+    );
     assert!((profile.reactant_log_partition - gaussian.ln()).abs() <= 1.0e-6 * gaussian.ln().abs());
     let closed_rate = profile.reactant_frequency / TAU * (-profile.barrier / THERMAL).exp();
     assert!((rate - closed_rate).abs() <= 1.0e-12 * closed_rate);
