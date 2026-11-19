@@ -215,9 +215,10 @@ const QUARTER_ARC_TRAPEZOID_COEFFICIENT: f64 = PI * PI / 12.0;
 /// quarter-arc trapezoid error at [`DEFAULT_PLANES`].
 ///
 /// The leading relative trapezoid error for `N` planes is
-/// `pi^2 / (12 (N - 1)^2)`. At `N = 9` this is about `1.29%`, while the
-/// historical default tolerance is about `2.57%`. The excess `1.29%` is one
-/// additional leading term, so the safety margin is one leading term.
+/// `pi^2 / (12 (N - 1)^2)`, or about `1.29%` at `N = 9`, which exceeded the
+/// previous `0.01` (`1%`) default tolerance on `develop`. Adding one leading
+/// term sets the safety margin to `1.0` and gives the `9`-plane default of
+/// `2 * (pi^2 / 12) / 8^2`, about `2.57%`.
 const ZERO_TEMPERATURE_SAFETY_MARGIN: f64 = 1.0;
 
 const fn default_zero_temperature_tol(planes: usize) -> f64 {
