@@ -299,6 +299,7 @@ fn main() -> Result<(), rgflux::FluxError> {
         .with_steps(120)
         .with_time_step(0.05)
         .with_antithetic(true)
+        .with_commit_checkpoints(64)
         .with_seed(99);
     let bc = shoot_bennett_chandler(
         &mut engine,
@@ -312,6 +313,8 @@ fn main() -> Result<(), rgflux::FluxError> {
     Ok(())
 }
 #+end_src
+
+Here =with_commit_checkpoints(64)= sets =KappaConfig::commit_checkpoints= on =ShootingConfig::kappa= so that a half-trajectory ends once 64 consecutive steps (\(64 \times 0.05 = 3.2 > 1 / \lambda_+ \approx 1.65\)) agree on a committed side and copies that side into the remaining checkpoints of \(\kappa(t)\). Passing =with_commit_checkpoints(0)= disables early commitment stopping and integrates every half to =steps=.
 
 * Wrap an =rgmin= objective with =EindirSurface=
 

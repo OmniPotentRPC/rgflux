@@ -6,10 +6,13 @@ use ndarray::{Array1, Array2, ArrayView1};
 use proptest::prelude::*;
 use rgflux::FluxError;
 use rgflux::engine::native::{NativeConfig, NativeEngine};
-use rgflux::engine::{DynamicsEngine, HyperplaneConstraint, ThermostatConfig};
+use rgflux::engine::{
+    DynamicsEngine, HyperplaneConstraint, StepReport, SurfaceVelocityPolicy, ThermostatConfig,
+};
 use rgflux::kappa::bennett_chandler::{
-    BennettChandlerConfig, ReactiveTrajectory, ShootingConfig, Side, estimate_bennett_chandler,
-    shoot_bennett_chandler,
+    BennettChandlerConfig, DEFAULT_COMMIT_CHECKPOINTS, KappaConfig, ReactiveTrajectory,
+    ShootingConfig, Side, estimate_bennett_chandler, shoot_bennett_chandler,
+    shoot_reactive_trajectories,
 };
 use rgflux::kappa::kramers_transmission_coefficient;
 use rgflux::stats::StatsConfig;
@@ -295,32 +298,38 @@ fn double_well_2d_native_shooting_matches_high_friction_kramers_within_se() {
 
     // 2. Shoot antithetic reactive-flux trajectories through `shoot_bennett_chandler`
     // (total flight time 300 * 0.05 = 15.0 >> 1 / lambda_+ ~ 1.65; plateau window [7.5, 15.0]).
-    let shoot_cfg = ShootingConfig::default()
-        .with_steps(300)
-        .with_time_step(0.05)
-        .with_antithetic(true)
-        .with_seed(918273);
+    // At gamma = 6.0 and dt = 0.05, the barrier lingering time 1 / lambda_+ ~ 1.65 is 33 steps,
+    // so both unconstrained shooting (commit_checkpoints = 0) and a commitment window that
+    // outlasts the barrier lingering time (commit_checkpoints = 64, t = 3.2) reproduce Kramers.
+    for commit in [0_usize, 64] {
+        let shoot_cfg = ShootingConfig::default()
+            .with_steps(300)
+            .with_time_step(0.05)
+            .with_antithetic(true)
+            .with_seed(918273)
+            .with_commit_checkpoints(commit);
 
-    let est = shoot_bennett_chandler(
-        &mut engine,
-        &dividing_surface,
-        surface_configs.view(),
-        &shoot_cfg,
-    )
-    .expect("kramers reactive-flux plateau");
+        let est = shoot_bennett_chandler(
+            &mut engine,
+            &dividing_surface,
+            surface_configs.view(),
+            &shoot_cfg,
+        )
+        .expect("kramers reactive-flux plateau");
 
-    // Confirm `shoot_bennett_chandler` restored the engine's hyperplane constraint.
-    assert!(engine.constraint().is_some());
-    assert_eq!(est.positive_flux_count, n_configs);
-    assert!(est.standard_error > 0.0 && est.standard_error < 0.05);
-    assert!(
-        (est.plateau - kramers_exact).abs() <= KRAMERS_SIGMA_BOUND * est.standard_error,
-        "estimated kappa = {:.5} +/- {:.5} differs from Kramers {:.5} by {:.2} SE",
-        est.plateau,
-        est.standard_error,
-        kramers_exact,
-        (est.plateau - kramers_exact).abs() / est.standard_error
-    );
+        // Confirm `shoot_bennett_chandler` restored the engine's hyperplane constraint.
+        assert!(engine.constraint().is_some());
+        assert_eq!(est.positive_flux_count, n_configs);
+        assert!(est.standard_error > 0.0 && est.standard_error < 0.05);
+        assert!(
+            (est.plateau - kramers_exact).abs() <= KRAMERS_SIGMA_BOUND * est.standard_error,
+            "commit = {commit}: estimated kappa = {:.5} +/- {:.5} differs from Kramers {:.5} by {:.2} SE",
+            est.plateau,
+            est.standard_error,
+            kramers_exact,
+            (est.plateau - kramers_exact).abs() / est.standard_error
+        );
+    }
 }
 
 #[test]
@@ -336,14 +345,25 @@ fn double_well_1d_late_return_stays_at_committed_kappa() {
     impl rgsaddle::PointSurface for AsymmetricDoubleWell1D {
         fn eval(&self, r: ArrayView1<f64>) -> Result<(f64, Array1<f64>), rgsaddle::SaddleError> {
             let x = r[0];
-            let (c4, c2) = if x >= 0.0 { (16.0, 8.0) } else { (0.0001, 0.01) };
+            let (c4, c2) = if x >= 0.0 {
+                (16.0, 8.0)
+            } else {
+                (0.0001, 0.01)
+            };
             let energy = c4 * x.powi(4) - c2 * x * x;
             let gx = 4.0 * c4 * x.powi(3) - 2.0 * c2 * x;
             Ok((energy, Array1::from_vec(vec![gx])))
         }
     }
 
-    assert_eq!(rgflux::kappa::KappaConfig::default().commit_checkpoints, 4);
+    assert_eq!(
+        KappaConfig::default().commit_checkpoints,
+        DEFAULT_COMMIT_CHECKPOINTS
+    );
+    assert_eq!(
+        ShootingConfig::default().kappa.commit_checkpoints,
+        DEFAULT_COMMIT_CHECKPOINTS
+    );
 
     let plane = HyperplaneConstraint::new(Array1::from_vec(vec![1.0]), 0.0).expect("x = 0");
     let mut engine = NativeEngine::new(
@@ -359,18 +379,39 @@ fn double_well_1d_late_return_stays_at_committed_kappa() {
     )
     .expect("1d engine");
     let starts = Array2::zeros((8, 1));
-    let shoot_cfg = ShootingConfig::default()
+    let base_cfg = ShootingConfig::default()
         .with_steps(280)
         .with_time_step(0.02)
         .with_antithetic(true)
         .with_seed(23);
 
-    let est = shoot_bennett_chandler(&mut engine, &plane, starts.view(), &shoot_cfg)
-        .expect("1d committed estimate");
-    assert_abs_diff_eq!(est.plateau, 1.0, epsilon = ALGEBRAIC_TOL);
-    for &kt in &est.kappa_t {
-        assert_abs_diff_eq!(kt, 1.0, epsilon = ALGEBRAIC_TOL);
+    for cfg in [
+        base_cfg.clone(),
+        base_cfg.clone().with_commit_checkpoints(1),
+        base_cfg.clone().with_commit_checkpoints(8),
+        base_cfg
+            .clone()
+            .with_kappa(KappaConfig::default().with_commit_checkpoints(16)),
+    ] {
+        let est = shoot_bennett_chandler(&mut engine, &plane, starts.view(), &cfg)
+            .expect("1d committed estimate");
+        assert_abs_diff_eq!(est.plateau, 1.0, epsilon = ALGEBRAIC_TOL);
+        assert_eq!(est.standard_error, 0.0);
+        for &kt in &est.kappa_t {
+            assert_abs_diff_eq!(kt, 1.0, epsilon = ALGEBRAIC_TOL);
+        }
     }
+
+    // With commit_checkpoints = 0, every half runs to step 280 and records the late return.
+    let uncommitted = shoot_bennett_chandler(
+        &mut engine,
+        &plane,
+        starts.view(),
+        &base_cfg.with_commit_checkpoints(0),
+    )
+    .expect("1d uncommitted estimate");
+    assert_abs_diff_eq!(uncommitted.kappa_t[0], 1.0, epsilon = ALGEBRAIC_TOL);
+    assert_abs_diff_eq!(uncommitted.plateau, 0.0, epsilon = ALGEBRAIC_TOL);
 }
 
 #[test]
@@ -380,7 +421,11 @@ fn double_well_2d_late_return_stays_at_committed_kappa() {
     impl rgsaddle::PointSurface for AsymmetricDoubleWell2D {
         fn eval(&self, r: ArrayView1<f64>) -> Result<(f64, Array1<f64>), rgsaddle::SaddleError> {
             let (x, y) = (r[0], r[1]);
-            let (c4, c2) = if x >= 0.0 { (16.0, 8.0) } else { (0.0001, 0.01) };
+            let (c4, c2) = if x >= 0.0 {
+                (16.0, 8.0)
+            } else {
+                (0.0001, 0.01)
+            };
             let energy = c4 * x.powi(4) - c2 * x * x + y * y;
             let gx = 4.0 * c4 * x.powi(3) - 2.0 * c2 * x;
             let gy = 2.0 * y;
@@ -388,7 +433,10 @@ fn double_well_2d_late_return_stays_at_committed_kappa() {
         }
     }
 
-    assert_eq!(rgflux::kappa::KappaConfig::default().commit_checkpoints, 4);
+    assert_eq!(
+        KappaConfig::default().commit_checkpoints,
+        DEFAULT_COMMIT_CHECKPOINTS
+    );
 
     let plane =
         HyperplaneConstraint::new(Array1::from_vec(vec![1.0, 0.0]), 0.0).expect("x = 0 plane");
@@ -405,17 +453,284 @@ fn double_well_2d_late_return_stays_at_committed_kappa() {
     )
     .expect("2d engine");
     let starts = Array2::zeros((8, 2));
-    let shoot_cfg = ShootingConfig::default()
+    let base_cfg = ShootingConfig::default()
         .with_steps(280)
         .with_time_step(0.02)
         .with_antithetic(true)
         .with_seed(23);
 
-    let est = shoot_bennett_chandler(&mut engine, &plane, starts.view(), &shoot_cfg)
-        .expect("2d committed estimate");
-    assert_abs_diff_eq!(est.plateau, 1.0, epsilon = ALGEBRAIC_TOL);
-    for &kt in &est.kappa_t {
-        assert_abs_diff_eq!(kt, 1.0, epsilon = ALGEBRAIC_TOL);
+    for cfg in [
+        base_cfg.clone(),
+        base_cfg.clone().with_commit_checkpoints(12),
+        base_cfg
+            .clone()
+            .with_kappa(KappaConfig::default().with_commit_checkpoints(24)),
+    ] {
+        let est = shoot_bennett_chandler(&mut engine, &plane, starts.view(), &cfg)
+            .expect("2d committed estimate");
+        assert_abs_diff_eq!(est.plateau, 1.0, epsilon = ALGEBRAIC_TOL);
+        assert_eq!(est.standard_error, 0.0);
+        for &kt in &est.kappa_t {
+            assert_abs_diff_eq!(kt, 1.0, epsilon = ALGEBRAIC_TOL);
+        }
+    }
+
+    let uncommitted = shoot_bennett_chandler(
+        &mut engine,
+        &plane,
+        starts.view(),
+        &base_cfg.with_commit_checkpoints(0),
+    )
+    .expect("2d uncommitted estimate");
+    assert_abs_diff_eq!(uncommitted.kappa_t[0], 1.0, epsilon = ALGEBRAIC_TOL);
+    assert_abs_diff_eq!(uncommitted.plateau, 0.0, epsilon = ALGEBRAIC_TOL);
+}
+
+struct ScriptedCommitEngine {
+    positions: Array1<f64>,
+    velocities: Array1<f64>,
+    masses: Array1<f64>,
+    thermostat: ThermostatConfig,
+    constraint: Option<HyperplaneConstraint>,
+    forward_trace: Vec<f64>,
+    backward_trace: Vec<f64>,
+    step_index: usize,
+    total_steps: usize,
+}
+
+impl ScriptedCommitEngine {
+    fn new(forward_trace: Vec<f64>, backward_trace: Vec<f64>) -> Self {
+        Self {
+            positions: Array1::zeros(1),
+            velocities: Array1::zeros(1),
+            masses: Array1::from_vec(vec![1.0]),
+            thermostat: ThermostatConfig::default(),
+            constraint: None,
+            forward_trace,
+            backward_trace,
+            step_index: 0,
+            total_steps: 0,
+        }
+    }
+}
+
+impl DynamicsEngine for ScriptedCommitEngine {
+    fn dof(&self) -> usize {
+        1
+    }
+
+    fn masses(&self) -> ArrayView1<'_, f64> {
+        self.masses.view()
+    }
+
+    fn positions(&self) -> ArrayView1<'_, f64> {
+        self.positions.view()
+    }
+
+    fn set_positions(&mut self, positions: ArrayView1<'_, f64>) -> Result<(), FluxError> {
+        self.positions.assign(&positions);
+        self.step_index = 0;
+        Ok(())
+    }
+
+    fn velocities(&self) -> ArrayView1<'_, f64> {
+        self.velocities.view()
+    }
+
+    fn set_velocities(&mut self, velocities: ArrayView1<'_, f64>) -> Result<(), FluxError> {
+        self.velocities.assign(&velocities);
+        self.step_index = 0;
+        Ok(())
+    }
+
+    fn cell(&self) -> Option<&[f64; 9]> {
+        None
+    }
+
+    fn set_cell(&mut self, _cell: Option<[f64; 9]>) -> Result<(), FluxError> {
+        Ok(())
+    }
+
+    fn thermostat(&self) -> &ThermostatConfig {
+        &self.thermostat
+    }
+
+    fn set_thermostat(&mut self, thermostat: ThermostatConfig) -> Result<(), FluxError> {
+        self.thermostat = thermostat;
+        Ok(())
+    }
+
+    fn constraint(&self) -> Option<&HyperplaneConstraint> {
+        self.constraint.as_ref()
+    }
+
+    fn set_constraint(
+        &mut self,
+        constraint: Option<HyperplaneConstraint>,
+    ) -> Result<(), FluxError> {
+        self.constraint = constraint;
+        Ok(())
+    }
+
+    fn energy_and_forces(&mut self) -> Result<(f64, Array1<f64>), FluxError> {
+        Ok((0.0, Array1::zeros(1)))
+    }
+
+    fn step(&mut self, _dt: f64) -> Result<StepReport, FluxError> {
+        let trace = if self.velocities[0] >= 0.0 {
+            &self.forward_trace
+        } else {
+            &self.backward_trace
+        };
+        self.positions[0] = trace[self.step_index];
+        self.step_index += 1;
+        self.total_steps += 1;
+        Ok(StepReport::new(
+            0.0,
+            0.5 * self.velocities[0] * self.velocities[0],
+            None,
+        ))
+    }
+
+    fn reseed(&mut self, _seed: u64) -> Result<(), FluxError> {
+        Ok(())
+    }
+
+    fn shoot_velocities(&mut self, _seed: u64) -> Result<(), FluxError> {
+        self.velocities[0] = 1.0;
+        self.step_index = 0;
+        Ok(())
+    }
+
+    fn reflect_velocity(&mut self, _normal: ArrayView1<'_, f64>) -> Result<f64, FluxError> {
+        self.velocities[0] = -self.velocities[0];
+        Ok(self.velocities[0])
+    }
+
+    fn apply_dividing_surface(
+        &mut self,
+        _normal: ArrayView1<'_, f64>,
+        _policy: SurfaceVelocityPolicy,
+    ) -> Result<f64, FluxError> {
+        Ok(self.velocities[0])
+    }
+}
+
+#[test]
+fn shooter_half_commitment_stops_early_and_resets_on_surface_or_transient_flip() {
+    let plane = HyperplaneConstraint::new(Array1::from_vec(vec![1.0]), 0.0).expect("x = 0");
+    let starts = Array2::zeros((1, 1));
+
+    // Forward half: 2 steps Product (< 3), 1 step on dividing plane (s == 0.0 resets run),
+    // 2 steps Product (< 3), then 3 consecutive steps Reactant (commits at index 7, step 8),
+    // followed by a late return to Product that must never be stepped or recorded.
+    let forward_trace = vec![
+        0.2, 0.3, 0.0, 0.4, 0.5, -0.2, -0.3, -0.4, 0.9, 0.9, 0.9, 0.9,
+    ];
+    // Backward half: 3 consecutive steps Product (commits at index 2, step 3),
+    // followed by a late return to Reactant that must never be stepped or recorded.
+    let backward_trace = vec![
+        0.1, 0.2, 0.3, -0.8, -0.8, -0.8, -0.8, -0.8, -0.8, -0.8, -0.8, -0.8,
+    ];
+
+    let mut engine = ScriptedCommitEngine::new(forward_trace, backward_trace);
+    let cfg = ShootingConfig::default()
+        .with_steps(12)
+        .with_time_step(0.01)
+        .with_antithetic(true)
+        .with_commit_checkpoints(3);
+
+    let trajs =
+        shoot_reactive_trajectories(&mut engine, &plane, starts.view(), &cfg).expect("scripted");
+    assert_eq!(trajs.len(), 2);
+    // Forward half stopped after 8 steps; backward half stopped after 3 steps (8 + 3 = 11 < 24).
+    assert_eq!(engine.total_steps, 11);
+    assert_eq!(
+        trajs[0].sides,
+        vec![
+            Side::Product,
+            Side::Product,
+            Side::Reactant, // s == 0.0 has indicator 0 (Reactant) and committed_from_signed_distance == None
+            Side::Product,
+            Side::Product,
+            Side::Reactant,
+            Side::Reactant,
+            Side::Reactant,
+            Side::Reactant,
+            Side::Reactant,
+            Side::Reactant,
+            Side::Reactant,
+        ]
+    );
+    assert_eq!(trajs[1].sides, vec![Side::Product; 12]);
+}
+
+#[test]
+fn validate_commit_checkpoints_and_config_setters() {
+    let kcfg = KappaConfig::default()
+        .with_commit_checkpoints(7)
+        .with_quench_force_tol(1e-4)
+        .with_quench_max_steps(500);
+    assert_eq!(kcfg.commit_checkpoints, 7);
+    assert_eq!(kcfg.quench_force_tol, 1e-4);
+    assert_eq!(kcfg.quench_max_steps, 500);
+
+    let scfg = ShootingConfig::default()
+        .with_steps(16)
+        .with_kappa(kcfg.clone());
+    assert_eq!(scfg.kappa, kcfg);
+    let scfg2 = scfg.with_commit_checkpoints(9);
+    assert_eq!(scfg2.kappa.commit_checkpoints, 9);
+
+    assert_eq!(
+        Side::committed_from_signed_distance(-1e-12),
+        Some(Side::Reactant)
+    );
+    assert_eq!(Side::committed_from_signed_distance(0.0), None);
+    assert_eq!(Side::committed_from_signed_distance(-0.0), None);
+    assert_eq!(
+        Side::committed_from_signed_distance(1e-12),
+        Some(Side::Product)
+    );
+
+    let plane = HyperplaneConstraint::new(Array1::from_vec(vec![1.0]), 0.0).expect("x = 0");
+    let starts = Array2::zeros((1, 1));
+    let mut engine = ScriptedCommitEngine::new(vec![0.5; 16], vec![-0.5; 16]);
+    engine
+        .set_constraint(Some(plane.clone()))
+        .expect("set constraint");
+
+    for bad_commit in [9_usize, 17, usize::MAX] {
+        let bad_cfg = ShootingConfig::default()
+            .with_steps(8)
+            .with_commit_checkpoints(bad_commit);
+        assert_eq!(
+            shoot_reactive_trajectories(&mut engine, &plane, starts.view(), &bad_cfg),
+            Err(FluxError::InvalidConfig(
+                "KappaConfig::commit_checkpoints must not exceed ShootingConfig::steps"
+            ))
+        );
+        assert_eq!(
+            shoot_bennett_chandler(&mut engine, &plane, starts.view(), &bad_cfg),
+            Err(FluxError::InvalidConfig(
+                "KappaConfig::commit_checkpoints must not exceed ShootingConfig::steps"
+            ))
+        );
+        // Validation rejects before touching the engine's constraint or stepping.
+        assert_eq!(engine.total_steps, 0);
+        assert!(engine.constraint().is_some());
+    }
+
+    // Boundary values 0, 1, and steps are accepted.
+    for valid_commit in [0_usize, 1, 8] {
+        let ok_cfg = ShootingConfig::default()
+            .with_steps(8)
+            .with_commit_checkpoints(valid_commit);
+        let trajs = shoot_reactive_trajectories(&mut engine, &plane, starts.view(), &ok_cfg)
+            .expect("valid commit_checkpoints");
+        assert_eq!(trajs.len(), 2);
+        assert_eq!(trajs[0].sides.len(), 8);
+        assert!(engine.constraint().is_some());
     }
 }
 
@@ -471,5 +786,149 @@ proptest! {
         reversed.reverse();
         let est_rev = estimate_bennett_chandler(&reversed, &cfg).expect("est_rev");
         prop_assert!((est.plateau - est_rev.plateau).abs() <= ALGEBRAIC_TOL);
+    }
+
+    #[test]
+    fn zero_commit_checkpoints_reproduces_fixed_step_shooting_bit_for_bit(
+        steps in 8_usize..36,
+        time_step in 0.005_f64..0.05_f64,
+        gamma in 0.0_f64..4.0_f64,
+        temperature in 0.05_f64..0.5_f64,
+        antithetic in any::<bool>(),
+        seed in any::<u64>(),
+        y_offsets in prop::collection::vec(-1.0_f64..1.0_f64, 4..8),
+    ) {
+        struct DoubleWell2D;
+
+        impl rgsaddle::PointSurface for DoubleWell2D {
+            fn eval(&self, r: ArrayView1<f64>) -> Result<(f64, Array1<f64>), rgsaddle::SaddleError> {
+                let (x, y) = (r[0], r[1]);
+                let dx = x * x - 1.0;
+                Ok((dx * dx + y * y, Array1::from_vec(vec![4.0 * x * dx, 2.0 * y])))
+            }
+        }
+
+        let plane = HyperplaneConstraint::new(Array1::from_vec(vec![1.0, 0.0]), 0.0).expect("plane");
+        let native_cfg = NativeConfig::default()
+            .with_masses(Array1::from_vec(vec![1.0, 1.0]))
+            .with_thermostat(
+                ThermostatConfig::default()
+                    .with_gamma(gamma)
+                    .with_temperature(temperature),
+            )
+            .with_constraint(plane.clone())
+            .with_seed(seed);
+
+        let mut engine_zero = NativeEngine::new(DoubleWell2D, native_cfg.clone()).expect("engine_zero");
+        let mut engine_old = NativeEngine::new(DoubleWell2D, native_cfg).expect("engine_old");
+
+        let mut initial_positions = Array2::zeros((y_offsets.len(), 2));
+        for (idx, &y) in y_offsets.iter().enumerate() {
+            initial_positions[(idx, 0)] = 0.0;
+            initial_positions[(idx, 1)] = y;
+        }
+
+        let estimator_cfg = BennettChandlerConfig::default()
+            .with_stats(StatsConfig::default().with_max_z_score(f64::INFINITY));
+        let shoot_cfg = ShootingConfig::default()
+            .with_steps(steps)
+            .with_time_step(time_step)
+            .with_antithetic(antithetic)
+            .with_seed(seed)
+            .with_commit_checkpoints(0)
+            .with_estimator(estimator_cfg.clone());
+
+        let trajs_zero = shoot_reactive_trajectories(
+            &mut engine_zero,
+            &plane,
+            initial_positions.view(),
+            &shoot_cfg,
+        )
+        .expect("trajs_zero");
+
+        // Reference fixed-step loop matching the pre-commit_checkpoints implementation.
+        let saved_constraint = engine_old.constraint().cloned();
+        engine_old.set_constraint(None).expect("clear constraint");
+        let mut trajs_old = Vec::new();
+        for (idx, x0) in initial_positions.rows().into_iter().enumerate() {
+            let shot_seed = seed.wrapping_add((idx as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15));
+            engine_old.set_positions(x0).expect("set_positions");
+            engine_old.shoot_velocities(shot_seed).expect("shoot_velocities");
+            let v_plus = engine_old.velocities().to_owned();
+            let v0_normal = plane.normal.dot(&v_plus);
+            let mut sides_plus = Vec::with_capacity(steps);
+            for _ in 0..steps {
+                engine_old.step(time_step).expect("step");
+                let s = plane.signed_distance(engine_old.positions()).expect("signed_distance");
+                sides_plus.push(Side::from_signed_distance(s));
+            }
+            trajs_old.push(ReactiveTrajectory::new(v0_normal, sides_plus).expect("traj_plus"));
+
+            if antithetic {
+                let v_minus = v_plus.mapv(|c| -c);
+                engine_old.set_positions(x0).expect("set_positions");
+                engine_old
+                    .shoot_velocities(shot_seed ^ 0xBF58_476D_1CE4_E5B9)
+                    .expect("shoot_velocities");
+                engine_old.set_velocities(v_minus.view()).expect("set_velocities");
+                let mut sides_minus = Vec::with_capacity(steps);
+                for _ in 0..steps {
+                    engine_old.step(time_step).expect("step");
+                    let s = plane.signed_distance(engine_old.positions()).expect("signed_distance");
+                    sides_minus.push(Side::from_signed_distance(s));
+                }
+                trajs_old.push(ReactiveTrajectory::new(-v0_normal, sides_minus).expect("traj_minus"));
+            }
+        }
+        engine_old.set_constraint(saved_constraint).expect("restore constraint");
+
+        prop_assert_eq!(trajs_zero.len(), trajs_old.len());
+        for (tz, to) in trajs_zero.iter().zip(&trajs_old) {
+            prop_assert_eq!(
+                tz.initial_normal_velocity.to_bits(),
+                to.initial_normal_velocity.to_bits()
+            );
+            prop_assert_eq!(&tz.sides, &to.sides);
+        }
+        for (pz, po) in engine_zero.positions().iter().zip(engine_old.positions().iter()) {
+            prop_assert_eq!(pz.to_bits(), po.to_bits());
+        }
+        for (vz, vo) in engine_zero.velocities().iter().zip(engine_old.velocities().iter()) {
+            prop_assert_eq!(vz.to_bits(), vo.to_bits());
+        }
+
+        let est_zero = estimate_bennett_chandler(&trajs_zero, &estimator_cfg);
+        let est_old = estimate_bennett_chandler(&trajs_old, &estimator_cfg);
+        match (est_zero, est_old) {
+            (Ok(ez), Ok(eo)) => {
+                prop_assert_eq!(ez.kappa_t.len(), eo.kappa_t.len());
+                for (kz, ko) in ez.kappa_t.iter().zip(&eo.kappa_t) {
+                    prop_assert_eq!(kz.to_bits(), ko.to_bits());
+                }
+                prop_assert_eq!(ez.plateau.to_bits(), eo.plateau.to_bits());
+                prop_assert_eq!(ez.standard_error.to_bits(), eo.standard_error.to_bits());
+                prop_assert_eq!(ez.n_eff.to_bits(), eo.n_eff.to_bits());
+                prop_assert_eq!(ez.plateau_window, eo.plateau_window);
+                prop_assert_eq!(ez.positive_flux_count, eo.positive_flux_count);
+                prop_assert_eq!(
+                    ez.stationarity.z_score.to_bits(),
+                    eo.stationarity.z_score.to_bits()
+                );
+                prop_assert_eq!(
+                    ez.stationarity.drift_slope.to_bits(),
+                    eo.stationarity.drift_slope.to_bits()
+                );
+                prop_assert_eq!(
+                    ez.stationarity.first_mean.to_bits(),
+                    eo.stationarity.first_mean.to_bits()
+                );
+                prop_assert_eq!(
+                    ez.stationarity.second_mean.to_bits(),
+                    eo.stationarity.second_mean.to_bits()
+                );
+            }
+            (Err(ez), Err(eo)) => prop_assert_eq!(ez, eo),
+            (z, o) => prop_assert!(false, "mismatched estimate results: {z:?} vs {o:?}"),
+        }
     }
 }
