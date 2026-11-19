@@ -201,11 +201,11 @@ The value stored by =PafiConfig::default()= is the 9-plane value shown in the ta
 | =dividing_index= | =usize= | First plane with the highest sampled free energy. The interpolant maximum recorded in =dividing_arc= can lie on a different interval |
 | =dividing_arc= | =f64= | Arc length \(s^*\) of the global maximum of the Hermite interpolant |
 | =reactant_frequency= | =f64= | \(\omega_0 = ( \mathbf{n}^\top \mathbf{H}^{-1} \mathbf{n} )^{-1/2}\) from the mass-weighted Hessian at the first image, in inverse engine time |
-| =reactant_partition= | =f64= | \(Z_R = \sqrt{2\pi k_{\mathrm{B}}T} / \omega_0\), in units of \(s\) |
+| =reactant_partition= | =Option<f64>= | \(Z_R = \sqrt{2\pi k_{\mathrm{B}}T} / \omega_0\), in units of \(s\). =Some= when its exponential is finite and positive; otherwise =None= |
 | =reactant_log_partition= | =f64= | \(\ln Z_R = \tfrac{1}{2}\ln(2\pi k_{\mathrm{B}}T) - \ln \omega_0\) |
-| =normalized_rate= | =f64= | \(k = (\omega_0 / 2\pi) \exp(-\Delta F / k_{\mathrm{B}}T)\) in inverse engine time |
-| =normalized_log_rate= | =f64= | \(\ln k = \ln \omega_0 - \ln(2\pi) - \Delta F / k_{\mathrm{B}}T\), finite when the exponential in =normalized_rate= underflows |
-| =normalized_rate_error= | =f64= | Delta-method standard error \(k\,\sigma_{\Delta F} / k_{\mathrm{B}}T\). \(Z_R\) is a property of the reactant Hessian, so its sampling sensitivity is zero |
+| =normalized_rate= | =Option<f64>= | \(k = (\omega_0 / 2\pi) \exp(-\Delta F / k_{\mathrm{B}}T)\) in inverse engine time. =Some= when its exponential is finite and positive; otherwise =None= |
+| =normalized_log_rate= | =f64= | \(\ln k = \ln \omega_0 - \ln(2\pi) - \Delta F / k_{\mathrm{B}}T\), including when the linear rate underflows |
+| =normalized_rate_error= | =Option<f64>= | Delta-method standard error \(k\,\sigma_{\Delta F} / k_{\mathrm{B}}T\). =None= only when its nonzero linear value overflows. \(Z_R\) is a property of the reactant Hessian, so its sampling sensitivity is zero |
 | =quadrature_residual= | =f64= | Largest absolute gap between the Hermite integral of \(dV/ds\) and the endpoint energy change. The acceptance check remains the trapezoid comparison in =PafiConfig::zero_temperature_tol= |
 
 ** =network::NetworkConfig= and =RateTableConfig=
