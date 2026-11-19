@@ -1,0 +1,5 @@
+* Added selectable Hermite, Gauss--Legendre, endpoint-weighted Gauss--Jacobi,
+  nested Clenshaw--Curtis, and noisy Bayesian PAFI integration rules.  The
+  Clenshaw--Curtis rule reports its nested coarse/fine difference, while the
+  Bayesian rule reports posterior integral variance and places planes by
+  integrated-variance reduction.

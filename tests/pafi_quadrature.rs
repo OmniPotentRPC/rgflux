@@ -64,6 +64,7 @@ fn selectable_rules_change_plane_placement_and_return_finite_profiles() {
     );
     assert_ne!(bayesian.arc_lengths, hermite.arc_lengths);
     for candidate in [&legendre, &jacobi, &clenshaw_curtis, &bayesian] {
+        assert_eq!(candidate.reactant_frequency, hermite.reactant_frequency);
         assert!(candidate.barrier.is_finite());
         assert!(candidate.barrier_error.is_finite());
         assert!(candidate.normalized_rate.is_finite());

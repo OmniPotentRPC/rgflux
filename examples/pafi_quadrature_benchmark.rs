@@ -212,16 +212,14 @@ mod benchmark {
         target_calls: usize,
         seed: u64,
     ) -> Observation {
-        let burn_in = 8;
-        let sample_steps = (target_calls / (2 * planes))
-            .saturating_sub(burn_in)
-            .max(16);
+        let burn_in = 500;
+        let sample_steps = (target_calls / planes).saturating_sub(burn_in).max(16);
         let config = PafiConfig::default()
             .with_planes(planes)
             .with_integration(integration)
             .with_burn_in_steps(burn_in)
             .with_sample_steps(sample_steps)
-            .with_time_step(0.01)
+            .with_time_step(0.02)
             .with_zero_temperature_tol(f64::MAX)
             .with_stats(StatsConfig::default().with_min_batches(2))
             .with_seed(seed);
@@ -235,7 +233,7 @@ mod benchmark {
         }
     }
 
-    fn summarize(values: &[f64], exact: f64) -> (f64, f64, f64) {
+    fn summarize(values: &[f64], exact: f64) -> (f64, f64, Option<f64>) {
         let count = values.len() as f64;
         let mean = values.iter().sum::<f64>() / count;
         let variance = values
@@ -245,13 +243,8 @@ mod benchmark {
             / (count - 1.0);
         let standard_error = (variance / count).sqrt();
         let bias = mean - exact;
-        let statistic = if standard_error > 0.0 {
-            bias / standard_error
-        } else if bias == 0.0 {
-            0.0
-        } else {
-            bias.signum() * f64::MAX
-        };
+        let roundoff = f64::EPSILON.sqrt() * exact.abs().max(1.0);
+        let statistic = (standard_error > roundoff).then_some(bias / standard_error);
         (bias, standard_error, statistic)
     }
 
@@ -268,7 +261,7 @@ mod benchmark {
             ("clenshaw-curtis", PafiIntegration::ClenshawCurtis),
             ("bayesian", PafiIntegration::Bayesian),
         ];
-        let budgets = [(5, 2_048), (9, 4_096), (17, 8_192)];
+        let budgets = [(5, 16_384), (9, 32_768), (17, 65_536)];
         println!(
             "potential,kbt,rule,target_calls,mean_calls,df_bias,df_se,df_z,lnk_bias,lnk_se,lnk_z"
         );
@@ -307,8 +300,14 @@ mod benchmark {
                         let (barrier_bias, barrier_se, barrier_z) =
                             summarize(&barriers, exact_barrier);
                         let (rate_bias, rate_se, rate_z) = summarize(&log_rates, exact_log_rate);
+                        let barrier_z = barrier_z
+                            .map(|value| format!("{value:.6}"))
+                            .unwrap_or_else(|| "NA".to_owned());
+                        let rate_z = rate_z
+                            .map(|value| format!("{value:.6}"))
+                            .unwrap_or_else(|| "NA".to_owned());
                         println!(
-                            "{},{kbt},{rule_name},{target_calls},{calls:.0},{barrier_bias:.9e},{barrier_se:.9e},{barrier_z:.6},{rate_bias:.9e},{rate_se:.9e},{rate_z:.6}",
+                            "{},{kbt},{rule_name},{target_calls},{calls:.0},{barrier_bias:.9e},{barrier_se:.9e},{barrier_z},{rate_bias:.9e},{rate_se:.9e},{rate_z}",
                             potential.label()
                         );
                     }

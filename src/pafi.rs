@@ -62,6 +62,11 @@ pub enum PafiIntegration {
     /// Nested Clenshaw--Curtis planes, including both endpoints.
     ClenshawCurtis,
     /// Noisy Gaussian-process quadrature with active plane placement.
+    ///
+    /// This uses rgflux's small generic scalar-GP implementation. GPRidge's C
+    /// API drives atomistic energy/force surrogates and does not expose the
+    /// heteroscedastic one-dimensional observations or kernel integrals needed
+    /// here; the adapter can move upstream when that public contract exists.
     Bayesian,
 }
 
@@ -155,7 +160,8 @@ pub struct FreeEnergyProfile {
     /// Propagated standard error of [`Self::normalized_rate`] (the reactant
     /// Hessian is deterministic, so only `Delta F` contributes).
     pub normalized_rate_error: f64,
-    /// Posterior integral variance for Bayesian quadrature, otherwise zero.
+    /// Squared nested-rule difference for Clenshaw--Curtis, posterior integral
+    /// variance for Bayesian quadrature, otherwise zero.
     pub integration_variance: f64,
     /// Largest `|path-force integral - Delta E|` over the planes at zero
     /// temperature, evaluated with the same quadrature as [`Self::barrier`].
@@ -1120,7 +1126,7 @@ fn integrate_global_profile(input: GlobalProfileInput<'_>) -> Result<FreeEnergyP
         cumulative.push(weights);
         variances.push(variance);
     }
-    let (barrier_weights, integration_variance) = if integration == PafiIntegration::Bayesian {
+    let (barrier_weights, mut integration_variance) = if integration == PafiIntegration::Bayesian {
         bayesian_weights(arcs, gradient_errors, gradients, total_arc)?
     } else {
         let normalized = endpoint_weights.ok_or(FluxError::InvalidConfig(
@@ -1147,6 +1153,21 @@ fn integrate_global_profile(input: GlobalProfileInput<'_>) -> Result<FreeEnergyP
             .sqrt()
     };
     let free_energy: Vec<f64> = cumulative.iter().map(|weights| apply(weights)).collect();
+    let barrier = apply(&barrier_weights);
+    if integration == PafiIntegration::ClenshawCurtis && arcs.len() > 3 {
+        let coarse_rule = clenshaw_curtis_rule(arcs.len().div_ceil(2))?;
+        let coarse = coarse_rule
+            .endpoint_weights
+            .as_deref()
+            .ok_or(FluxError::InvalidConfig(
+                "coarse Clenshaw--Curtis endpoint weights are missing",
+            ))?
+            .iter()
+            .zip(gradients.iter().step_by(2))
+            .map(|(weight, gradient)| total_arc * weight * gradient)
+            .sum::<f64>();
+        integration_variance = (barrier - coarse).powi(2);
+    }
     let standard_error: Vec<f64> = cumulative
         .iter()
         .zip(&variances)
@@ -1158,11 +1179,10 @@ fn integrate_global_profile(input: GlobalProfileInput<'_>) -> Result<FreeEnergyP
             }
         })
         .collect();
-    let barrier = apply(&barrier_weights);
     let barrier_error = if integration == PafiIntegration::Bayesian {
         integration_variance.sqrt()
     } else {
-        propagate(&barrier_weights)
+        (propagate(&barrier_weights).powi(2) + integration_variance).sqrt()
     };
     if !barrier.is_finite() || !barrier_error.is_finite() {
         return Err(FluxError::NonFinite("PAFI global quadrature"));
@@ -1346,6 +1366,8 @@ pub fn pafi_profile<E: DynamicsEngine + ?Sized>(
         let total_arc = spline.end();
         let rule = plane_rule(config)?;
         let geometries = build_plane_geometries_at(path_images, masses.view(), &rule.fractions)?;
+        let endpoint_geometries =
+            build_plane_geometries_at(path_images, masses.view(), &[0.0, 1.0])?;
         let arcs: Vec<f64> = geometries.iter().map(|geometry| geometry.arc).collect();
 
         engine.set_constraint(None)?;
@@ -1400,7 +1422,7 @@ pub fn pafi_profile<E: DynamicsEngine + ?Sized>(
                 "PAFI zero-temperature path-force quadrature exceeds tolerance",
             ));
         }
-        let curvature = reactant_curvature(engine, &geometries[0])?;
+        let curvature = reactant_curvature(engine, &endpoint_geometries[0])?;
 
         let mut plane_samples = vec![Vec::new(); geometries.len()];
         let mut final_profile = None;
