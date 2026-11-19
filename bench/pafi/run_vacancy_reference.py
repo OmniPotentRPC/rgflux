@@ -2,15 +2,18 @@
 import argparse
 import json
 import pathlib
+import sys
 import time
 
-import numpy as np
-import pandas as pd
-from mpi4py import MPI
-from pafi import PAFIManager, PAFIParser
+
+SCRIPT_DIR = pathlib.Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from provenance import add_checkout_arguments, sources_from_args, write_run_metadata
 
 
-BOLTZMANN_EV_PER_KELVIN = 8.617333262e-5
+BOLTZMANN_EV_PER_KELVIN = 8.617333262 / 100000
 
 
 def arguments():
@@ -26,6 +29,7 @@ def arguments():
     parser.add_argument("--friction", type=float, required=True)
     parser.add_argument("--work-dir", type=pathlib.Path, required=True)
     parser.add_argument("--output", type=pathlib.Path, required=True)
+    add_checkout_arguments(parser)
     return parser.parse_args()
 
 
@@ -70,6 +74,17 @@ def integrate_profile(reaction_coordinate, gradients):
 def main():
     args = arguments()
     args.work_dir.mkdir(parents=True, exist_ok=False)
+    write_run_metadata(
+        args.work_dir / "metadata.json",
+        args.seed,
+        sys.argv,
+        sources_from_args(args),
+    )
+    import numpy as np
+    import pandas as pd
+    from mpi4py import MPI
+    from pafi import PAFIManager, PAFIParser
+
     pathway = json.loads(args.path.read_text())
     mass = 195.084
     image_paths = []

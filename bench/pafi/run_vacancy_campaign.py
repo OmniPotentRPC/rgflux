@@ -4,6 +4,21 @@ import itertools
 import json
 import pathlib
 import subprocess
+import sys
+
+
+SCRIPT_DIR = pathlib.Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from provenance import (
+    VACANCY_RAW,
+    add_source_arguments,
+    cpu_affinity,
+    extend_source_command,
+    merge_campaign_metadata,
+    sources_from_args,
+)
 
 
 def csv_numbers(value, conversion):
@@ -17,7 +32,8 @@ def arguments():
     parser.add_argument("--path", type=pathlib.Path, required=True)
     parser.add_argument("--python", type=pathlib.Path, required=True)
     parser.add_argument("--reference-script", type=pathlib.Path, required=True)
-    parser.add_argument("--raw-dir", type=pathlib.Path, required=True)
+    parser.add_argument("--raw-dir", type=pathlib.Path, default=VACANCY_RAW)
+    add_source_arguments(parser)
     parser.add_argument("--planes", required=True)
     parser.add_argument("--temperatures", required=True)
     parser.add_argument("--samples", type=int, required=True)
@@ -94,6 +110,7 @@ def native_run(args, cell, seed, core_set, output, log):
             )
             + "\n"
         )
+    return command
 
 
 def reference_run(args, cell, seed, core_set, output, log, work):
@@ -126,6 +143,7 @@ def reference_run(args, cell, seed, core_set, output, log, work):
         "--output",
         str(output),
     ]
+    extend_source_command(command, args)
     code = execute(command, log)
     if code != 0:
         output.write_text(
@@ -140,6 +158,7 @@ def reference_run(args, cell, seed, core_set, output, log, work):
             )
             + "\n"
         )
+    return command
 
 
 def main():
@@ -162,6 +181,8 @@ def main():
         thread_cells,
     )
     manifest = []
+    seeds = []
+    command_lines = [sys.argv]
     for cell_index, (planes, temperature, thread_cell) in enumerate(cells):
         threads, core_set = thread_cell
         cell = {
@@ -173,6 +194,7 @@ def main():
         }
         for replicate in range(args.replicates):
             seed = 2000003 + 1009 * cell_index + replicate
+            seeds.append(seed)
             order = ("rgflux", "lammps-pafi")
             if replicate % 2:
                 order = tuple(reversed(order))
@@ -185,10 +207,14 @@ def main():
                 log = logs / f"{stem}.log"
                 run_work = work / stem
                 if engine == "rgflux":
-                    native_run(args, cell, seed, core_set, output, log)
+                    command_lines.append(
+                        native_run(args, cell, seed, core_set, output, log)
+                    )
                 else:
-                    reference_run(
-                        args, cell, seed, core_set, output, log, run_work
+                    command_lines.append(
+                        reference_run(
+                            args, cell, seed, core_set, output, log, run_work
+                        )
                     )
                 manifest.append(
                     {
@@ -202,6 +228,14 @@ def main():
                 )
     (args.raw_dir / "manifest.json").write_text(
         json.dumps(manifest, indent=2, sort_keys=True) + "\n"
+    )
+    merge_campaign_metadata(
+        args.metadata,
+        "vacancy",
+        seeds,
+        command_lines,
+        sources_from_args(args),
+        cpu_affinity(args.one_core_set, args.high_threads, args.high_core_set),
     )
 
 
