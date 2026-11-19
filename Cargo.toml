@@ -56,6 +56,10 @@ unexpected_cfgs = { level = "warn", check-cfg = ["cfg(kani)"] }
 [build-dependencies]
 pkg-config = "0.3"
 
+[[example]]
+name = "cu_vacancy_adaptive"
+required-features = ["rgpot"]
+
 [profile.test]
 # The PAFI analytic tests integrate millions of Langevin steps. Optimized
 # code keeps them fast while debug assertions and overflow checks stay on.

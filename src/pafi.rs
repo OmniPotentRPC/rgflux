@@ -1581,67 +1581,57 @@ fn chebyshev_eval(coeffs: &[f64], x: f64) -> f64 {
     x_clamped * b_k1 - b_k2 + coeffs[0]
 }
 
-fn scalar_spline_1d(arc_lengths: &[f64], values: &[f64]) -> Result<NaturalSpline, FluxError> {
+fn hermite_slope_basis(arc_lengths: &[f64]) -> Vec<Vec<f64>> {
     let n = arc_lengths.len();
-    let mut second = vec![Array1::zeros(1); n];
-    if n == 3 {
-        let left = arc_lengths[1] - arc_lengths[0];
-        let right = arc_lengths[2] - arc_lengths[1];
-        let curvature = 2.0 * ((values[2] - values[1]) / right - (values[1] - values[0]) / left)
-            / (left + right);
-        for endpoint in &mut second {
-            endpoint[0] = curvature;
-        }
-    } else if n > 3 {
-        let interior = n - 2;
-        let mut lower = vec![0.0_f64; interior];
-        let mut diagonal = vec![0.0_f64; interior];
-        let mut upper = vec![0.0_f64; interior];
-        let mut rhs = vec![0.0_f64; interior];
-        for k in 0..interior {
-            let i = k + 1;
-            let left = arc_lengths[i] - arc_lengths[i - 1];
-            let right = arc_lengths[i + 1] - arc_lengths[i];
-            lower[k] = left;
-            diagonal[k] = 2.0 * (left + right);
-            upper[k] = right;
-            rhs[k] =
-                6.0 * ((values[i + 1] - values[i]) / right - (values[i] - values[i - 1]) / left);
-        }
-        let first = arc_lengths[1] - arc_lengths[0];
-        let second_width = arc_lengths[2] - arc_lengths[1];
-        diagonal[0] += first * (first + second_width) / second_width;
-        upper[0] -= first * first / second_width;
-
-        let penultimate = arc_lengths[n - 2] - arc_lengths[n - 3];
-        let last = arc_lengths[n - 1] - arc_lengths[n - 2];
-        lower[interior - 1] -= last * last / penultimate;
-        diagonal[interior - 1] += last * (penultimate + last) / penultimate;
-
-        for k in 1..interior {
-            let factor = lower[k] / diagonal[k - 1];
-            diagonal[k] -= factor * upper[k - 1];
-            rhs[k] -= factor * rhs[k - 1];
-        }
-        for k in (0..interior).rev() {
-            let i = k + 1;
-            let next = if k + 1 < interior {
-                upper[k] * second[i + 1][0]
-            } else {
-                0.0
-            };
-            second[i][0] = (rhs[k] - next) / diagonal[k];
-        }
-        second[0][0] =
-            ((first + second_width) * second[1][0] - first * second[2][0]) / second_width;
-        second[n - 1][0] =
-            ((penultimate + last) * second[n - 2][0] - last * second[n - 3][0]) / penultimate;
+    let mut slopes = vec![vec![0.0_f64; n]; n];
+    if n == 2 {
+        let h = arc_lengths[1] - arc_lengths[0];
+        slopes[0][0] = -1.0 / h;
+        slopes[0][1] = 1.0 / h;
+        slopes[1][0] = -1.0 / h;
+        slopes[1][1] = 1.0 / h;
+        return slopes;
     }
-    Ok(NaturalSpline {
-        knots: arc_lengths.to_vec(),
-        values: values.iter().map(|&v| Array1::from_vec(vec![v])).collect(),
-        second,
-    })
+    let h0 = arc_lengths[1] - arc_lengths[0];
+    let h1 = arc_lengths[2] - arc_lengths[1];
+    slopes[0][0] = -(2.0 * h0 + h1) / (h0 * (h0 + h1));
+    slopes[0][1] = (h0 + h1) / (h0 * h1);
+    slopes[0][2] = -h0 / (h1 * (h0 + h1));
+
+    for i in 1..(n - 1) {
+        let hl = arc_lengths[i] - arc_lengths[i - 1];
+        let hr = arc_lengths[i + 1] - arc_lengths[i];
+        slopes[i][i - 1] = -hr / (hl * (hl + hr));
+        slopes[i][i] = (hr - hl) / (hl * hr);
+        slopes[i][i + 1] = hl / (hr * (hl + hr));
+    }
+
+    let hr = arc_lengths[n - 1] - arc_lengths[n - 2];
+    let hl = arc_lengths[n - 2] - arc_lengths[n - 3];
+    slopes[n - 1][n - 3] = hr / (hl * (hl + hr));
+    slopes[n - 1][n - 2] = -(hl + hr) / (hl * hr);
+    slopes[n - 1][n - 1] = (2.0 * hr + hl) / (hr * (hl + hr));
+    slopes
+}
+
+fn eval_hermite_1d(arc_lengths: &[f64], values: &[f64], slopes: &[f64], s: f64) -> f64 {
+    let n = arc_lengths.len();
+    let mut seg = n - 2;
+    for i in 0..(n - 1) {
+        if s <= arc_lengths[i + 1] {
+            seg = i;
+            break;
+        }
+    }
+    let h = arc_lengths[seg + 1] - arc_lengths[seg];
+    let t = ((s - arc_lengths[seg]) / h).clamp(0.0, 1.0);
+    let t2 = t * t;
+    let t3 = t2 * t;
+    let h00 = 2.0 * t3 - 3.0 * t2 + 1.0;
+    let h10 = t3 - 2.0 * t2 + t;
+    let h01 = -2.0 * t3 + 3.0 * t2;
+    let h11 = t3 - t2;
+    h00 * values[seg] + h10 * h * slopes[seg] + h01 * values[seg + 1] + h11 * h * slopes[seg + 1]
 }
 
 fn spline_second_derivative_basis(arc_lengths: &[f64]) -> Vec<Vec<f64>> {
@@ -1750,8 +1740,26 @@ fn integrate_spectral_profile(
         integration_weights[i][i - 1] += 0.5 * ds;
         integration_weights[i][i] += 0.5 * ds;
         let cubic_scale = ds * ds * ds / 24.0;
+        let mut delta_i = 0.0_f64;
+        let mut var_delta_i = 0.0_f64;
         for j in 0..n {
-            integration_weights[i][j] -= cubic_scale * (m_basis[i - 1][j] + m_basis[i][j]);
+            let coeff = -cubic_scale * (m_basis[i - 1][j] + m_basis[i][j]);
+            delta_i += coeff * gradients[j];
+            var_delta_i += coeff * coeff * gradient_errors[j] * gradient_errors[j];
+        }
+        // Only apply the high-order spline correction when its statistical uncertainty
+        // is strictly smaller than the trapezoid statistical noise on the interval.
+        let trap_var =
+            0.25 * ds * ds * (gradient_errors[i - 1].powi(2) + gradient_errors[i].powi(2));
+        let alpha = if var_delta_i == 0.0 {
+            1.0
+        } else if var_delta_i <= trap_var && (delta_i * delta_i + var_delta_i) > 0.0 {
+            (delta_i * delta_i) / (delta_i * delta_i + var_delta_i)
+        } else {
+            0.0
+        };
+        for j in 0..n {
+            integration_weights[i][j] -= alpha * cubic_scale * (m_basis[i - 1][j] + m_basis[i][j]);
         }
         let mut fi = 0.0_f64;
         for j in 0..n {
@@ -1824,8 +1832,7 @@ fn integrate_spectral_profile(
         normalized_rate_error,
     })
 }
-/// on `arc_lengths`, compute the certified tail bound on `F*`, and flag intervals
-/// whose local error exceeds the uniform share when `tail_bound > target_se`.
+
 /// Fit the mean constraint force and free energy with a Chebyshev / cosine expansion
 /// on `arc_lengths`, compute the certified tail bound on `F*`, and flag intervals
 /// whose local error exceeds the uniform share when `tail_bound > target_se`.
@@ -1875,7 +1882,10 @@ pub fn estimate_spectral_tail(
         ));
     }
 
-    let force_spline = scalar_spline_1d(arc_lengths, gradients)?;
+    let d_basis = hermite_slope_basis(arc_lengths);
+    let slopes: Vec<f64> = (0..n)
+        .map(|i| (0..n).map(|j| d_basis[i][j] * gradients[j]).sum())
+        .collect();
     let p = n - 1;
     let p_f64 = p as f64;
     let mut lobatto_forces = vec![0.0_f64; p + 1];
@@ -1883,7 +1893,7 @@ pub fn estimate_spectral_tail(
         let theta_j = ((p - j) as f64) * PI / p_f64;
         let x_j = theta_j.cos();
         let s_j = (s0 + 0.5 * total_length * (1.0 + x_j)).clamp(s0, s_end);
-        *slot = force_spline.evaluate(s_j).0[0];
+        *slot = eval_hermite_1d(arc_lengths, gradients, &slopes, s_j);
     }
 
     let mut force_coefficients = vec![0.0_f64; p + 1];
@@ -1938,16 +1948,12 @@ pub fn estimate_spectral_tail(
         let sa = arc_lengths[k];
         let sb = arc_lengths[k + 1];
         let ds = sb - sa;
-        // Exact difference between the cubic-spline integral and the trapezoid rule on [sa, sb]:
-        // \int_sa^sb g_spline(s) ds - 0.5 * (g_k + g_{k+1}) * ds = -(ds^3 / 24) * (m_k + m_{k+1}).
-        let m_left = force_spline.second[k][0];
-        let m_right = force_spline.second[k + 1][0];
-        let spline_quad_diff = (ds * ds * ds / 24.0) * (m_left + m_right).abs();
+        let hermite_quad_diff = (ds * ds / 12.0) * (slopes[k] - slopes[k + 1]).abs();
         let trap_inc = 0.5 * (gradients[k] + gradients[k + 1]) * ds;
         let fa = chebyshev_eval(&profile_coefficients, to_x(sa));
         let fb = chebyshev_eval(&profile_coefficients, to_x(sb));
         let spec_inc = fb - fa;
-        let quad_diff = spline_quad_diff.max((spec_inc - trap_inc).abs());
+        let quad_diff = hermite_quad_diff.max((spec_inc - trap_inc).abs());
         total_quad_diff += quad_diff;
 
         let endpoint_max = fa.max(fb);
@@ -1983,7 +1989,11 @@ pub fn estimate_spectral_tail(
         let mean_err = interval_errors.iter().copied().sum::<f64>() / (p as f64);
         let max_err = interval_errors.iter().copied().fold(0.0_f64, f64::max);
         let per_interval_target = target_se / (p as f64);
-        let threshold = mean_err.max(per_interval_target);
+        let threshold = if per_interval_target > rounding_floor {
+            per_interval_target.min(mean_err)
+        } else {
+            mean_err
+        };
         let sym_tol = 64.0 * f64::EPSILON * (1.0 + max_err);
         for (k, &err) in interval_errors.iter().enumerate() {
             if err + sym_tol >= threshold && err > rounding_floor {
@@ -2215,6 +2225,7 @@ pub fn pafi_profile_adaptive<E: DynamicsEngine + ?Sized>(
             )?,
         };
 
+        let path_symmetric = initial_map.is_reflection_symmetric();
         let initial_arcs = initial_map.place_planes(config.base.planes)?;
         let initial_geoms = build_plane_geometries_at(&spline, masses.view(), &initial_arcs)?;
         let mut next_uid = 0usize;
@@ -2311,8 +2322,16 @@ pub fn pafi_profile_adaptive<E: DynamicsEngine + ?Sized>(
                     .with_force_gradients(&gradients)
                     .with_path_curvatures(&curvatures)
                     .with_tau_weighted_variances(&variances);
-                let current_map =
-                    EquidistributionMap::from_inputs(&monitor_inputs, config.monitor)?;
+                let mut raw_mon = monitor_inputs.evaluate(config.monitor)?;
+                if path_symmetric {
+                    let m_len = raw_mon.len();
+                    for i in 0..(m_len / 2) {
+                        let avg = 0.5 * (raw_mon[i] + raw_mon[m_len - 1 - i]);
+                        raw_mon[i] = avg;
+                        raw_mon[m_len - 1 - i] = avg;
+                    }
+                }
+                let current_map = EquidistributionMap::new(&arcs, &raw_mon)?;
 
                 if tail.tail_bound <= stop_threshold
                     || refinement_rounds >= config.max_refinements
@@ -2330,11 +2349,24 @@ pub fn pafi_profile_adaptive<E: DynamicsEngine + ?Sized>(
 
                 let remaining_budget = config.max_planes - records.len();
                 let n_intervals = arcs.len() - 1;
-                let symmetric = current_map.is_reflection_symmetric();
-                let force_spline = scalar_spline_1d(&arcs, &gradients)?;
+                let symmetric = path_symmetric && current_map.is_reflection_symmetric();
+                let d_basis = hermite_slope_basis(&arcs);
+                let slopes: Vec<f64> = (0..arcs.len())
+                    .map(|i| (0..arcs.len()).map(|j| d_basis[i][j] * gradients[j]).sum())
+                    .collect();
 
-                // Rank flagged intervals by error while keeping mirror pairs together when symmetric.
-                let mut ordered_flagged = tail.flagged_intervals.clone();
+                let min_gap = current_map
+                    .min_spacing_bound(config.max_planes)?
+                    .max(64.0 * f64::EPSILON * (1.0 + total_arc));
+
+                // Rank flagged intervals by error while skipping intervals already below
+                // the certified spacing floor and keeping mirror pairs together when symmetric.
+                let mut ordered_flagged: Vec<usize> = tail
+                    .flagged_intervals
+                    .iter()
+                    .copied()
+                    .filter(|&k| arcs[k + 1] - arcs[k] > min_gap)
+                    .collect();
                 ordered_flagged.sort_by(|&a, &b| {
                     let ea = if symmetric {
                         tail.interval_errors[a].max(tail.interval_errors[n_intervals - 1 - a])
@@ -2364,19 +2396,20 @@ pub fn pafi_profile_adaptive<E: DynamicsEngine + ?Sized>(
                             if chosen_intervals.len() < step_budget {
                                 used[k] = true;
                                 chosen_intervals.push(k);
-                                break;
                             }
                         } else if chosen_intervals.len() + 2 <= step_budget {
                             used[k] = true;
                             used[mirror] = true;
                             chosen_intervals.push(k.min(mirror));
                             chosen_intervals.push(k.max(mirror));
+                        }
+                        if chosen_intervals.len() >= step_budget {
                             break;
                         }
                     } else if chosen_intervals.len() < step_budget {
                         used[k] = true;
                         chosen_intervals.push(k);
-                        if chosen_intervals.len() >= 2 {
+                        if chosen_intervals.len() >= step_budget {
                             break;
                         }
                     }
@@ -2411,7 +2444,7 @@ pub fn pafi_profile_adaptive<E: DynamicsEngine + ?Sized>(
                         let mut right = sb;
                         for _ in 0..40 {
                             let mid = 0.5 * (left + right);
-                            if force_spline.evaluate(mid).0[0] > 0.0 {
+                            if eval_hermite_1d(&arcs, &gradients, &slopes, mid) > 0.0 {
                                 left = mid;
                             } else {
                                 right = mid;
@@ -2442,12 +2475,14 @@ pub fn pafi_profile_adaptive<E: DynamicsEngine + ?Sized>(
                     }
                 }
 
-                let min_gap = 64.0 * f64::EPSILON * (1.0 + total_arc);
+                let min_gap = current_map
+                    .min_spacing_bound(config.max_planes)?
+                    .max(64.0 * f64::EPSILON * (1.0 + total_arc));
                 let mut added_any = false;
                 for s_new in new_arcs {
                     if records
                         .iter()
-                        .all(|r| (r.geometry.arc - s_new).abs() > min_gap)
+                        .all(|r| (r.geometry.arc - s_new).abs() > 0.25 * min_gap)
                     {
                         let geometry = evaluate_plane_geometry_at(&spline, masses.view(), s_new)?;
                         let uid = next_uid;
