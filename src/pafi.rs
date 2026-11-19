@@ -233,8 +233,9 @@ const DEFAULT_ZERO_TEMPERATURE_TOL: f64 = default_zero_temperature_tol(DEFAULT_P
 
 fn effective_zero_temperature_tol(config: &PafiConfig) -> f64 {
     let tol = config.zero_temperature_tol;
-    let default_tol = DEFAULT_ZERO_TEMPERATURE_TOL;
-    if (tol - default_tol).abs() <= 64.0 * f64::EPSILON * default_tol.abs().max(1.0) {
+    let retains_default =
+        !config.zero_temperature_tol_set && tol.to_bits() == DEFAULT_ZERO_TEMPERATURE_TOL.to_bits();
+    if retains_default {
         default_zero_temperature_tol(config.planes)
     } else {
         tol
@@ -284,10 +285,13 @@ pub struct PafiConfig {
     /// absolute discrepancy in engine energy units.
     ///
     /// The stored default is `2 * (pi^2 / 12) / 8^2`, about `0.0257`, for the
-    /// default 9 planes. If this field retains that default value, changing
-    /// `planes` changes the effective tolerance to
-    /// `2 * (pi^2 / 12) / (planes - 1)^2`. An explicitly different value is
-    /// used unchanged and does not scale with `planes`.
+    /// default 9 planes. While the tolerance is not set, changing `planes`
+    /// changes the effective tolerance to `2 * (pi^2 / 12) / (planes - 1)^2`.
+    /// Any value passed to [`PafiConfig::with_zero_temperature_tol`] is used
+    /// exactly and does not scale with `planes`, including a value equal to
+    /// the default or the next representable one. Assigning this field
+    /// directly is also exact, except that assigning bit for bit the stored
+    /// default leaves the tolerance unset; use the setter to pin that value.
     ///
     /// The scaling follows the trapezoid error on a quarter-turn circular arc
     /// through a harmonic well. Paths that turn through more than a quarter
@@ -296,6 +300,7 @@ pub struct PafiConfig {
     ///
     /// Default: `2 * (pi^2 / 12) / 8^2`, about `0.0257`.
     pub zero_temperature_tol: f64,
+    zero_temperature_tol_set: bool,
     /// Base of the deterministic per-plane seeds `seed + 4099 * plane + 1000003 * round`
     /// (wrapping).
     ///
@@ -317,6 +322,7 @@ impl Default for PafiConfig {
             target_error: None,
             max_rounds: 4,
             zero_temperature_tol: DEFAULT_ZERO_TEMPERATURE_TOL,
+            zero_temperature_tol_set: false,
             seed: 1,
             stats: StatsConfig::default(),
         }
@@ -330,10 +336,22 @@ with_setters!(PafiConfig {
     with_time_step => time_step: val f64,
     with_target_error => target_error: opt f64,
     with_max_rounds => max_rounds: val usize,
-    with_zero_temperature_tol => zero_temperature_tol: val f64,
     with_seed => seed: val u64,
     with_stats => stats: val StatsConfig,
 });
+
+impl PafiConfig {
+    /// Set [`Self::zero_temperature_tol`] and pin it.
+    ///
+    /// The value is used exactly. It does not scale with
+    /// [`Self::planes`], even when it equals the stored default.
+    #[must_use]
+    pub fn with_zero_temperature_tol(mut self, zero_temperature_tol: f64) -> Self {
+        self.zero_temperature_tol = zero_temperature_tol;
+        self.zero_temperature_tol_set = true;
+        self
+    }
+}
 
 /// Integrated free-energy profile along a discretized reaction path.
 #[derive(Clone, Debug, PartialEq)]
@@ -1407,6 +1425,64 @@ mod tests {
             .with_sample_steps(2)
             .with_stats(StatsConfig::default().with_min_batches(2));
         assert!(pafi_profile(&mut legacy_engine, path.view(), &legacy_like).is_ok());
+    }
+
+    #[test]
+    fn unset_tolerance_is_rescaled_with_planes() {
+        for planes in [2usize, 9, 33, 65] {
+            let config = PafiConfig::default().with_planes(planes);
+            assert_eq!(
+                effective_zero_temperature_tol(&config),
+                default_zero_temperature_tol(planes)
+            );
+        }
+        assert_eq!(
+            effective_zero_temperature_tol(&PafiConfig::default()),
+            DEFAULT_ZERO_TEMPERATURE_TOL
+        );
+    }
+
+    #[test]
+    fn tolerance_next_to_the_default_is_kept_exactly() {
+        for tol in [
+            DEFAULT_ZERO_TEMPERATURE_TOL.next_up(),
+            DEFAULT_ZERO_TEMPERATURE_TOL.next_down(),
+            f64::from_bits(DEFAULT_ZERO_TEMPERATURE_TOL.to_bits() + 1),
+        ] {
+            let config = PafiConfig::default()
+                .with_planes(33)
+                .with_zero_temperature_tol(tol);
+            assert_eq!(effective_zero_temperature_tol(&config), tol);
+
+            let mut assigned = PafiConfig::default().with_planes(33);
+            assigned.zero_temperature_tol = tol;
+            assert_eq!(effective_zero_temperature_tol(&assigned), tol);
+        }
+    }
+
+    #[test]
+    fn setter_value_equal_to_default_is_not_rescaled() {
+        let config = PafiConfig::default()
+            .with_planes(33)
+            .with_zero_temperature_tol(DEFAULT_ZERO_TEMPERATURE_TOL);
+        assert_eq!(
+            effective_zero_temperature_tol(&config),
+            DEFAULT_ZERO_TEMPERATURE_TOL
+        );
+        assert_ne!(
+            effective_zero_temperature_tol(&config),
+            default_zero_temperature_tol(33)
+        );
+    }
+
+    #[test]
+    fn directly_assigned_default_bits_leave_the_tolerance_unset() {
+        let mut config = PafiConfig::default().with_planes(33);
+        config.zero_temperature_tol = DEFAULT_ZERO_TEMPERATURE_TOL;
+        assert_eq!(
+            effective_zero_temperature_tol(&config),
+            default_zero_temperature_tol(33)
+        );
     }
 
     #[test]
