@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""Fail on a git dependency not pinned by full rev, or a second copy of our crates."""
+"""Fail on a git source not pinned by full rev, or a second copy of our crates.
+
+The published manifest asks crates.io for caret requirements, so downstream
+patch releases unify. `[patch.crates-io]` overrides them with git revs for
+local builds. This script requires each override to name a full 40-hex rev
+and the crate version at that rev to satisfy the published requirement.
+"""
 
 from __future__ import annotations
 
@@ -30,6 +36,7 @@ SHA = re.compile(r"[0-9a-f]{40}")
 LOCKED_GIT = re.compile(
     r"git\+(?P<url>[^?#]+)\?rev=(?P<rev>[0-9a-f]{40})#(?P<precise>[0-9a-f]{40})"
 )
+VERSION = re.compile(r"(\d+)(?:\.(\d+))?(?:\.(\d+))?")
 TREE_LINE = re.compile(r"(?P<name>\S+) v(?P<version>\S+)(?P<rest>.*)")
 # `lammpc` links liblammpc. The duplicate check runs in the test job, which
 # does not install that library, so the tree stays on the library features.
@@ -52,6 +59,55 @@ def cargo(args: list[str], cwd: Path) -> str:
             f"cargo {' '.join(args)} failed in {cwd}:\n{proc.stderr}"
         )
     return proc.stdout
+
+
+def parse_version(text: str) -> tuple[int, int, int]:
+    m = VERSION.fullmatch(text.strip())
+    if m is None:
+        raise ValueError(f"unsupported version {text!r}")
+    return tuple(int(part or 0) for part in m.groups())  # type: ignore[return-value]
+
+
+def caret_upper(low: tuple[int, int, int], given: int) -> tuple[int, int, int]:
+    major, minor, patch = low
+    if major > 0 or given == 1:
+        return (major + 1, 0, 0)
+    if minor > 0 or given == 2:
+        return (0, minor + 1, 0)
+    return (0, 0, patch + 1)
+
+
+def satisfies(version: str, req: str) -> bool:
+    """Whether `version` meets a Cargo requirement made of comparators."""
+    have = parse_version(version)
+    for comparator in req.split(","):
+        comparator = comparator.strip()
+        if comparator in ("", "*"):
+            continue
+        m = re.fullmatch(r"(\^|~|=|>=|<=|>|<)?\s*(\S+)", comparator)
+        if m is None:
+            raise ValueError(f"unsupported requirement {req!r}")
+        op, text = m[1] or "^", m[2]
+        want = parse_version(text)
+        given = len(text.split("."))
+        if op == "=":
+            ok = have == want if given == 3 else have[:given] == want[:given]
+        elif op == "^":
+            ok = want <= have < caret_upper(want, given)
+        elif op == "~":
+            upper = (want[0], want[1] + 1, 0) if given > 1 else (want[0] + 1, 0, 0)
+            ok = want <= have < upper
+        elif op == ">=":
+            ok = have >= want
+        elif op == ">":
+            ok = have > want
+        elif op == "<=":
+            ok = have <= want
+        else:
+            ok = have < want
+        if not ok:
+            return False
+    return True
 
 
 def lock_packages(where: Path) -> list[dict]:
@@ -100,16 +156,61 @@ def check_manifests(where: Path, label: str) -> list[str]:
             version = locked.get((name, source))
             if version is None:
                 errors.append(f"{what} from {source} is not in {label}/Cargo.lock")
-            elif req != f"={version}":
+            elif not satisfies(version, req):
                 errors.append(
-                    f"{what} asks for {req!r}, but the crate at that rev is {version}; "
-                    f"use '={version}'"
+                    f"{what} asks for {req!r}, but the crate at that rev is {version}"
                 )
             seen.setdefault(name, set()).add((url, reference.get("rev", "")))
     for name, sources in sorted(seen.items()):
         if len(sources) > 1:
             listed = ", ".join(f"{url}@{rev or '?'}" for url, rev in sorted(sources))
             errors.append(f"{label}: {name} is taken from more than one git source: {listed}")
+    return errors
+
+
+def check_patches(where: Path, label: str) -> list[str]:
+    """Check the `[patch.crates-io]` overrides against the published requirements."""
+    errors = []
+    with open(where / "Cargo.toml", "rb") as fh:
+        manifest = tomllib.load(fh)
+    patches = manifest.get("patch", {}).get("crates-io", {})
+    meta = json.loads(cargo(["metadata", "--no-deps", "--format-version", "1"], where))
+    reqs: dict[str, list[str]] = {}
+    for member in meta["packages"]:
+        for dep in member["dependencies"]:
+            if dep.get("source", "").startswith("git+") or dep.get("path"):
+                continue
+            reqs.setdefault(dep["name"], []).append(dep["req"])
+            if re.search(r"(^|,)\s*=", dep["req"]):
+                errors.append(
+                    f"{label}/Cargo.toml: {dep['name']} asks for {dep['req']!r}; "
+                    f"use a caret requirement so downstream patch releases unify"
+                )
+    locked: dict[tuple[str, str], str] = {}
+    for pkg in lock_packages(where):
+        m = LOCKED_GIT.fullmatch(pkg.get("source", ""))
+        if m is not None:
+            locked[(pkg["name"], m["rev"])] = pkg["version"]
+    for name, spec in sorted(patches.items()):
+        what = f"{label}/Cargo.toml: [patch.crates-io] {name}"
+        if not isinstance(spec, dict) or "git" not in spec:
+            errors.append(f"{what} must be a git override")
+            continue
+        extra = set(spec) - {"git", "rev"}
+        rev = spec.get("rev", "")
+        if extra or not SHA.fullmatch(rev):
+            errors.append(f"{what} must pin only `rev` to a full 40-hex commit")
+            continue
+        version = locked.get((name, rev))
+        if version is None:
+            errors.append(f"{what} at {rev} is not in {label}/Cargo.lock")
+            continue
+        for req in reqs.get(name, []):
+            if not satisfies(version, req):
+                errors.append(
+                    f"{what} at {rev} is version {version}, which does not satisfy "
+                    f"the published requirement {req!r}"
+                )
     return errors
 
 
@@ -147,6 +248,7 @@ def main() -> int:
     cargo(["metadata", "--locked", "--format-version", "1"], ROOT)
     errors += check_lock(ROOT, ".")
     errors += check_manifests(ROOT, ".")
+    errors += check_patches(ROOT, ".")
     errors += check_duplicates(ROOT, ".", ["--locked"])
 
     if errors:
