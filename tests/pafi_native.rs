@@ -123,8 +123,7 @@ fn run_barrier_case(
     let profile_result = pafi_profile(&mut engine, path.view(), &config);
     assert!(
         profile_result.is_ok(),
-        "pafi_profile returned {:?}",
-        profile_result
+        "pafi_profile returned {profile_result:?}",
     );
     let profile = profile_result.expect("checked above");
     let z = (profile.barrier - analytic_barrier).abs() / profile.barrier_error;
@@ -134,33 +133,15 @@ fn run_barrier_case(
 #[test]
 fn pafi_widening_barrier_matches_analytic_within_reported_se() {
     let (barrier, se, z) = run_barrier_case(vec![1.0, 1.0], 11, 31, 10_000, 10_000, 0.001);
-    eprintln!(
-        "isotropic widening barrier={:.8} se={:.8} z={:.4}",
-        barrier, se, z
-    );
-    assert!(
-        z <= 2.0,
-        "barrier {:.8} ± {:.8} gives z={:.4}",
-        barrier,
-        se,
-        z
-    );
+    eprintln!("isotropic widening barrier={barrier:.8} se={se:.8} z={z:.4}");
+    assert!(z <= 2.0, "barrier {barrier:.8} ± {se:.8} gives z={z:.4}");
 }
 
 #[test]
 fn pafi_widening_barrier_mass_anisotropic_matches_analytic_within_reported_se() {
     let (barrier, se, z) = run_barrier_case(vec![1.0, 4.0], 21, 31, 20_000, 10_000, 0.001);
-    eprintln!(
-        "anisotropic widening barrier={:.8} se={:.8} z={:.4}",
-        barrier, se, z
-    );
-    assert!(
-        z <= 2.0,
-        "barrier {:.8} ± {:.8} gives z={:.4}",
-        barrier,
-        se,
-        z
-    );
+    eprintln!("anisotropic widening barrier={barrier:.8} se={se:.8} z={z:.4}");
+    assert!(z <= 2.0, "barrier {barrier:.8} ± {se:.8} gives z={z:.4}");
 }
 
 #[test]
@@ -244,8 +225,7 @@ fn normalized_pafi_rate_matches_analytic_profile() {
     let profile_result = pafi_profile(&mut engine, path.view(), &config);
     assert!(
         profile_result.is_ok(),
-        "pafi_profile returned {:?}",
-        profile_result
+        "pafi_profile returned {profile_result:?}",
     );
     let profile = profile_result.expect("checked above");
     let rate = profile.normalized_rate;
@@ -285,16 +265,11 @@ fn normalized_pafi_rate_matches_analytic_profile() {
         (thermal / (2.0 * PI)).sqrt() * (-analytic_barrier / thermal).exp() / analytic_partition;
     let relative_error = (rate - analytic_rate).abs() / analytic_rate;
     eprintln!(
-        "normalized rate={:.8e} se={:.8e} analytic={:.8e} relative error={:.4}",
-        rate, rate_error, analytic_rate, relative_error
+        "normalized rate={rate:.8e} se={rate_error:.8e} analytic={analytic_rate:.8e} relative error={relative_error:.4}",
     );
     assert!(
         relative_error <= 0.05,
-        "rate {:.8e} ± {:.8e} versus analytic {:.8e} has relative error {:.4}",
-        rate,
-        rate_error,
-        analytic_rate,
-        relative_error
+        "rate {rate:.8e} ± {rate_error:.8e} versus analytic {analytic_rate:.8e} has relative error {relative_error:.4}",
     );
 }
 
@@ -305,15 +280,11 @@ fn sampling_refinement_restores_analytic_coverage() {
     let (fine_barrier, fine_se, fine_z) =
         run_barrier_case(vec![1.0, 4.0], 91, 31, 20_000, 10_000, 0.001);
     eprintln!(
-        "refinement coarse barrier={:.8} se={:.8} z={:.4}; fine barrier={:.8} se={:.8} z={:.4}",
-        coarse_barrier, coarse_se, coarse_z, fine_barrier, fine_se, fine_z
+        "refinement coarse barrier={coarse_barrier:.8} se={coarse_se:.8} z={coarse_z:.4}; fine barrier={fine_barrier:.8} se={fine_se:.8} z={fine_z:.4}",
     );
     assert!(
         coarse_z > 4.0 && fine_z <= 2.0,
-        "refinement should move the analytic value into two-SE coverage: coarse z={coarse_z:.4}, fine barrier {:.8} ± {:.8} gives z={:.4}",
-        fine_barrier,
-        fine_se,
-        fine_z
+        "refinement should move the analytic value into two-SE coverage: coarse z={coarse_z:.4}, fine barrier {fine_barrier:.8} ± {fine_se:.8} gives z={fine_z:.4}",
     );
 }
 
@@ -361,8 +332,6 @@ fn arc_lengths_reflect_mass_weighting() {
     let s2 = *p2.arc_lengths.last().expect("last arc");
     assert!(
         (s1 - s2).abs() > 1.0e-3,
-        "mass-weighted arc lengths should differ: s1={}, s2={}",
-        s1,
-        s2
+        "mass-weighted arc lengths should differ: s1={s1}, s2={s2}",
     );
 }
