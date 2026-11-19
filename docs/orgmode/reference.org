@@ -195,7 +195,7 @@ The value stored by =PafiConfig::default()= is the 9-plane value shown in the ta
 |---+---+---|
 | =arc_lengths= | =Vec<f64>= | Plane coordinates \(s_k\): the mass-weighted chord-length parameter of the spline, from 0 at the first image to the total path length at the last, at equal spacing. Not scaled to \([0, 1]\) |
 | =free_energy= | =Vec<f64>= | \(F(s_k) - F(s_0)\) by the trapezoid rule; the first entry is 0 |
-| =standard_error= | =Vec<f64>= | Standard error of =free_energy= from the batch-means errors of the plane forces; the first entry is 0 |
+| =standard_error= | =Vec<f64>= | Standard error of =free_energy= from the batch-means errors of the plane forces. The Euclidean norm of the weighted uncertainties is formed in log space, so a finite uncertainty whose square overflows stays finite. The first entry is 0 |
 | =barrier= | =f64= | \(\Delta F = \max_k F(s_k)\) |
 | =barrier_error= | =f64= | Standard error of =barrier= |
 | =dividing_index= | =usize= | First plane where =barrier= is attained |
