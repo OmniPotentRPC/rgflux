@@ -1,0 +1,62 @@
+PAFI benchmark toolchain used for the committed raw records
+
+Host: Ubuntu 24.04.5 LTS, x86_64, 8 logical CPUs, run through taskset on
+cores 0 (one thread) and 0-3 (four threads). No builds or cargo runs
+overlapped the campaigns; only file edits, listings and Python unit
+tests of about a tenth of a second ran beside them.
+
+Packages from apt:
+  gcc-13 13.3.0-6ubuntu2~24.04.1 (also g++-13 and gfortran-13)
+  cmake 3.28.3-1build7
+  ninja-build 1.11.1-2
+  libopenmpi-dev 4.1.6-7ubuntu2 (openmpi-bin 4.1.6-7ubuntu2)
+  libopenblas-dev 0.3.26+ds-1ubuntu0.1
+  capnproto 1.0.1-4
+  patchelf 0.18.0-1.1build1
+  python3-dev 3.12.3-0ubuntu2.1
+  libpython3.12-dev 3.12.3-1ubuntu0.17
+
+Rust: rustc 1.100.0 (0ef1bc386 2026-11-09), cargo 1.100.0, stable channel.
+Python packages: python-lock.txt, installed into a virtual environment
+with the Python 3.12.3 that Ubuntu provides.
+
+Sources, with commits recorded in metadata.json:
+  LAMMPS stable_22Jul2025_update6
+  PAFI v0.9
+  rgpot, rgsaddle and rgflux at the commits in metadata.json
+
+LAMMPS configuration, with CC=gcc-13 and CXX=g++-13:
+  cmake <lammps-source>/cmake -G Ninja -DCMAKE_BUILD_TYPE=Release \
+    -DBUILD_SHARED_LIBS=yes -DBUILD_MPI=yes -DBUILD_OMP=yes \
+    -DPKG_EXTRA-FIX=yes -DPKG_OPENMP=yes -DPKG_MANYBODY=yes \
+    -DPKG_MOLECULE=yes -DPKG_REPLICA=yes
+  ninja install, then ninja install-python, then copy the installed
+  liblammps.so beside the lammps Python package.
+
+rgpot Python package, with RUSTUP_TOOLCHAIN=stable, CC=gcc-13,
+CXX=g++-13 and FC=gfortran-13:
+  pip install --no-build-isolation <rgpot-source> \
+    -Csetup-args=-Dwith_python=true -Csetup-args=-Dwith_metatomic=false \
+    -Csetup-args=-Dwith_fortran_pots=disabled \
+    -Csetup-args=-Dwith_xckernel=false -Csetup-args=-Dwith_dftd3=false \
+    -Csetup-args=-Dwith_dftd4=false -Csetup-args=-Dwith_expr=false \
+    -Csetup-args=-Dwith_highway=disabled \
+    -Csetup-args=-Dwith_fast_nlist=enabled \
+    -Csetup-args=-Dwith_lammps=disabled -Csetup-args=-Dwith_openmm=disabled \
+    -Csetup-args=-Dwith_plumed=disabled -Csetup-args=-Dwith_gromacs=disabled \
+    -Csetup-args=-Dwith_ipi=disabled -Csetup-args=-Dbuildtype=release \
+    -Csetup-args=-Db_ndebug=true
+  Runtime ISA dispatch is disabled by with_highway=disabled. The wheel
+  install does not keep the librgpot soname link, so librgpot.so.6 was
+  linked to librgpot.so.3.7.0 inside the .rgpot.mesonpy.libs directory.
+
+Native harnesses: bench/pafi/build_native.py with --cargo set to the
+stable cargo, once for bench/pafi/src/main.rs and once for
+bench/pafi/src/vacancy.rs. The committed bench/pafi/Cargo.lock is used
+with cargo build --release --locked.
+
+Campaign commands: metadata.json holds the two campaign invocations with
+local directories replaced by the placeholders used in the README.
+Per run command lines are not repeated there: they follow from the
+campaign options, the cell in manifest.json and the seed rule in
+run_campaign.py and run_vacancy_campaign.py.

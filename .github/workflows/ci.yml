@@ -64,8 +64,34 @@ jobs:
         run: cargo test --locked --features rgpot,rgpot-session --verbose
       - name: Doc tests (library features)
         run: cargo test --locked --doc --features rgpot,rgpot-session --verbose
+      - name: Install Python development headers and PAFI requirements
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y python3-dev python3-pip python3-venv
+          python3 -m venv "${RUNNER_TEMP}/pafi-venv"
+          "${RUNNER_TEMP}/pafi-venv/bin/python" -m pip install -r bench/pafi/requirements.txt
+          lib_dirs="$("${RUNNER_TEMP}/pafi-venv/bin/python" -c 'import sysconfig; print(":".join(dict.fromkeys(filter(None, (sysconfig.get_config_var("LIBPL"), sysconfig.get_config_var("LIBDIR"))))))')"
+          echo "${RUNNER_TEMP}/pafi-venv/bin" >> "$GITHUB_PATH"
+          echo "PAFI_PYTHON=${RUNNER_TEMP}/pafi-venv/bin/python" >> "$GITHUB_ENV"
+          echo "PYO3_PYTHON=${RUNNER_TEMP}/pafi-venv/bin/python" >> "$GITHUB_ENV"
+          echo "LIBRARY_PATH=${lib_dirs}${LIBRARY_PATH:+:${LIBRARY_PATH}}" >> "$GITHUB_ENV"
+      - name: Clippy (PAFI Python)
+        run: cargo clippy --locked --all-targets --features rgpot,rgpot-session,pafi-python -- -D warnings
+      - name: Test (PAFI Python)
+        run: cargo test --locked --features pafi-python --verbose
+      - name: PAFI coverage gates
+        run: |
+          set -euo pipefail
+          cargo build --locked --bin pafi-dimer-coverage --example pafi-vacancy-coverage --features pafi-python
+          python3 bench/pafi/repro_zero_width_reactant_partition.py \
+            --native-bin target/debug/pafi-dimer-coverage
+          python3 bench/pafi/test_analyze.py
+          python3 bench/pafi/test_repro.py
+          python3 bench/pafi/analyze.py \
+            --validate-results bench/pafi/results.json
       - name: Public items are documented
-        run: cargo rustdoc --locked --features rgpot,rgpot-session -- -D missing_docs
+        run: cargo rustdoc --locked --features rgpot,rgpot-session --lib -- -D missing_docs
       - name: Rustdoc builds without warnings
         run: ci/check_rustdoc.sh
       - name: Reject machine-local paths
@@ -144,6 +170,18 @@ jobs:
           meson setup build --prefix="${RUNNER_TEMP}/lammpc-install" -Dwith_tests=false -Dwith_lammps=true -Dlammps_root="$PWD/.lammps-install"
           meson compile -C build
           meson install -C build
+      - name: Install Python development headers and PAFI requirements
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y python3-dev python3-pip python3-venv
+          python3 -m venv "${RUNNER_TEMP}/pafi-venv"
+          "${RUNNER_TEMP}/pafi-venv/bin/python" -m pip install -r bench/pafi/requirements.txt
+          lib_dirs="$("${RUNNER_TEMP}/pafi-venv/bin/python" -c 'import sysconfig; print(":".join(dict.fromkeys(filter(None, (sysconfig.get_config_var("LIBPL"), sysconfig.get_config_var("LIBDIR"))))))')"
+          echo "${RUNNER_TEMP}/pafi-venv/bin" >> "$GITHUB_PATH"
+          echo "PAFI_PYTHON=${RUNNER_TEMP}/pafi-venv/bin/python" >> "$GITHUB_ENV"
+          echo "PYO3_PYTHON=${RUNNER_TEMP}/pafi-venv/bin/python" >> "$GITHUB_ENV"
+          echo "LIBRARY_PATH=${lib_dirs}${LIBRARY_PATH:+:${LIBRARY_PATH}}" >> "$GITHUB_ENV"
       - name: Clippy (all features)
         env:
           LAMMPC_LIB_DIR: ${{ runner.temp }}/lammpc-install/lib/x86_64-linux-gnu
