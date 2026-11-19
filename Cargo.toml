@@ -22,8 +22,11 @@ rgpot = ["dep:rgpot-core"]
 # Engine-agnostic MD session adapter wrapping rgpot's MdSession / CAbiMdSession
 # contract ("openmm", "nblib", "lammps").
 rgpot-session = ["dep:rgpot-core"]
-# Direct lammpc-backed DynamicsEngine over lammpc_session_* C ABI.
-lammpc = ["dep:rgpot-core", "dep:capnp"]
+# Direct lammpc-backed DynamicsEngine over lammpc_session_* C ABI. Only this
+# engine uses the Cap'n Proto profile wire format, so only it enables the
+# rgpot-core `profile` and `schema` features, whose build script needs the
+# `capnp` CLI.
+lammpc = ["dep:rgpot-core", "rgpot-core/profile", "rgpot-core/schema", "dep:capnp"]
 
 [dependencies]
 # Exact crates.io releases. `[patch.crates-io]` overrides them for local
@@ -31,7 +34,7 @@ lammpc = ["dep:rgpot-core", "dep:capnp"]
 # checkout still unifies one copy. `cargo publish` omits that table.
 rgsaddle = { version = "=0.5.0", default-features = false }
 rgmin = { version = "=0.6.0", default-features = false }
-rgpot-core = { version = "=3.7.0", optional = true, features = ["profile", "schema"] }
+rgpot-core = { version = "=3.7.0", optional = true }
 eindir-core = "0.6.0"
 ndarray = "0.17"
 rand = "0.9"
