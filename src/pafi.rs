@@ -1042,14 +1042,17 @@ mod tests {
         }
     }
 
-    struct InconsistentLinearGradient;
+    #[derive(Clone)]
+    struct InconsistentLinearGradient {
+        gradient: f64,
+    }
 
     impl rgsaddle::PointSurface for InconsistentLinearGradient {
         fn eval(
             &self,
             x: ArrayView1<'_, f64>,
         ) -> Result<(f64, Array1<f64>), rgsaddle::SaddleError> {
-            Ok((x[0], Array1::from_vec(vec![0.98])))
+            Ok((x[0], Array1::from_vec(vec![self.gradient])))
         }
     }
 
@@ -1370,9 +1373,23 @@ mod tests {
 
     #[test]
     fn default_tolerance_scales_with_planes_for_consistency_check() {
+        // A 2% path-force error is already above the old fixed default of 0.01,
+        // so that profile does not tell scaling apart from the fixed default.
+        // The error here is halfway between 0.01 and the scaled tolerance.
+        let planes = 33usize;
+        let scaled = default_zero_temperature_tol(planes);
+        let old_fixed = 0.01_f64;
+        assert!(
+            scaled < old_fixed,
+            "scaled tolerance {scaled} is not stricter than the old fixed default {old_fixed}"
+        );
+        let relative_error = 0.5 * (scaled + old_fixed);
+        let surface = InconsistentLinearGradient {
+            gradient: 1.0 - relative_error,
+        };
         let path = Array2::from_shape_vec((2, 1), vec![0.0, 1.0]).expect("shape");
         let mut engine = NativeEngine::new(
-            InconsistentLinearGradient,
+            surface.clone(),
             NativeConfig::default()
                 .with_masses(Array1::from_vec(vec![1.0]))
                 .with_thermostat(ThermostatConfig::default().with_temperature(0.2))
@@ -1380,7 +1397,7 @@ mod tests {
         )
         .expect("engine");
         let config = PafiConfig::default()
-            .with_planes(33)
+            .with_planes(planes)
             .with_burn_in_steps(1)
             .with_sample_steps(2);
         let result = pafi_profile(&mut engine, path.view(), &config);
@@ -1391,21 +1408,24 @@ mod tests {
             ))
         );
 
-        let mut legacy_engine = NativeEngine::new(
-            InconsistentLinearGradient,
+        let mut fixed_engine = NativeEngine::new(
+            surface,
             NativeConfig::default()
                 .with_masses(Array1::from_vec(vec![1.0]))
                 .with_thermostat(ThermostatConfig::default().with_temperature(0.2))
                 .with_seed(23),
         )
         .expect("engine");
-        let legacy_like = PafiConfig::default()
-            .with_planes(33)
-            .with_zero_temperature_tol(0.0257)
+        let fixed_default = PafiConfig::default()
+            .with_planes(planes)
+            .with_zero_temperature_tol(old_fixed)
             .with_burn_in_steps(1)
             .with_sample_steps(2)
             .with_stats(StatsConfig::default().with_min_batches(2));
-        assert!(pafi_profile(&mut legacy_engine, path.view(), &legacy_like).is_ok());
+        assert!(
+            pafi_profile(&mut fixed_engine, path.view(), &fixed_default).is_ok(),
+            "the old fixed default {old_fixed} should accept relative error {relative_error}"
+        );
     }
 
     #[test]
