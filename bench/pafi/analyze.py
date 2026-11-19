@@ -129,6 +129,16 @@ def profile_sem(records):
     return (profiles.std(axis=0, ddof=1) / math.sqrt(len(profiles))).tolist()
 
 
+def combined_profile_sem(native_sem, reference_sem):
+    if not native_sem or not reference_sem:
+        return []
+    return [
+        math.hypot(left, right)
+        for left, right in zip(native_sem, reference_sem, strict=True)
+        if left is not None and right is not None
+    ]
+
+
 def profile_summary(records, target=None):
     if not records:
         return {"median": [], "standard_error": [], "median_error": []}
@@ -169,7 +179,9 @@ def maximum_profile_difference(left, right):
         atol=PLANE_COORDINATE_ABS_TOL,
     ):
         raise AnalysisError("paired profile plane coordinates differ")
-    return max(abs(a - b) for a, b in zip(left_profile, right_profile))
+    return max(
+        abs(a - b) for a, b in zip(left_profile, right_profile, strict=True)
+    )
 
 
 def morse_energy(distance):
@@ -239,7 +251,10 @@ def profile_error(record, exact):
         raise AnalysisError(
             f"sampled/exact profile length mismatch: {len(profile)} != {len(exact)}"
         )
-    return max(abs(value - target) for value, target in zip(profile, exact))
+    return max(
+        abs(value - target)
+        for value, target in zip(profile, exact, strict=True)
+    )
 
 
 def rejection_audit(entries):
@@ -380,11 +395,9 @@ def vacancy_cells(raw_dir, vacancy_path, vacancy_static):
         ]
         native_profile_sem = profile_sem(native) if native else []
         reference_profile_sem = profile_sem(reference) if reference else []
-        combined_sem = [
-            math.hypot(left, right)
-            for left, right in zip(native_profile_sem, reference_profile_sem)
-            if left is not None and right is not None
-        ]
+        combined_sem = combined_profile_sem(
+            native_profile_sem, reference_profile_sem
+        )
         native_aa = [
             maximum_profile_difference(native[index], native[index + 1])
             for index in range(0, len(native) - 1, 2)
@@ -507,7 +520,7 @@ def validate_coordinates(values, planes, context):
     expected = (index / (planes - 1) for index in range(planes))
     if any(
         abs(actual - target) > PLANE_COORDINATE_ABS_TOL
-        for actual, target in zip(normalized, expected)
+        for actual, target in zip(normalized, expected, strict=True)
     ):
         raise AnalysisError(f"{context}: coordinates are not the declared uniform grid")
 
@@ -733,11 +746,9 @@ def main():
         ]
         native_profile_sem = profile_sem(native) if native else []
         reference_profile_sem = profile_sem(reference) if reference else []
-        combined_profile_sem = [
-            math.hypot(a, b)
-            for a, b in zip(native_profile_sem, reference_profile_sem)
-            if a is not None and b is not None
-        ]
+        combined_sem = combined_profile_sem(
+            native_profile_sem, reference_profile_sem
+        )
         aa_differences = []
         for index in range(0, len(native) - 1, 2):
             aa_differences.append(
@@ -865,8 +876,8 @@ def main():
                 "mann_whitney_p": barrier_p,
             },
             "max_absolute_profile_difference": distribution(profile_differences),
-            "max_combined_profile_sem": max(combined_profile_sem)
-            if combined_profile_sem
+            "max_combined_profile_sem": max(combined_sem)
+            if combined_sem
             else None,
             "aa_profile_noise": distribution(aa_differences),
             "force_calls_per_plane": {

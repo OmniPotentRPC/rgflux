@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import ast
 import copy
 import importlib.util
 import json
@@ -42,6 +43,44 @@ class AnalysisFailureTests(unittest.TestCase):
         cell["max_absolute_profile_difference"]["median"] *= 10.0
         with self.assertRaises(ANALYZE.AnalysisError):
             ANALYZE.validate_result(result)
+
+
+class StrictPairingTests(unittest.TestCase):
+    def test_every_zip_in_the_benchmark_scripts_is_strict(self):
+        offenders = []
+        for path in sorted(ROOT.glob("*.py")):
+            tree = ast.parse(path.read_text(), filename=str(path))
+            for node in ast.walk(tree):
+                if not (
+                    isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Name)
+                    and node.func.id == "zip"
+                ):
+                    continue
+                strict = [
+                    keyword
+                    for keyword in node.keywords
+                    if keyword.arg == "strict"
+                ]
+                if not (
+                    len(strict) == 1
+                    and isinstance(strict[0].value, ast.Constant)
+                    and strict[0].value.value is True
+                ):
+                    offenders.append(f"{path.name}:{node.lineno}")
+        self.assertEqual(offenders, [])
+
+    def test_combined_sem_pairs_every_plane(self):
+        combined = ANALYZE.combined_profile_sem([3.0, None, 6.0], [4.0, 1.0, 8.0])
+        self.assertEqual(combined, [5.0, 10.0])
+
+    def test_combined_sem_is_empty_when_one_engine_has_no_samples(self):
+        self.assertEqual(ANALYZE.combined_profile_sem([], [1.0, 2.0]), [])
+        self.assertEqual(ANALYZE.combined_profile_sem([1.0, 2.0], []), [])
+
+    def test_combined_sem_rejects_length_mismatch(self):
+        with self.assertRaises(ValueError):
+            ANALYZE.combined_profile_sem([1.0, 2.0, 3.0], [1.0, 2.0])
 
 
 if __name__ == "__main__":
