@@ -80,21 +80,29 @@ class VerdictProseTests(unittest.TestCase):
             summary["planned"],
         )
 
-    def test_markdown_states_the_computed_verdict(self):
-        section = "\n".join(
-            ANALYZE.verdict_section(self.statistics, self.result)
+    def test_results_markdown_is_exactly_the_generated_output(self):
+        generated = ANALYZE.render_markdown(self.result)
+        self.assertTrue(generated)
+        self.assertEqual(generated, self.markdown)
+
+    def test_appended_stale_claim_is_not_the_generated_output(self):
+        generated = ANALYZE.render_markdown(self.result)
+        stale = self.markdown + "\nEvery retained cell converged.\n"
+        self.assertNotEqual(generated, stale)
+
+    def test_contradictory_verdict_claim_is_not_the_generated_output(self):
+        generated = ANALYZE.render_markdown(self.result)
+        claim = "the reference accepted every execution."
+        self.assertIn(claim, generated)
+        contradicted = self.markdown.replace(
+            claim, "the reference retained 1 failed executions."
         )
-        self.assertIn(section, self.markdown)
-        self.assertIn(
-            ANALYZE.straight_verdict_paragraph(self.statistics), self.markdown
-        )
-        self.assertIn("the reference accepted every execution.", self.markdown)
-        self.assertIn(
-            "No retained cell is classified as a genuine exponential overflow.",
-            self.markdown,
-        )
-        gates = ANALYZE.validate_result(self.result)["gates_checked"]
-        self.assertIn(f"Coverage gates passed ({gates} checks)", self.markdown)
+        self.assertNotEqual(generated, contradicted)
+
+    def test_markdown_follows_every_change_in_the_result(self):
+        result = copy.deepcopy(self.result)
+        result["execution_summary"]["analysis_validation"]["gates_checked"] += 1
+        self.assertNotEqual(ANALYZE.render_markdown(result), self.markdown)
 
     def test_verdict_prose_follows_a_changed_result(self):
         result = copy.deepcopy(self.result)
