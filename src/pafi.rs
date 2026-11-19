@@ -26,15 +26,31 @@
 //! The term `(x - X) . n'` is the Jacobian of the plane foliation. Omitting it
 //! on a curved path gives a wrong profile.
 //!
-//! The profile is the trapezoid integral of the per-plane mean forces,
-//! `F(s_k) - F(s_0) = sum_j 0.5 (g_{j-1} + g_j) (s_j - s_{j-1})`. The barrier is
-//! `Delta F = max_k F(s_k)` at the dividing plane `s*`, and the normalized rate
-//! is
+//! The plane means `g(s) = dF/ds` are integrated with a cubic Hermite rule.
+//! With two planes the derivative correction cancels and the rule is the
+//! trapezoid rule, exact for linear `g`. With three planes the derivative
+//! window is quadratic, so the rule is exact for quadratic `g`. With four or
+//! more planes the window has at least four nodes, the rule is exact for
+//! cubic `g`, and the global error is `O(h^4)` for smoother `g`. The dividing
+//! plane `s*` is the global maximum of that interpolant, not the highest
+//! sampled plane. The barrier is `Delta F = F(s*) - F(s_0)`.
+//! The reported error at each plane, and at the dividing arc, is the
+//! batch-means error combined with the absolute difference between that
+//! Hermite integral and the trapezoid rule.
 //!
-//! `k = sqrt(k_B T / (2 pi)) exp(-F(s*) / k_B T) / Z_R`
+//! The normalized rate uses the Gaussian reactant integral. With the first
+//! image at the reactant minimum, `F(s_0) = 0`, and `omega_0` the projected
+//! frequency of the mass-weighted reactant Hessian `H` along the unit
+//! mass-weighted path normal `n`, `omega_0^2 = 1 / (n^T H^-1 n)`,
 //!
-//! with `Z_R = 2 * \int_0^{s*} exp(-F(s) / k_B T) ds`, also evaluated by the
-//! trapezoid rule.
+//! `Z_R = sqrt(2 pi k_B T) / omega_0`,
+//! `k = (omega_0 / 2 pi) exp(-Delta F / k_B T)`.
+//!
+//! `Z_R` and `k` are also returned as [`FreeEnergyProfile::reactant_log_partition`]
+//! and [`FreeEnergyProfile::normalized_log_rate`], so a large barrier does not
+//! underflow the reported logarithm. In the harmonic limit this is the
+//! Vineyard rate: the transverse entropy sits in `Delta F`, and `omega_0` is
+//! the curvature of the potential along the path.
 //!
 //! ## What the code does
 //!
@@ -59,7 +75,10 @@
 //!    mean force and its standard error on each plane.
 //! 5. The profile, barrier and rate follow from the plane means. The
 //!    standard errors of the planes are independent and propagate through the
-//!    trapezoid weights and, for the rate, through `Z_R` by the delta method.
+//!    Hermite weights, then combine with the absolute difference between the
+//!    Hermite integral and the trapezoid rule on the same nodes. The reactant
+//!    Hessian is deterministic, so the rate error comes from the barrier
+//!    alone, by the delta method.
 //! 6. With `target_error` set, steps 4 and 5 repeat for up to `max_rounds`
 //!    rounds, each adding `sample_steps` fresh samples to every plane, until
 //!    the standard error of the barrier is at most `target_error`. Without
@@ -84,8 +103,9 @@
 //! - Each plane equilibrates within `burn_in_steps`. The samples start at the
 //!   anchor, so a plane whose thermal centre lies far from its anchor needs a
 //!   long burn-in.
-//! - The free energy rises somewhere along the path, so the dividing plane is
-//!   not the first one. Otherwise `Z_R` is zero and the call fails.
+//! - The first image is the reactant minimum. The rate normalization uses the
+//!   reactant Hessian there. A non-positive curvature along the path normal
+//!   makes `Z_R` undefined and the call fails.
 //!
 //! ## Units
 //!
@@ -95,8 +115,11 @@
 //! - Energies, `free_energy`, `standard_error`, `barrier`, `barrier_error`,
 //!   `target_error` and the energy part of the tolerance are in engine energy
 //!   units. `time_step` is in engine time units.
-//! - [`FreeEnergyProfile::normalized_rate`] has units of inverse engine time
-//!   and [`FreeEnergyProfile::reactant_partition`] has the units of `s`.
+//! - [`FreeEnergyProfile::normalized_rate`] and
+//!   [`FreeEnergyProfile::reactant_frequency`] have units of inverse engine
+//!   time. [`FreeEnergyProfile::reactant_partition`] and
+//!   [`FreeEnergyProfile::dividing_arc`] have the units of `s`.
+//!   [`FreeEnergyProfile::quadrature_residual`] is in engine energy units.
 //! - `k_B T` comes from [`crate::engine::ThermostatConfig::thermal_energy`] of
 //!   the engine and must be positive.
 //!
@@ -108,7 +131,7 @@
 //! takes `&mut dyn DynamicsEngine`. The engine has to report
 //! [`crate::StepReport::constraint_force`] on constrained steps, and provide
 //! [`crate::DynamicsEngine::energy_and_forces`] for the zero-temperature
-//! check.
+//! check and for the reactant Hessian.
 //!
 //! ## Example
 //!
@@ -185,7 +208,7 @@
 //!   molecular dynamics*. The Journal of Chemical Physics, 109, 7737 to 7744.
 //!   <https://doi.org/10.1063/1.477419>
 
-use std::f64::consts::{LN_2, PI, TAU};
+use std::f64::consts::{PI, TAU};
 
 use ndarray::{Array1, ArrayView1, ArrayView2};
 use rgmin::vecops::{dot, nrm2};
@@ -345,31 +368,52 @@ pub struct FreeEnergyProfile {
     /// Integrated free energy `F(s_k) - F(s_0)` at each plane, so the first
     /// entry is `0`.
     pub free_energy: Vec<f64>,
-    /// Standard error of `free_energy` at each plane, propagated from the
-    /// batch-means errors of the plane forces through the trapezoid weights.
-    /// The first entry is `0`.
+    /// Standard error of `free_energy` at each plane. The batch-means errors
+    /// of the plane forces are propagated through the Hermite weights and
+    /// combined, by `hypot`, with the absolute difference between the Hermite
+    /// integral and the trapezoid rule on the same nodes. The first entry is
+    /// `0`. A zero entry means those two contributions are both zero.
     pub standard_error: Vec<f64>,
-    /// Free-energy barrier `Delta F = max_k F(s_k)`, attained at the dividing
-    /// plane `s*`.
+    /// Free-energy barrier `Delta F = F(s*) - F(s_0)` at the dividing plane,
+    /// the global maximum of the interpolated profile.
     pub barrier: f64,
-    /// Standard error of [`Self::barrier`].
+    /// Standard error of [`Self::barrier`]. The propagated plane-force error
+    /// at `s*` is combined, by `hypot`, with the absolute difference between
+    /// the Hermite barrier and the trapezoid integral at the same arc.
     pub barrier_error: f64,
-    /// Index of the dividing plane `s*`: the first plane where
-    /// [`Self::barrier`] is attained.
+    /// Index of the first sampled plane whose free energy is the largest.
+    /// [`Self::dividing_arc`] can lie in an interval that does not touch this
+    /// plane when the interpolant overshoots the samples.
     pub dividing_index: usize,
-    /// Reactant-side normalization
-    /// `Z_R = 2 * \int_0^{s*} exp(-F(s) / k_B T) ds`.
+    /// Arc length `s*` of the dividing plane. It is not restricted to a
+    /// sampled plane.
+    pub dividing_arc: f64,
+    /// Projected reactant frequency `omega_0 = (n^T H^-1 n)^(-1/2)` from the
+    /// mass-weighted reactant Hessian `H` and the unit mass-weighted path
+    /// normal `n` at the first image.
+    pub reactant_frequency: f64,
+    /// Gaussian reactant normalization
+    /// `Z_R = sqrt(2 pi k_B T) / omega_0`, in units of `s`.
     pub reactant_partition: f64,
-    /// Natural logarithm of the reactant-side normalization
-    /// `ln Z_R = ln(2 * \int_0^{s*} exp(-F(s) / k_B T) ds)`.
+    /// Natural logarithm of the reactant normalization,
+    /// `ln Z_R = ln(sqrt(2 pi k_B T) / omega_0)`.
     pub reactant_log_partition: f64,
     /// Normalized PAFI rate
-    /// `k = sqrt(k_B T / (2 pi)) * exp(-F(s*) / k_B T) / Z_R`.
+    /// `k = sqrt(k_B T / (2 pi)) * exp(-Delta F / k_B T) / Z_R
+    ///    = (omega_0 / 2 pi) * exp(-Delta F / k_B T)`.
     pub normalized_rate: f64,
-    /// Natural logarithm of [`Self::normalized_rate`].
+    /// Natural logarithm of [`Self::normalized_rate`],
+    /// `ln k = ln(omega_0 / 2 pi) - Delta F / k_B T`.
+    /// This stays finite when [`Self::normalized_rate`] underflows.
     pub normalized_log_rate: f64,
-    /// Propagated standard error of [`Self::normalized_rate`].
+    /// Propagated standard error of [`Self::normalized_rate`]. The reactant
+    /// Hessian is deterministic, so only [`Self::barrier`] contributes.
     pub normalized_rate_error: f64,
+    /// Largest absolute discrepancy, over the sampled planes, between the
+    /// Hermite integral of `dV/ds` and the anchor energy measured from the
+    /// first plane. The acceptance check itself stays the trapezoid comparison
+    /// of [`PafiConfig::zero_temperature_tol`].
+    pub quadrature_residual: f64,
 }
 
 #[derive(Clone, Debug)]
@@ -689,110 +733,440 @@ fn estimate_plane(samples: &[f64], config: &PafiConfig) -> Result<PlaneEstimate,
     })
 }
 
-fn integrate_means(
-    arc_lengths: &[f64],
-    gradients: &[f64],
-) -> Result<(Vec<f64>, f64, usize), FluxError> {
-    let n = arc_lengths.len();
-    if n < 2 || gradients.len() != n {
-        return Err(FluxError::Shape {
-            expected: n,
-            got: gradients.len(),
-            context: "PAFI mean-profile integration vectors",
-        });
-    }
-    let mut free_energy = vec![0.0_f64; n];
-    for i in 1..n {
-        let ds = arc_lengths[i] - arc_lengths[i - 1];
-        if !ds.is_finite() || ds <= 0.0 {
-            return Err(FluxError::InvalidConfig(
-                "PAFI arc lengths must strictly increase",
-            ));
-        }
-        free_energy[i] = free_energy[i - 1] + 0.5 * (gradients[i - 1] + gradients[i]) * ds;
-        if !free_energy[i].is_finite() {
-            return Err(FluxError::NonFinite("PAFI integrated free energy"));
-        }
-    }
-    let mut dividing = 0usize;
-    for i in 1..n {
-        if free_energy[i] > free_energy[dividing] {
-            dividing = i;
-        }
-    }
-    let barrier = free_energy[dividing];
-    Ok((free_energy, barrier, dividing))
+/// Nodes used to differentiate the mean force at one plane.
+const DERIVATIVE_WINDOW: usize = 5;
+
+/// Samples of the interpolant taken inside one plane interval before the
+/// sign change of the force is refined.
+const MAXIMUM_SCAN_POINTS: usize = 128;
+
+/// Cubic Hermite quadrature of the plane mean forces.
+///
+/// Each interval uses the cubic Hermite interpolant of `g = dF/ds`. The
+/// derivatives at the planes come from Lagrange differentiation on a window
+/// of `min(n, 5)` neighbouring planes. Over an interval of width `h` the
+/// integral is `h/2 (g_k + g_{k+1}) + h^2/12 (g'_k - g'_{k+1})`.
+///
+/// The integral is exact for a polynomial `g` that this window can
+/// differentiate exactly, and [`PafiConfig::planes`] may be as small as 2:
+///
+/// - 2 planes. Both derivatives are the secant between the planes, the
+///   correction vanishes, and the rule is the trapezoid rule. It is exact
+///   for linear `g`.
+/// - 3 planes. The window is quadratic, so the rule is exact for quadratic
+///   `g` and not for a general cubic.
+/// - 4 or more planes. The window has at least 4 nodes, so the rule is exact
+///   for cubic `g`. For a smoother mean force the global error is `O(h^4)`.
+///
+/// Every weight is linear in the plane means, so the same matrix propagates
+/// the plane standard errors.
+#[derive(Clone, Debug)]
+struct Quadrature {
+    arcs: Vec<f64>,
+    derivative: Vec<Vec<f64>>,
+    cumulative: Vec<Vec<f64>>,
 }
 
-fn reactant_log_partition_and_sensitivity(
-    arc_lengths: &[f64],
-    free_energy: &[f64],
-    dividing: usize,
-    kbt: f64,
-) -> Result<(f64, Vec<f64>), FluxError> {
-    let n = free_energy.len();
-    let mut exponent_shift = f64::NEG_INFINITY;
-    for &value in &free_energy[..=dividing] {
-        let exponent = -value / kbt;
-        if !exponent.is_finite() {
-            return Err(FluxError::NonFinite("PAFI reactant partition exponent"));
+#[derive(Clone, Debug)]
+struct DividingPlane {
+    index: usize,
+    arc: f64,
+    free_energy: f64,
+    weights: Vec<f64>,
+}
+
+fn lagrange_derivative_weights(nodes: &[f64], at: usize) -> Vec<f64> {
+    let mut weights = vec![0.0_f64; nodes.len()];
+    for j in 0..nodes.len() {
+        if j == at {
+            weights[j] = (0..nodes.len())
+                .filter(|&m| m != at)
+                .map(|m| 1.0 / (nodes[at] - nodes[m]))
+                .sum();
+        } else {
+            let mut numerator = 1.0_f64;
+            let mut denominator = 1.0_f64;
+            for m in 0..nodes.len() {
+                if m != j {
+                    denominator *= nodes[j] - nodes[m];
+                    if m != at {
+                        numerator *= nodes[at] - nodes[m];
+                    }
+                }
+            }
+            weights[j] = numerator / denominator;
         }
-        exponent_shift = exponent_shift.max(exponent);
+    }
+    weights
+}
+
+impl Quadrature {
+    fn new(arcs: &[f64]) -> Result<Self, FluxError> {
+        let n = arcs.len();
+        if n < 2 {
+            return Err(FluxError::Shape {
+                expected: 2,
+                got: n,
+                context: "PAFI quadrature arc lengths",
+            });
+        }
+        for pair in arcs.windows(2) {
+            let ds = pair[1] - pair[0];
+            if !ds.is_finite() || ds <= 0.0 {
+                return Err(FluxError::InvalidConfig(
+                    "PAFI arc lengths must strictly increase",
+                ));
+            }
+        }
+        let window = n.min(DERIVATIVE_WINDOW);
+        let mut derivative = vec![vec![0.0_f64; n]; n];
+        for (i, row) in derivative.iter_mut().enumerate() {
+            let start = i.saturating_sub(window / 2).min(n - window);
+            let local = lagrange_derivative_weights(&arcs[start..start + window], i - start);
+            for (offset, weight) in local.into_iter().enumerate() {
+                row[start + offset] = weight;
+            }
+        }
+        let mut cumulative = vec![vec![0.0_f64; n]; n];
+        for k in 0..n - 1 {
+            let h = arcs[k + 1] - arcs[k];
+            let mut previous = cumulative[k].clone();
+            previous[k] += 0.5 * h;
+            previous[k + 1] += 0.5 * h;
+            for (j, weight) in previous.iter_mut().enumerate() {
+                *weight += h * h / 12.0 * (derivative[k][j] - derivative[k + 1][j]);
+            }
+            cumulative[k + 1] = previous;
+        }
+        Ok(Self {
+            arcs: arcs.to_vec(),
+            derivative,
+            cumulative,
+        })
     }
 
-    let mut scaled_half_partition = 0.0_f64;
-    let mut scaled_numerator = vec![0.0_f64; n];
-    for i in 1..=dividing {
-        let ds = arc_lengths[i] - arc_lengths[i - 1];
-        let left_exp = (-free_energy[i - 1] / kbt - exponent_shift).exp();
-        let right_exp = (-free_energy[i] / kbt - exponent_shift).exp();
-        let left_weight = 0.5 * ds * left_exp;
-        let right_weight = 0.5 * ds * right_exp;
-        scaled_half_partition += left_weight + right_weight;
-        scaled_numerator[i - 1] += left_weight;
-        scaled_numerator[i] += right_weight;
-    }
-    if !scaled_half_partition.is_finite() || scaled_half_partition <= 0.0 {
-        return Err(FluxError::InvalidConfig(
-            "PAFI reactant partition must be finite and positive",
-        ));
+    fn len(&self) -> usize {
+        self.arcs.len()
     }
 
-    let reactant_log_partition = LN_2 + exponent_shift + scaled_half_partition.ln();
-    if !reactant_log_partition.is_finite() {
-        return Err(FluxError::NonFinite("PAFI reactant log partition"));
-    }
-    let mut d_ln_zr_d_f = vec![0.0_f64; n];
-    for i in 0..=dividing {
-        d_ln_zr_d_f[i] = -scaled_numerator[i] / (kbt * scaled_half_partition);
+    fn integrate(&self, gradients: &[f64]) -> Vec<f64> {
+        self.cumulative
+            .iter()
+            .map(|row| {
+                row.iter()
+                    .zip(gradients)
+                    .map(|(weight, gradient)| weight * gradient)
+                    .sum()
+            })
+            .collect()
     }
 
-    Ok((reactant_log_partition, d_ln_zr_d_f))
+    fn slopes(&self, gradients: &[f64]) -> Vec<f64> {
+        self.derivative
+            .iter()
+            .map(|row| {
+                row.iter()
+                    .zip(gradients)
+                    .map(|(weight, gradient)| weight * gradient)
+                    .sum()
+            })
+            .collect()
+    }
+
+    /// Cumulative-integral weights of `F(s_k + u h_k)`, with `u` in `[0, 1]`.
+    fn interval_weights(&self, k: usize, u: f64) -> Vec<f64> {
+        let h = self.arcs[k + 1] - self.arcs[k];
+        let u2 = u * u;
+        let u3 = u2 * u;
+        let u4 = u2 * u2;
+        let left_value = u - u3 + 0.5 * u4;
+        let right_value = u3 - 0.5 * u4;
+        let left_slope = 0.5 * u2 - 2.0 * u3 / 3.0 + 0.25 * u4;
+        let right_slope = 0.25 * u4 - u3 / 3.0;
+        let mut weights = self.cumulative[k].clone();
+        weights[k] += h * left_value;
+        weights[k + 1] += h * right_value;
+        for (j, weight) in weights.iter_mut().enumerate() {
+            *weight += h
+                * h
+                * (left_slope * self.derivative[k][j] + right_slope * self.derivative[k + 1][j]);
+        }
+        weights
+    }
+
+    fn interpolated_value(
+        &self,
+        k: usize,
+        u: f64,
+        gradients: &[f64],
+        slopes: &[f64],
+        free_energy: &[f64],
+    ) -> f64 {
+        let h = self.arcs[k + 1] - self.arcs[k];
+        let u2 = u * u;
+        let u3 = u2 * u;
+        let u4 = u2 * u2;
+        free_energy[k]
+            + h * (gradients[k] * (u - u3 + 0.5 * u4) + gradients[k + 1] * (u3 - 0.5 * u4))
+            + h * h
+                * (slopes[k] * (0.5 * u2 - 2.0 * u3 / 3.0 + 0.25 * u4)
+                    + slopes[k + 1] * (0.25 * u4 - u3 / 3.0))
+    }
+
+    fn interpolated_force(&self, k: usize, u: f64, gradients: &[f64], slopes: &[f64]) -> f64 {
+        let h = self.arcs[k + 1] - self.arcs[k];
+        let u2 = u * u;
+        let u3 = u2 * u;
+        gradients[k] * (2.0 * u3 - 3.0 * u2 + 1.0)
+            + gradients[k + 1] * (-2.0 * u3 + 3.0 * u2)
+            + h * (slopes[k] * (u3 - 2.0 * u2 + u) + slopes[k + 1] * (u3 - u2))
+    }
+
+    /// Global maximum of the interpolated profile.
+    ///
+    /// Every interval is scanned. The highest sampled plane is recorded
+    /// separately, because an overshoot can put `s*` in an interval that
+    /// does not touch that plane.
+    fn dividing_plane(&self, gradients: &[f64], free_energy: &[f64]) -> DividingPlane {
+        let n = self.len();
+        let mut index = 0usize;
+        for i in 1..n {
+            if free_energy[i] > free_energy[index] {
+                index = i;
+            }
+        }
+        let slopes = self.slopes(gradients);
+        let mut best_interval = 0usize;
+        let mut best_u = 0.0_f64;
+        let mut best_value = free_energy[0];
+        for k in 0..n - 1 {
+            let mut scan_best = 0usize;
+            let mut scan_value = self.interpolated_value(k, 0.0, gradients, &slopes, free_energy);
+            for j in 1..=MAXIMUM_SCAN_POINTS {
+                let u = j as f64 / MAXIMUM_SCAN_POINTS as f64;
+                let value = self.interpolated_value(k, u, gradients, &slopes, free_energy);
+                if value > scan_value {
+                    scan_value = value;
+                    scan_best = j;
+                }
+            }
+            let mut u = scan_best as f64 / MAXIMUM_SCAN_POINTS as f64;
+            if scan_best > 0 && scan_best < MAXIMUM_SCAN_POINTS {
+                let mut lo = (scan_best - 1) as f64 / MAXIMUM_SCAN_POINTS as f64;
+                let mut hi = (scan_best + 1) as f64 / MAXIMUM_SCAN_POINTS as f64;
+                let force_lo = self.interpolated_force(k, lo, gradients, &slopes);
+                let force_hi = self.interpolated_force(k, hi, gradients, &slopes);
+                if force_lo > 0.0 && force_hi < 0.0 {
+                    for _ in 0..80 {
+                        let mid = 0.5 * (lo + hi);
+                        if self.interpolated_force(k, mid, gradients, &slopes) > 0.0 {
+                            lo = mid;
+                        } else {
+                            hi = mid;
+                        }
+                    }
+                    u = 0.5 * (lo + hi);
+                }
+            }
+            let value = self.interpolated_value(k, u, gradients, &slopes, free_energy);
+            if value > best_value {
+                best_interval = k;
+                best_u = u;
+                best_value = value;
+            }
+        }
+        let width = self.arcs[best_interval + 1] - self.arcs[best_interval];
+        DividingPlane {
+            index,
+            arc: self.arcs[best_interval] + best_u * width,
+            free_energy: best_value,
+            weights: self.interval_weights(best_interval, best_u),
+        }
+    }
+}
+
+/// Cumulative integral of a mean force, with the truncation the rule itself
+/// can see.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct IntegralEstimate {
+    /// Integral from the first node to each node. The first entry is `0`.
+    pub values: Vec<f64>,
+    /// Truncation at each node: the absolute difference against an embedded
+    /// lower-order rule on the same nodes. The first entry is `0`. A later
+    /// zero means the two rules agree there.
+    pub error: Vec<f64>,
+}
+
+/// Integrates plane mean forces and reports a truncation taken from the rule.
+///
+/// A backend implements this for its own nodes and weights. The profile uses
+/// [`HermiteIntegral`]. This crate does not provide a Gaussian-process rule.
+pub trait MeanForceIntegral {
+    /// Cumulative integral of `gradients` along strictly increasing `arcs`.
+    ///
+    /// `arcs` and `gradients` have the same length, at least 2.
+    fn cumulative(&self, arcs: &[f64], gradients: &[f64]) -> Result<IntegralEstimate, FluxError>;
+}
+
+/// Cubic Hermite integral of the mean force.
+///
+/// The point values are the profile quadrature. The truncation is the
+/// absolute difference from the trapezoid rule on the same nodes.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct HermiteIntegral;
+
+/// Composite Simpson integral of the mean force.
+///
+/// Each pair of intervals uses the quadratic interpolant of the three plane
+/// values, including unequal spacing. An even plane count has an odd number
+/// of intervals and is rejected, rather than integrated by another rule. The
+/// truncation is the absolute difference from the trapezoid rule.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SimpsonIntegral;
+
+fn same_length(arcs: &[f64], gradients: &[f64]) -> Result<(), FluxError> {
+    if arcs.len() != gradients.len() {
+        return Err(FluxError::Shape {
+            expected: arcs.len(),
+            got: gradients.len(),
+            context: "PAFI mean-force integral",
+        });
+    }
+    Ok(())
+}
+
+fn trapezoid_to(arcs: &[f64], gradients: &[f64], arc: f64) -> f64 {
+    let mut accumulated = 0.0_f64;
+    for k in 0..arcs.len() - 1 {
+        let left = arcs[k];
+        if arc <= left {
+            break;
+        }
+        let width = arcs[k + 1] - left;
+        let fraction = ((arc.min(arcs[k + 1]) - left) / width).clamp(0.0, 1.0);
+        let slope = gradients[k + 1] - gradients[k];
+        accumulated += width * (gradients[k] * fraction + slope * fraction * fraction / 2.0);
+        if arc <= arcs[k + 1] {
+            break;
+        }
+    }
+    accumulated
+}
+
+fn trapezoid_cumulative(arcs: &[f64], gradients: &[f64]) -> Vec<f64> {
+    let mut values = vec![0.0_f64; arcs.len()];
+    for k in 0..arcs.len() - 1 {
+        values[k + 1] = trapezoid_to(arcs, gradients, arcs[k + 1]);
+    }
+    values
+}
+
+/// Integral of the quadratic through `(x0, g0)`, `(x1, g1)`, `(x2, g2)` from
+/// `x0` to `end`.
+fn quadratic_integral(x0: f64, x1: f64, x2: f64, g0: f64, g1: f64, g2: f64, end: f64) -> f64 {
+    let left = x1 - x0;
+    let right = x2 - x1;
+    let divided_left = (g1 - g0) / left;
+    let divided_right = (g2 - g1) / right;
+    let second = (divided_right - divided_left) / (x2 - x0);
+    let h = end - x0;
+    g0 * h + divided_left * h * h / 2.0 + second * (h * h * h / 3.0 - left * h * h / 2.0)
+}
+
+impl MeanForceIntegral for HermiteIntegral {
+    fn cumulative(&self, arcs: &[f64], gradients: &[f64]) -> Result<IntegralEstimate, FluxError> {
+        same_length(arcs, gradients)?;
+        if gradients.iter().any(|gradient| !gradient.is_finite()) {
+            return Err(FluxError::NonFinite("PAFI Hermite mean force"));
+        }
+        let quadrature = Quadrature::new(arcs)?;
+        let values = quadrature.integrate(gradients);
+        let lower = trapezoid_cumulative(arcs, gradients);
+        let error = values
+            .iter()
+            .zip(&lower)
+            .map(|(value, trapezoid)| (value - trapezoid).abs())
+            .collect();
+        Ok(IntegralEstimate { values, error })
+    }
+}
+
+impl MeanForceIntegral for SimpsonIntegral {
+    fn cumulative(&self, arcs: &[f64], gradients: &[f64]) -> Result<IntegralEstimate, FluxError> {
+        same_length(arcs, gradients)?;
+        let n = arcs.len();
+        if n < 3 || n.is_multiple_of(2) {
+            return Err(FluxError::InvalidConfig(
+                "Simpson mean-force integration needs an odd number of planes, at least 3",
+            ));
+        }
+        for pair in arcs.windows(2) {
+            let ds = pair[1] - pair[0];
+            if !ds.is_finite() || ds <= 0.0 {
+                return Err(FluxError::InvalidConfig(
+                    "PAFI arc lengths must strictly increase",
+                ));
+            }
+        }
+        if gradients.iter().any(|gradient| !gradient.is_finite()) {
+            return Err(FluxError::NonFinite("PAFI Simpson mean force"));
+        }
+        let mut values = vec![0.0_f64; n];
+        let mut accumulated = 0.0_f64;
+        for pair in 0..(n - 1) / 2 {
+            let i = pair * 2;
+            let to_middle = quadratic_integral(
+                arcs[i],
+                arcs[i + 1],
+                arcs[i + 2],
+                gradients[i],
+                gradients[i + 1],
+                gradients[i + 2],
+                arcs[i + 1],
+            );
+            let to_end = quadratic_integral(
+                arcs[i],
+                arcs[i + 1],
+                arcs[i + 2],
+                gradients[i],
+                gradients[i + 1],
+                gradients[i + 2],
+                arcs[i + 2],
+            );
+            values[i + 1] = accumulated + to_middle;
+            accumulated += to_end;
+            values[i + 2] = accumulated;
+        }
+        let lower = trapezoid_cumulative(arcs, gradients);
+        let error = values
+            .iter()
+            .zip(&lower)
+            .map(|(value, trapezoid)| (value - trapezoid).abs())
+            .collect();
+        Ok(IntegralEstimate { values, error })
+    }
 }
 
 fn integrate_profile(
-    arc_lengths: &[f64],
+    quadrature: &Quadrature,
     gradients: &[f64],
     gradient_errors: &[f64],
     kbt: f64,
+    reactant_curvature: f64,
 ) -> Result<FreeEnergyProfile, FluxError> {
-    let n = arc_lengths.len();
-    if n < 2 || gradients.len() != n || gradient_errors.len() != n {
+    let n = quadrature.len();
+    if gradients.len() != n || gradient_errors.len() != n {
         return Err(FluxError::Shape {
             expected: n,
             got: gradients.len().max(gradient_errors.len()),
             context: "PAFI profile integration vectors",
         });
     }
-    let (free_energy, barrier, dividing) = integrate_means(arc_lengths, gradients)?;
-
-    let mut integration_weights = vec![vec![0.0_f64; n]; n];
-    for i in 1..n {
-        let previous = integration_weights[i - 1].clone();
-        integration_weights[i] = previous;
-        let ds = arc_lengths[i] - arc_lengths[i - 1];
-        integration_weights[i][i - 1] += 0.5 * ds;
-        integration_weights[i][i] += 0.5 * ds;
+    if !kbt.is_finite() || kbt <= 0.0 {
+        return Err(FluxError::InvalidConfig(
+            "PAFI requires positive thermal energy",
+        ));
     }
     for &sigma in gradient_errors {
         if !sigma.is_finite() || sigma < 0.0 {
@@ -801,20 +1175,58 @@ fn integrate_profile(
             ));
         }
     }
-    let mut standard_error = vec![0.0_f64; n];
-    for i in 1..n {
-        let mut variance = 0.0_f64;
-        for (weight, sigma) in integration_weights[i].iter().zip(gradient_errors) {
-            variance += weight * weight * sigma * sigma;
-        }
-        standard_error[i] = variance.sqrt();
+    if !reactant_curvature.is_finite() || reactant_curvature <= 0.0 {
+        return Err(FluxError::InvalidConfig(
+            "PAFI reactant curvature must be finite and positive",
+        ));
+    }
+    let estimate = HermiteIntegral.cumulative(&quadrature.arcs, gradients)?;
+    let free_energy = estimate.values;
+    if free_energy.iter().any(|value| !value.is_finite())
+        || estimate.error.iter().any(|value| !value.is_finite())
+    {
+        return Err(FluxError::NonFinite("PAFI integrated free energy"));
+    }
+    let dividing = quadrature.dividing_plane(gradients, &free_energy);
+    let propagate = |weights: &[f64]| {
+        weights
+            .iter()
+            .zip(gradient_errors)
+            .map(|(weight, sigma)| weight * weight * sigma * sigma)
+            .sum::<f64>()
+            .sqrt()
+    };
+    let standard_error: Vec<f64> = quadrature
+        .cumulative
+        .iter()
+        .zip(&estimate.error)
+        .map(|(weights, truncation)| propagate(weights).hypot(*truncation))
+        .collect();
+    let barrier = dividing.free_energy;
+    let lower_barrier = trapezoid_to(&quadrature.arcs, gradients, dividing.arc);
+    if !lower_barrier.is_finite() {
+        return Err(FluxError::NonFinite("PAFI trapezoid barrier"));
+    }
+    let barrier_error = propagate(&dividing.weights).hypot((barrier - lower_barrier).abs());
+    if !barrier.is_finite() || !barrier_error.is_finite() || barrier_error < 0.0 {
+        return Err(FluxError::NonFinite("PAFI barrier"));
     }
 
-    let (reactant_log_partition, d_ln_zr_d_f) =
-        reactant_log_partition_and_sensitivity(arc_lengths, &free_energy, dividing, kbt)?;
+    // F(s_0) = 0 and a Gaussian reactant well give
+    // Z_R = sqrt(2 pi kT) / omega_0, so
+    // sqrt(kT / 2 pi) exp(-F* / kT) / Z_R = (omega_0 / 2 pi) exp(-F* / kT).
+    let reactant_frequency = reactant_curvature.sqrt();
+    if !reactant_frequency.is_finite() || reactant_frequency <= 0.0 {
+        return Err(FluxError::InvalidConfig(
+            "PAFI reactant frequency must be finite and positive",
+        ));
+    }
+    let reactant_log_partition = 0.5 * (TAU * kbt).ln() - reactant_frequency.ln();
+    if !reactant_log_partition.is_finite() {
+        return Err(FluxError::NonFinite("PAFI reactant log partition"));
+    }
     let reactant_partition = reactant_log_partition.exp();
-    let barrier_error = standard_error[dividing];
-    let normalized_log_rate = 0.5 * (kbt / TAU).ln() - barrier / kbt - reactant_log_partition;
+    let normalized_log_rate = reactant_frequency.ln() - TAU.ln() - barrier / kbt;
     if !normalized_log_rate.is_finite() {
         return Err(FluxError::InvalidConfig(
             "PAFI normalized log rate must be finite",
@@ -826,24 +1238,7 @@ fn integrate_profile(
             "PAFI normalized rate must be finite",
         ));
     }
-    let mut variance_ln_rate = 0.0_f64;
-    for (gradient_index, sigma) in gradient_errors.iter().copied().enumerate() {
-        let barrier_sensitivity = integration_weights[dividing][gradient_index];
-        let mut partition_log_sensitivity = 0.0_f64;
-        for profile_index in 0..=dividing {
-            partition_log_sensitivity +=
-                d_ln_zr_d_f[profile_index] * integration_weights[profile_index][gradient_index];
-        }
-        let log_rate_sensitivity = -barrier_sensitivity / kbt - partition_log_sensitivity;
-        variance_ln_rate += log_rate_sensitivity * log_rate_sensitivity * sigma * sigma;
-    }
-    let sigma_ln_k = variance_ln_rate.sqrt();
-    if !sigma_ln_k.is_finite() || sigma_ln_k < 0.0 {
-        return Err(FluxError::InvalidConfig(
-            "PAFI normalized-rate logarithmic error must be finite and non-negative",
-        ));
-    }
-    let normalized_rate_error = normalized_rate * sigma_ln_k;
+    let normalized_rate_error = normalized_rate * barrier_error / kbt;
     if !normalized_rate_error.is_finite() || normalized_rate_error < 0.0 {
         return Err(FluxError::InvalidConfig(
             "PAFI normalized-rate standard error must be finite and non-negative",
@@ -851,18 +1246,126 @@ fn integrate_profile(
     }
 
     Ok(FreeEnergyProfile {
-        arc_lengths: arc_lengths.to_vec(),
+        arc_lengths: quadrature.arcs.clone(),
         free_energy,
         standard_error,
         barrier,
         barrier_error,
-        dividing_index: dividing,
+        dividing_index: dividing.index,
+        dividing_arc: dividing.arc,
+        reactant_frequency,
         reactant_partition,
         reactant_log_partition,
         normalized_rate,
         normalized_log_rate,
         normalized_rate_error,
+        quadrature_residual: 0.0,
     })
+}
+
+/// Squared projected reactant frequency `omega_0^2 = 1 / (n^T H^-1 n)`.
+///
+/// `H` is the mass-weighted Hessian at the first path image and `n` the unit
+/// mass-weighted path tangent there. `H u = n` is solved by conjugate
+/// gradients. The products are central differences of
+/// [`DynamicsEngine::energy_and_forces`], so the solve stays generic over the
+/// engine trait. [`rgsaddle::numerical_hvp`] is not used: it requires a
+/// shared [`rgsaddle::PointSurface`], and this path only has a
+/// [`DynamicsEngine`].
+fn reactant_curvature<E: DynamicsEngine + ?Sized>(
+    engine: &mut E,
+    geometry: &PlaneGeometry,
+) -> Result<f64, FluxError> {
+    let dof = engine.dof();
+    let root_mass: Array1<f64> = engine.masses().mapv(f64::sqrt);
+    let origin = geometry.anchor.clone();
+    let reach = origin
+        .iter()
+        .fold(0.0_f64, |acc, value| acc.max(value.abs()));
+    // Central difference of a gradient: the step that balances truncation
+    // and roundoff is the cube root of machine epsilon, scaled by the
+    // coordinate magnitude.
+    let step = f64::EPSILON.cbrt() * (1.0 + reach);
+
+    let mut normal = Array1::zeros(dof);
+    for i in 0..dof {
+        normal[i] = root_mass[i] * geometry.tangent[i];
+    }
+    let normal_norm = nrm2(normal.view());
+    if !normal_norm.is_finite() || normal_norm <= f64::MIN_POSITIVE.sqrt() {
+        return Err(FluxError::InvalidConfig("PAFI reactant normal underflowed"));
+    }
+    normal.mapv_inplace(|value| value / normal_norm);
+
+    let mut apply = |direction: &Array1<f64>| -> Result<Array1<f64>, FluxError> {
+        let mut displacement = Array1::zeros(dof);
+        for i in 0..dof {
+            displacement[i] = direction[i] / root_mass[i];
+        }
+        let length = nrm2(displacement.view());
+        if !length.is_finite() || length <= f64::MIN_POSITIVE.sqrt() {
+            return Err(FluxError::InvalidConfig(
+                "PAFI reactant Hessian direction underflowed",
+            ));
+        }
+        let scale = step / length;
+        let mut gradients = Vec::with_capacity(2);
+        for sign in [1.0_f64, -1.0] {
+            let probe = &origin + &displacement.mapv(|value| sign * scale * value);
+            engine.set_positions(probe.view())?;
+            let (_, forces) = engine.energy_and_forces()?;
+            gradients.push(forces.mapv(|force| -force));
+        }
+        let mut product = Array1::zeros(dof);
+        for i in 0..dof {
+            product[i] = (gradients[0][i] - gradients[1][i]) / (2.0 * scale) / root_mass[i];
+        }
+        if product.iter().any(|value| !value.is_finite()) {
+            return Err(FluxError::NonFinite("PAFI reactant Hessian product"));
+        }
+        Ok(product)
+    };
+
+    let tolerance = f64::EPSILON.sqrt();
+    let mut solution = Array1::<f64>::zeros(dof);
+    let mut residual = normal.clone();
+    let mut search = residual.clone();
+    let mut residual_sq = dot(residual.view(), residual.view());
+    let iterations = (2 * dof).max(8);
+    for _ in 0..iterations {
+        if residual_sq.sqrt() <= tolerance {
+            break;
+        }
+        let image = apply(&search)?;
+        let curvature = dot(search.view(), image.view());
+        if !curvature.is_finite() || curvature <= 0.0 {
+            return Err(FluxError::InvalidConfig(
+                "PAFI reactant Hessian is not positive definite along the path normal",
+            ));
+        }
+        let alpha = residual_sq / curvature;
+        solution.scaled_add(alpha, &search);
+        residual.scaled_add(-alpha, &image);
+        let next_sq = dot(residual.view(), residual.view());
+        if !next_sq.is_finite() {
+            return Err(FluxError::NonFinite("PAFI reactant Hessian residual"));
+        }
+        let beta = next_sq / residual_sq;
+        residual_sq = next_sq;
+        search = &residual + &search.mapv(|value| beta * value);
+    }
+    if residual_sq.sqrt() > tolerance {
+        return Err(FluxError::InvalidConfig(
+            "PAFI reactant Hessian solve did not converge",
+        ));
+    }
+    let inverse_curvature = dot(normal.view(), solution.view());
+    if !inverse_curvature.is_finite() || inverse_curvature <= 0.0 {
+        return Err(FluxError::InvalidConfig(
+            "PAFI reactant curvature along the path normal must be positive",
+        ));
+    }
+    Ok(1.0 / inverse_curvature)
 }
 
 /// Relative disagreement between the trapezoid integral of `dV/ds` over the
@@ -897,8 +1400,8 @@ fn path_force_relative_error(arcs: &[f64], energies: &[f64], gradients: &[f64]) 
 ///   coincide in the mass-weighted metric,
 /// - the thermal energy `k_B T` of the engine is not positive,
 /// - the zero-temperature check of [`PafiConfig::zero_temperature_tol`] fails,
-/// - a plane normal degenerates, or the dividing plane is the first plane so
-///   that the reactant partition `Z_R` is not finite and positive.
+/// - a plane normal degenerates, or the reactant curvature along the first
+///   path normal is not finite and positive, so `Z_R` is not defined.
 ///
 /// Returns [`FluxError::EmptyInput`] for an empty coordinate axis and
 /// [`FluxError::Shape`] when the engine masses do not match the path
@@ -972,6 +1475,17 @@ pub fn pafi_profile<E: DynamicsEngine + ?Sized>(
                 "PAFI zero-temperature path-force quadrature exceeds tolerance",
             ));
         }
+        let quadrature = Quadrature::new(&arcs)?;
+        let integrated_energy = quadrature.integrate(&path_gradients);
+        let mut quadrature_residual = 0.0_f64;
+        for (integral, energy) in integrated_energy.iter().zip(path_energies.iter()) {
+            let discrepancy = (integral - (energy - path_energies[0])).abs();
+            if !discrepancy.is_finite() {
+                return Err(FluxError::NonFinite("PAFI path-force quadrature residual"));
+            }
+            quadrature_residual = quadrature_residual.max(discrepancy);
+        }
+        let curvature = reactant_curvature(engine, &geometries[0])?;
 
         let mut plane_samples = vec![Vec::new(); geometries.len()];
         let mut final_profile = None;
@@ -989,7 +1503,8 @@ pub fn pafi_profile<E: DynamicsEngine + ?Sized>(
                 .iter()
                 .map(|estimate| estimate.standard_error)
                 .collect();
-            let profile = integrate_profile(&arcs, &gradients, &errors, kbt)?;
+            let mut profile = integrate_profile(&quadrature, &gradients, &errors, kbt, curvature)?;
+            profile.quadrature_residual = quadrature_residual;
             let target_reached = match config.target_error {
                 Some(target) => profile.barrier_error <= target,
                 None => true,
@@ -1049,7 +1564,13 @@ mod tests {
             &self,
             x: ArrayView1<'_, f64>,
         ) -> Result<(f64, Array1<f64>), rgsaddle::SaddleError> {
-            Ok((x[0], Array1::from_vec(vec![0.98])))
+            // The energy rises by 1. A constant gradient of 0.98 leaves a
+            // discrepancy of 0.02. Adding that same shortfall as a slope
+            // recenters the gradient so the trapezoid integral is still 0.98,
+            // and it keeps the reactant curvature positive once the check passes.
+            let shortfall = 0.02;
+            let gradient = (1.0 - shortfall) + shortfall * (x[0] - 0.5);
+            Ok((x[0], Array1::from_vec(vec![gradient])))
         }
     }
 
@@ -1157,16 +1678,92 @@ mod tests {
         }
     }
 
+    fn profile_from(
+        arcs: &[f64],
+        gradients: &[f64],
+        errors: &[f64],
+        kbt: f64,
+        curvature: f64,
+    ) -> Result<FreeEnergyProfile, FluxError> {
+        let quadrature = Quadrature::new(arcs)?;
+        integrate_profile(&quadrature, gradients, errors, kbt, curvature)
+    }
+
     #[test]
     fn profile_uses_interior_maximum_and_accepts_exact_errors() {
+        // The four means lie on the cubic g(s) = 2 - 4s/3 - s^2 + s^3/3, which
+        // the Hermite rule integrates exactly: F(s) = 2s - 2s^2/3 - s^3/3 +
+        // s^4/12 peaks at s = 1 with F = 13/12.
         let arcs = [0.0, 1.0, 2.0, 3.0];
         let gradients = [2.0, 0.0, -2.0, -2.0];
         let errors = [0.0; 4];
-        let profile = integrate_profile(&arcs, &gradients, &errors, 1.0).expect("profile");
+        let profile = profile_from(&arcs, &gradients, &errors, 1.0, 4.0).expect("profile");
         assert_eq!(profile.dividing_index, 1);
-        assert_eq!(profile.barrier, 1.0);
-        assert_eq!(profile.barrier_error, 0.0);
-        assert_eq!(profile.normalized_rate_error, 0.0);
+        assert_abs_diff_eq!(profile.dividing_arc, 1.0, epsilon = 1.0e-12);
+        assert_abs_diff_eq!(profile.barrier, 13.0 / 12.0, epsilon = 1.0e-12);
+        let trapezoid_barrier = 0.5 * (gradients[0] + gradients[1]);
+        let truncation = (profile.barrier - trapezoid_barrier).abs();
+        assert!(truncation > 0.0);
+        assert_abs_diff_eq!(profile.barrier_error, truncation, epsilon = 1.0e-12);
+        assert_abs_diff_eq!(
+            profile.normalized_rate_error,
+            profile.normalized_rate * profile.barrier_error,
+            epsilon = 1.0e-12
+        );
+        let frequency = 4.0_f64.sqrt();
+        let log_partition = 0.5 * (TAU * 1.0).ln() - frequency.ln();
+        assert_abs_diff_eq!(
+            profile.reactant_log_partition,
+            log_partition,
+            epsilon = 1.0e-12
+        );
+        assert_abs_diff_eq!(
+            profile.normalized_log_rate,
+            frequency.ln() - TAU.ln() - profile.barrier,
+            epsilon = 1.0e-12
+        );
+    }
+
+    #[test]
+    fn hermite_rejects_non_finite_gradients() {
+        let nan = HermiteIntegral
+            .cumulative(&[0.0, 1.0, 2.0], &[0.0, f64::NAN, 1.0])
+            .expect_err("nan gradient");
+        assert_eq!(nan, FluxError::NonFinite("PAFI Hermite mean force"));
+
+        let inf = HermiteIntegral
+            .cumulative(&[0.0, 1.0, 2.0], &[0.0, f64::INFINITY, 1.0])
+            .expect_err("infinite gradient");
+        assert_eq!(inf, FluxError::NonFinite("PAFI Hermite mean force"));
+    }
+
+    #[test]
+    fn simpson_rejects_an_even_plane_count_and_integrates_cubics() {
+        let even = SimpsonIntegral
+            .cumulative(&[0.0, 1.0, 2.0, 3.0], &[0.0, 1.0, 2.0, 3.0])
+            .expect_err("even plane count");
+        assert_eq!(
+            even,
+            FluxError::InvalidConfig(
+                "Simpson mean-force integration needs an odd number of planes, at least 3"
+            )
+        );
+
+        let arcs: Vec<f64> = (0..5).map(|k| 0.5 * f64::from(k)).collect();
+        let cubic = |s: f64| 1.0 - 2.0 * s + 0.5 * s * s + 0.75 * s * s * s;
+        let integral = |s: f64| s - s * s + s * s * s / 6.0 + 0.1875 * s * s * s * s;
+        let gradients: Vec<f64> = arcs.iter().map(|&s| cubic(s)).collect();
+        let estimate = SimpsonIntegral
+            .cumulative(&arcs, &gradients)
+            .expect("simpson");
+        for (k, (value, &s)) in estimate.values.iter().zip(&arcs).enumerate() {
+            if k % 2 == 0 {
+                assert_abs_diff_eq!(*value, integral(s), epsilon = 1.0e-12);
+            }
+        }
+        assert_eq!(estimate.error[0], 0.0);
+        assert!(estimate.error[4] > 0.0);
+        assert!(estimate.error.iter().all(|error| error.is_finite()));
     }
 
     fn quartic_gradient_slope(x: f64) -> f64 {
@@ -1284,61 +1881,133 @@ mod tests {
     }
 
     #[test]
-    fn reactant_log_partition_stays_finite_for_deep_free_energy_wells() {
+    fn log_rate_stays_finite_when_the_barrier_underflows() {
         let arcs = [0.0, 1.0, 2.0, 3.0];
-        let gradients = [-800.0, -800.0, 800.0, 820.0];
+        let gradients = [800.0, 800.0, 800.0, 800.0];
         let errors = [0.0; 4];
-        let profile = integrate_profile(&arcs, &gradients, &errors, 1.0).expect("profile");
-
-        let mut naive_half_partition = 0.0_f64;
-        for i in 1..=profile.dividing_index {
-            let ds = arcs[i] - arcs[i - 1];
-            let left = (-profile.free_energy[i - 1]).exp();
-            let right = (-profile.free_energy[i]).exp();
-            naive_half_partition += 0.5 * ds * (left + right);
-        }
-        assert!(!naive_half_partition.is_finite());
-
-        let expected_ln_partition = 800.0 + (4.0 + (-800.0_f64).exp() + (-810.0_f64).exp()).ln();
+        let curvature = 4.0;
+        let profile = profile_from(&arcs, &gradients, &errors, 1.0, curvature).expect("profile");
+        let frequency = curvature.sqrt();
+        let log_partition = 0.5 * (TAU).ln() - frequency.ln();
+        let log_rate = frequency.ln() - TAU.ln() - profile.barrier;
+        assert!(profile.barrier > 700.0);
+        assert!(profile.normalized_rate <= f64::MIN_POSITIVE);
         assert_abs_diff_eq!(
             profile.reactant_log_partition,
-            expected_ln_partition,
-            epsilon = f64::EPSILON * expected_ln_partition.abs()
+            log_partition,
+            epsilon = f64::EPSILON * log_partition.abs()
         );
-        assert!(profile.normalized_log_rate.is_finite());
+        assert_abs_diff_eq!(profile.normalized_log_rate, log_rate, epsilon = 1.0e-9);
+        assert!(profile.reactant_partition.is_finite() && profile.reactant_partition > 0.0);
     }
 
     #[test]
-    fn log_partition_matches_legacy_path_for_well_conditioned_profile() {
+    fn log_fields_match_the_projected_frequency_formula() {
         let arcs = [0.0, 0.5, 1.0, 1.5];
         let gradients = [0.3, 0.1, -0.4, -0.6];
         let errors = [0.02, 0.03, 0.01, 0.02];
-        let profile = integrate_profile(&arcs, &gradients, &errors, 1.2).expect("profile");
-
-        let mut legacy_half_partition = 0.0_f64;
-        for i in 1..=profile.dividing_index {
-            let ds = arcs[i] - arcs[i - 1];
-            let left = (-profile.free_energy[i - 1] / 1.2).exp();
-            let right = (-profile.free_energy[i] / 1.2).exp();
-            legacy_half_partition += 0.5 * ds * (left + right);
-        }
-        let legacy_partition = 2.0 * legacy_half_partition;
-        let legacy_rate = (1.2 / TAU).sqrt() * (-profile.barrier / 1.2).exp() / legacy_partition;
-
+        let kbt = 1.2;
+        let curvature = 5.0;
+        let profile = profile_from(&arcs, &gradients, &errors, kbt, curvature).expect("profile");
+        let frequency = curvature.sqrt();
+        let partition = (TAU * kbt).sqrt() / frequency;
+        let rate = frequency / TAU * (-profile.barrier / kbt).exp();
         assert_abs_diff_eq!(
             profile.reactant_partition,
-            legacy_partition,
-            epsilon = f64::EPSILON * legacy_partition.abs()
-        );
-        assert_abs_diff_eq!(
-            profile.normalized_rate,
-            legacy_rate,
-            epsilon = f64::EPSILON * legacy_rate.abs()
+            partition,
+            epsilon = f64::EPSILON * partition.abs()
         );
         assert_abs_diff_eq!(
             profile.reactant_log_partition,
-            legacy_partition.ln(),
-            epsilon = 16.0 * f64::EPSILON * legacy_partition.ln().abs().max(1.0)
+            partition.ln(),
+            epsilon = 16.0 * f64::EPSILON * partition.ln().abs().max(1.0)
+        );
+        assert_abs_diff_eq!(
+            profile.normalized_rate,
+            rate,
+            epsilon = f64::EPSILON * rate.abs()
+        );
+        assert_abs_diff_eq!(
+            profile.normalized_log_rate,
+            rate.ln(),
+            epsilon = 16.0 * f64::EPSILON * rate.ln().abs().max(1.0)
+        );
+        let flux = (kbt / TAU).sqrt() * (-profile.barrier / kbt).exp() / profile.reactant_partition;
+        assert_abs_diff_eq!(
+            profile.normalized_rate,
+            flux,
+            epsilon = f64::EPSILON * rate.abs()
+        );
+    }
+
+    fn polynomial_integral_error(planes: usize, degree: u32) -> f64 {
+        let arcs: Vec<f64> = (0..planes)
+            .map(|k| f64::from(k as u32) / f64::from((planes - 1) as u32))
+            .collect();
+        let gradients: Vec<f64> = arcs.iter().map(|s| s.powi(degree as i32)).collect();
+        let quadrature = Quadrature::new(&arcs).expect("quadrature");
+        let integrated = quadrature.integrate(&gradients);
+        arcs.iter()
+            .zip(integrated)
+            .map(|(s, value)| {
+                let exact = if degree == 0 {
+                    *s
+                } else {
+                    s.powi(degree as i32 + 1) / f64::from(degree + 1)
+                };
+                (value - exact).abs()
+            })
+            .fold(0.0_f64, f64::max)
+    }
+
+    #[test]
+    fn hermite_exactness_follows_the_plane_count() {
+        let roundoff = 1.0e-12;
+        assert!(polynomial_integral_error(2, 1) <= roundoff);
+        assert!(polynomial_integral_error(2, 2) > roundoff);
+        assert!(polynomial_integral_error(3, 2) <= roundoff);
+        assert!(polynomial_integral_error(3, 3) > roundoff);
+        assert!(polynomial_integral_error(4, 3) <= roundoff);
+        assert!(polynomial_integral_error(4, 4) > roundoff);
+        assert!(polynomial_integral_error(7, 3) <= roundoff);
+    }
+
+    #[test]
+    fn dividing_plane_search_finds_an_overshoot_away_from_the_highest_sample() {
+        // Seven samples. Plane 0 holds the highest sample, while the cubic
+        // Hermite interpolant on the interval between planes 2 and 3 rises
+        // above every sample. A search that only inspects the intervals next
+        // to the highest sample stays on the first interval.
+        let arcs: Vec<f64> = (0..7).map(f64::from).collect();
+        let gradients = [1.0, -1.0, 4.0, -4.0, -3.0, -2.0, -1.0];
+        let errors = [0.0; 7];
+        let profile = profile_from(&arcs, &gradients, &errors, 1.0, 1.0).expect("profile");
+        let highest_sample = profile
+            .free_energy
+            .iter()
+            .enumerate()
+            .max_by(|left, right| left.1.total_cmp(right.1))
+            .expect("a sample")
+            .0;
+        assert_eq!(highest_sample, 0);
+        assert_eq!(profile.dividing_index, 0);
+        assert!(profile.dividing_arc > arcs[2] && profile.dividing_arc < arcs[3]);
+        assert!(profile.barrier > profile.free_energy[0]);
+    }
+
+    #[test]
+    fn dividing_plane_between_planes_removes_the_grid_maximum_bias() {
+        let arcs: Vec<f64> = (0..8).map(|k| f64::from(k) * 0.5).collect();
+        let peak = 1.7_f64;
+        let gradients: Vec<f64> = arcs.iter().map(|s| -(s - peak)).collect();
+        let profile = profile_from(&arcs, &gradients, &[0.0; 8], 1.0, 1.0).expect("profile");
+        assert_abs_diff_eq!(profile.dividing_arc, peak, epsilon = 1.0e-10);
+        assert_abs_diff_eq!(profile.barrier, peak * peak / 2.0, epsilon = 1.0e-10);
+        assert!(
+            profile
+                .free_energy
+                .iter()
+                .all(|value| *value < profile.barrier)
         );
     }
 
@@ -1347,25 +2016,40 @@ mod tests {
         let arcs = [0.0, 1.0, 2.0];
         let gradients = [0.0, f64::NAN, 1.0];
         let errors = [0.0, 0.0, 0.0];
-        let result = integrate_profile(&arcs, &gradients, &errors, 1.0);
+        let result = profile_from(&arcs, &gradients, &errors, 1.0, 1.0);
+        assert_eq!(result, Err(FluxError::NonFinite("PAFI Hermite mean force")));
+    }
+
+    #[test]
+    fn non_positive_reactant_curvature_is_rejected() {
+        let arcs = [0.0, 1.0, 2.0];
+        let gradients = [1.0, 0.0, -1.0];
+        let errors = [0.0, 0.0, 0.0];
+        let result = profile_from(&arcs, &gradients, &errors, 1.0, 0.0);
         assert_eq!(
             result,
-            Err(FluxError::NonFinite("PAFI integrated free energy"))
+            Err(FluxError::InvalidConfig(
+                "PAFI reactant curvature must be finite and positive"
+            ))
         );
     }
 
     #[test]
-    fn zero_width_reactant_partition_is_rejected() {
+    fn a_descending_profile_keeps_the_gaussian_partition() {
         let arcs = [0.0, 1.0, 2.0];
         let gradients = [-1.0, -1.0, -1.0];
         let errors = [0.0, 0.0, 0.0];
-        let result = integrate_profile(&arcs, &gradients, &errors, 1.0);
-        assert_eq!(
-            result,
-            Err(FluxError::InvalidConfig(
-                "PAFI reactant partition must be finite and positive"
-            ))
+        let curvature = 2.0;
+        let profile = profile_from(&arcs, &gradients, &errors, 1.0, curvature).expect("profile");
+        assert_eq!(profile.dividing_index, 0);
+        assert_eq!(profile.barrier, 0.0);
+        let partition = (TAU / curvature).sqrt();
+        assert_abs_diff_eq!(
+            profile.reactant_partition,
+            partition,
+            epsilon = f64::EPSILON * partition
         );
+        assert!(profile.normalized_log_rate.is_finite());
     }
 
     #[test]
