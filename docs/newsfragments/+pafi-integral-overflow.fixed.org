@@ -1,0 +1,1 @@
+PAFI Hermite and Simpson cumulative mean-force integrals now reject finite inputs whose intermediate integration or truncation values overflow, returning =FluxError::NonFinite= instead of a successful non-finite estimate.

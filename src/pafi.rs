@@ -1069,6 +1069,25 @@ fn trapezoid_cumulative(arcs: &[f64], gradients: &[f64]) -> Vec<f64> {
     values
 }
 
+fn integral_estimate(
+    values: Vec<f64>,
+    lower: Vec<f64>,
+    context: &'static str,
+) -> Result<IntegralEstimate, FluxError> {
+    if values.iter().chain(&lower).any(|value| !value.is_finite()) {
+        return Err(FluxError::NonFinite(context));
+    }
+    let error: Vec<f64> = values
+        .iter()
+        .zip(&lower)
+        .map(|(value, trapezoid)| (value - trapezoid).abs())
+        .collect();
+    if error.iter().any(|value| !value.is_finite()) {
+        return Err(FluxError::NonFinite(context));
+    }
+    Ok(IntegralEstimate { values, error })
+}
+
 /// Integral of the quadratic through `(x0, g0)`, `(x1, g1)`, `(x2, g2)` from
 /// `x0` to `end`.
 fn quadratic_integral(x0: f64, x1: f64, x2: f64, g0: f64, g1: f64, g2: f64, end: f64) -> f64 {
@@ -1090,12 +1109,7 @@ impl MeanForceIntegral for HermiteIntegral {
         let quadrature = Quadrature::new(arcs)?;
         let values = quadrature.integrate(gradients);
         let lower = trapezoid_cumulative(arcs, gradients);
-        let error = values
-            .iter()
-            .zip(&lower)
-            .map(|(value, trapezoid)| (value - trapezoid).abs())
-            .collect();
-        Ok(IntegralEstimate { values, error })
+        integral_estimate(values, lower, "PAFI Hermite mean-force integral")
     }
 }
 
@@ -1146,12 +1160,7 @@ impl MeanForceIntegral for SimpsonIntegral {
             values[i + 2] = accumulated;
         }
         let lower = trapezoid_cumulative(arcs, gradients);
-        let error = values
-            .iter()
-            .zip(&lower)
-            .map(|(value, trapezoid)| (value - trapezoid).abs())
-            .collect();
-        Ok(IntegralEstimate { values, error })
+        integral_estimate(values, lower, "PAFI Simpson mean-force integral")
     }
 }
 
@@ -1742,6 +1751,28 @@ mod tests {
             .cumulative(&[0.0, 1.0, 2.0], &[0.0, f64::INFINITY, 1.0])
             .expect_err("infinite gradient");
         assert_eq!(inf, FluxError::NonFinite("PAFI Hermite mean force"));
+    }
+
+    #[test]
+    fn mean_force_integrals_reject_finite_input_overflow() {
+        let hermite = HermiteIntegral
+            .cumulative(&[0.0, f64::MAX], &[f64::MAX, f64::MAX])
+            .expect_err("hermite overflow");
+        assert_eq!(
+            hermite,
+            FluxError::NonFinite("PAFI Hermite mean-force integral")
+        );
+
+        let simpson = SimpsonIntegral
+            .cumulative(
+                &[0.0, f64::MAX / 2.0, f64::MAX],
+                &[f64::MAX, f64::MAX, f64::MAX],
+            )
+            .expect_err("simpson overflow");
+        assert_eq!(
+            simpson,
+            FluxError::NonFinite("PAFI Simpson mean-force integral")
+        );
     }
 
     #[test]
