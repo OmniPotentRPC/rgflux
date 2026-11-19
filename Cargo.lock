@@ -420,7 +420,8 @@ checksum = "b6d2cec3eae94f9f509c767b45932f1ada8350c4bdb85af2fcab4a3c14807981"
 [[package]]
 name = "linkcell"
 version = "0.3.5"
-source = "git+https://github.com/d-SEAMS/linkcell?rev=49f94dd2d2ff1e0d854cebc8a664599abe569156#49f94dd2d2ff1e0d854cebc8a664599abe569156"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3be829588b059e10e38b96631daa49a00ec641c9cc3a829476d9b231efd6ef08"
 dependencies = [
  "minimage",
 ]
@@ -746,7 +747,8 @@ dependencies = [
 [[package]]
 name = "rgmin"
 version = "0.6.0"
-source = "git+https://github.com/OmniPotentRPC/rgmin?rev=eb8d3e4123183bd3f5ca82852332eeddb5d17f54#eb8d3e4123183bd3f5ca82852332eeddb5d17f54"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3448f6050bc635d3341d5048354f50399f5cfb37bf0c9577f7d6262114e706e1"
 dependencies = [
  "dlpk",
  "eindir-core",
@@ -760,7 +762,8 @@ dependencies = [
 [[package]]
 name = "rgpot-core"
 version = "3.7.0"
-source = "git+https://github.com/OmniPotentRPC/rgpot?rev=424629e5ba9c0948b8d6224f5b49c014ffb4ac7c#424629e5ba9c0948b8d6224f5b49c014ffb4ac7c"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f5c7c92c678ce301a4ae58e884ae5494b3620c5f66ab0d206591467f2dddbe6f"
 dependencies = [
  "capnp",
  "capnpc",
@@ -772,7 +775,8 @@ dependencies = [
 [[package]]
 name = "rgsaddle"
 version = "0.5.0"
-source = "git+https://github.com/OmniPotentRPC/rgsaddle?rev=92a74493d16364a1ba8542a63598ce8bcee5387c#92a74493d16364a1ba8542a63598ce8bcee5387c"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "401a9ad5cb886854c4dbc02aa00e7ce25efd3f44fda00d96df952038206aa68b"
 dependencies = [
  "dlpk",
  "eindir-core",

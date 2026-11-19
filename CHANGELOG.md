@@ -21,7 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Depend on the crates.io releases of `rgsaddle` 0.5.0, `rgmin` 0.6.0, and `rgpot-core` 3.7.0 with caret requirements, so downstream builds can unify patch releases. Git revisions remain `[patch.crates-io]` overrides for local builds. Only the `lammpc` feature enables the `rgpot-core` `profile` and `schema` features, so `rgpot` and `rgpot-session` build without the `capnp` CLI.
+- Depend on the crates.io releases of `rgsaddle` 0.5.0, `rgmin` 0.6.0, and `rgpot-core` 3.7.0 with caret requirements, so downstream builds can unify patch releases. Only the `lammpc` feature enables the `rgpot-core` `profile` and `schema` features, so `rgpot` and `rgpot-session` build without the `capnp` CLI.
 - The value stored by default in `PafiConfig::zero_temperature_tol` is about 2.6% instead of 1%. The check divides the path-force integral discrepancy by the larger of one engine energy unit and the endpoint energy change magnitude. While the field retains its default value, the effective tolerance scales as `2 (pi^2 / 12) / (planes - 1)^2`; an explicitly different value is used unchanged.
 - `cargo test` builds with `opt-level = 2` through `[profile.test]`, and the curved PAFI integration test compares the last free-energy increment with the one from a longer path, so natural spline endpoints fail it. It takes 0.7 s instead of 44 s.
 

@@ -34,7 +34,7 @@ RUSTDOCFLAGS="-D warnings" cargo doc --locked --no-deps --all-features --documen
 
 * Dependency pins
 
-=rgsaddle=, =rgmin=, and =rgpot-core= are required from crates.io with caret requirements (=version = "0.5.0"= and the matching requirements for the other two), so downstream builds can unify patch releases. =[patch.crates-io]= overrides those crates for local builds. Every git override pins a full 40-hex commit =rev=, never a branch or tag name, and the crate version at that commit must satisfy the caret requirement. =ci/check_dependency_pins.py= enforces those rules and verifies that =Cargo.lock= and =cargo tree -d --features rgpot,rgpot-session= resolve a single copy of =rgflux=, =rgsaddle=, =rgmin=, =rgpot-core=, =eindir-core=, =dlpk=, =linkcell= and =minimage=. The =lammpc= feature is left out because it links =liblammpc=.
+=rgsaddle=, =rgmin=, and =rgpot-core= are required from crates.io with caret requirements (=version = "0.5.0"= and the matching requirements for the other two), so downstream builds can unify patch releases. =Cargo.lock= resolves them from crates.io, and the manifest has no git dependency and no =[patch.crates-io]= table. A git source that does appear must pin a full 40-hex commit =rev=, never a branch or tag name. =ci/check_dependency_pins.py= enforces those rules, checks that each locked version satisfies its requirement, and verifies that =Cargo.lock= and =cargo tree -d --features rgpot,rgpot-session= resolve a single copy of =rgflux=, =rgsaddle=, =rgmin=, =rgpot-core=, =eindir-core=, =dlpk=, =linkcell= and =minimage=. The =lammpc= feature is left out because it links =liblammpc=.
 
 * Changelog fragments
 
