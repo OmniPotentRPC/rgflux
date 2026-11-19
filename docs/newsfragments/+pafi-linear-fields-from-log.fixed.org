@@ -1,0 +1,4 @@
+=reactant_log_partition= and =normalized_log_rate= stay authoritative
+for every finite value. =reactant_partition=, =normalized_rate=, and
+=normalized_rate_error= are =Option<f64>= and are =None= when the linear
+value overflows or underflows, without rejecting the profile.
