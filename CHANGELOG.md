@@ -5,6 +5,18 @@ All notable changes to `rgflux` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.1] - 2026-11-19
+
+### Changed
+
+- `Cargo.toml` and `Cargo.lock` resolve `rgsaddle` 0.5.0, `rgmin` 0.6.0, `rgpot-core` 3.7.0, and `linkcell` 0.3.5 from crates.io with caret requirements and no `[patch.crates-io]` table, enforced by `ci/check_dependency_pins.py`.
+- `FluxError::Unimplemented` formats as `not yet implemented: {0}` and `network::build_rate_table` returns `FluxError::Unimplemented("network::build_rate_table")`; crate and Org documentation use `cargo add rgflux` and state which estimators are not yet implemented.
+- `[package].include` restricts the published crate to `src/`, `tests/`, `build.rs`, `Cargo.toml`, `README.md`, `CHANGELOG.md`, `LICENSE`, and the three Org guides (`getting-started.org`, `howto.org`, `reference.org`) embedded by `tests/doc_examples.rs`.
+
+### Fixed
+
+- Only the `lammpc` feature enables `rgpot-core/profile` and `rgpot-core/schema`, so `rgpot` and `rgpot-session` build without the `capnp` CLI on `PATH`.
+
 ## [0.1.0] - 2026-11-19
 
 ### Added
