@@ -1,0 +1,1 @@
+PAFI now refines a Hermite-profile maximum just inside either endpoint of a plane interval, instead of returning the endpoint grid sample.

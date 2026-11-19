@@ -951,22 +951,29 @@ impl Quadrature {
                 }
             }
             let mut u = scan_best as f64 / MAXIMUM_SCAN_POINTS as f64;
-            if scan_best > 0 && scan_best < MAXIMUM_SCAN_POINTS {
-                let mut lo = (scan_best - 1) as f64 / MAXIMUM_SCAN_POINTS as f64;
-                let mut hi = (scan_best + 1) as f64 / MAXIMUM_SCAN_POINTS as f64;
-                let force_lo = self.interpolated_force(k, lo, gradients, &slopes);
-                let force_hi = self.interpolated_force(k, hi, gradients, &slopes);
-                if force_lo > 0.0 && force_hi < 0.0 {
-                    for _ in 0..80 {
-                        let mid = 0.5 * (lo + hi);
-                        if self.interpolated_force(k, mid, gradients, &slopes) > 0.0 {
-                            lo = mid;
-                        } else {
-                            hi = mid;
-                        }
+            let (mut lo, mut hi) = match scan_best {
+                0 => (0.0, 1.0 / MAXIMUM_SCAN_POINTS as f64),
+                MAXIMUM_SCAN_POINTS => (
+                    (MAXIMUM_SCAN_POINTS - 1) as f64 / MAXIMUM_SCAN_POINTS as f64,
+                    1.0,
+                ),
+                _ => (
+                    (scan_best - 1) as f64 / MAXIMUM_SCAN_POINTS as f64,
+                    (scan_best + 1) as f64 / MAXIMUM_SCAN_POINTS as f64,
+                ),
+            };
+            let force_lo = self.interpolated_force(k, lo, gradients, &slopes);
+            let force_hi = self.interpolated_force(k, hi, gradients, &slopes);
+            if force_lo > 0.0 && force_hi < 0.0 {
+                for _ in 0..80 {
+                    let mid = 0.5 * (lo + hi);
+                    if self.interpolated_force(k, mid, gradients, &slopes) > 0.0 {
+                        lo = mid;
+                    } else {
+                        hi = mid;
                     }
-                    u = 0.5 * (lo + hi);
                 }
+                u = 0.5 * (lo + hi);
             }
             let value = self.interpolated_value(k, u, gradients, &slopes, free_energy);
             if value > best_value {
@@ -2009,6 +2016,24 @@ mod tests {
                 .iter()
                 .all(|value| *value < profile.barrier)
         );
+    }
+
+    #[test]
+    fn dividing_plane_refines_peaks_just_inside_interval_endpoints() {
+        let arcs = [0.0, 1.0, 2.0];
+        let quadrature = Quadrature::new(&arcs).expect("quadrature");
+
+        let left_peak = 0.001_f64;
+        let left_gradients: Vec<f64> = arcs.iter().map(|s| left_peak - s).collect();
+        let left_free_energy = quadrature.integrate(&left_gradients);
+        let left = quadrature.dividing_plane(&left_gradients, &left_free_energy);
+        assert_abs_diff_eq!(left.arc, left_peak, epsilon = 1.0e-12);
+
+        let right_peak = 1.999_f64;
+        let right_gradients: Vec<f64> = arcs.iter().map(|s| right_peak - s).collect();
+        let right_free_energy = quadrature.integrate(&right_gradients);
+        let right = quadrature.dividing_plane(&right_gradients, &right_free_energy);
+        assert_abs_diff_eq!(right.arc, right_peak, epsilon = 1.0e-12);
     }
 
     #[test]
