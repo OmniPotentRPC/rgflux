@@ -211,7 +211,7 @@ The value stored by =PafiConfig::default()= is the 9-plane value shown in the ta
 |---+---+---|
 | =arc_lengths= | =Vec<f64>= | Plane coordinates \(s_k\): the mass-weighted chord-length parameter of the spline, from 0 at the first image to the total path length at the last, at equal spacing. Not scaled to \([0, 1]\) |
 | =free_energy= | =Vec<f64>= | \(F(s_k) - F(s_0)\) by cubic Hermite quadrature of the plane means; the first entry is 0. With two planes the derivative correction cancels and the rule is the trapezoid rule. With three planes it is exact for a quadratic gradient. With four or more planes it is exact for a cubic gradient |
-| =standard_error= | =Vec<f64>= | Standard error of =free_energy=: batch-means plane-force error through the Hermite weights, combined by hypot with the absolute Hermite-minus-trapezoid difference on the same nodes; the first entry is 0 |
+| =standard_error= | =Vec<f64>= | Standard error of =free_energy=: batch-means plane-force error through the Hermite weights, combined by hypot with the absolute Hermite-minus-trapezoid difference on the same nodes; the first entry is 0. The weighted uncertainty norm is scaled to avoid overflow from finite plane errors |
 | =barrier= | =f64= | \(\Delta F\), the global maximum of the Hermite interpolant, which can exceed every sampled value |
 | =barrier_error= | =f64= | Standard error of =barrier=: the same combination at =s*= |
 | =dividing_index= | =usize= | First plane with the highest sampled free energy. The interpolant maximum recorded in =dividing_arc= can lie on a different interval |
