@@ -1196,14 +1196,7 @@ fn integrate_profile(
         return Err(FluxError::NonFinite("PAFI integrated free energy"));
     }
     let dividing = quadrature.dividing_plane(gradients, &free_energy);
-    let propagate = |weights: &[f64]| {
-        weights
-            .iter()
-            .zip(gradient_errors)
-            .map(|(weight, sigma)| weight * weight * sigma * sigma)
-            .sum::<f64>()
-            .sqrt()
-    };
+    let propagate = |weights: &[f64]| linear_euclidean_norm(weights, gradient_errors);
     let standard_error: Vec<f64> = quadrature
         .cumulative
         .iter()
@@ -1271,6 +1264,29 @@ fn finite_exponential(log_value: f64) -> Option<f64> {
     } else {
         None
     }
+}
+
+/// `sqrt(sum (weight_i * sigma_i)^2)` without forming the squares.
+///
+/// A finite factor above about `1e154` makes `sigma * sigma` overflow. The
+/// scaled norm keeps a finite result whenever the mathematical norm fits in a
+/// `f64`.
+fn linear_euclidean_norm(weights: &[f64], sigmas: &[f64]) -> f64 {
+    let mut scale = 0.0_f64;
+    let mut sum = 0.0_f64;
+    for (&weight, &sigma) in weights.iter().zip(sigmas) {
+        let term = weight.abs() * sigma;
+        if !term.is_finite() {
+            return f64::INFINITY;
+        }
+        if term > scale {
+            sum = 1.0 + sum * (scale / term).powi(2);
+            scale = term;
+        } else if scale > 0.0 {
+            sum += (term / scale).powi(2);
+        }
+    }
+    scale * sum.sqrt()
 }
 
 /// Linear standard error `exp(log_rate) * sigma`.
@@ -2061,6 +2077,21 @@ mod tests {
     fn finite_exponential_rejects_linear_overflow_and_underflow() {
         assert_eq!(finite_exponential(f64::MAX.ln() + 1.0), None);
         assert_eq!(finite_exponential(f64::MIN_POSITIVE.ln() - 1.0), None);
+    }
+
+    #[test]
+    fn profile_error_stays_finite_for_an_extreme_plane_uncertainty() {
+        let sigma = 1.0e200_f64;
+        assert!(!(sigma * sigma).is_finite());
+        let profile = profile_from(&[0.0, 1.0], &[2.0, 2.0], &[0.0, sigma], 1.0, 4.0)
+            .expect("profile");
+        let expected = 0.5 * sigma;
+        assert_abs_diff_eq!(
+            profile.standard_error[1],
+            expected,
+            epsilon = f64::EPSILON * expected
+        );
+        assert!(profile.normalized_rate_error.is_some());
     }
 
     #[test]
