@@ -6,14 +6,14 @@
 | Module | Scope | Status |
 |---+---+---|
 | =engine= | =DynamicsEngine= trait, =ForceSurface=, =EindirSurface=, =HyperplaneConstraint=, =ThermostatConfig=, =SurfaceVelocityPolicy=, =StepReport=, =native= BAOAB/RATTLE backend, optional direct =lammpc= backend, =rgpot= static PES wrapper, and =rgpot-session= MD session skeleton (=openmm=, =nblib=, =lammps=) | Implemented (=native=, =lammpc=, =rgpot=) and =rgpot-session= skeleton |
-| =stats= | Batch means, effective sample size =n_eff=, and stationarity diagnostics | Implemented; spline propagation moves from =rgsaddle= |
+| =stats= | Batch means, effective sample size =n_eff=, and stationarity diagnostics | Implemented; spline-propagated profile covariance helpers are not yet implemented |
 | =kappa::bennett_chandler= | Engine-free reactive-flux estimator and =DynamicsEngine= trajectory shooter | Implemented |
-| =kappa= | Kramers analytical barrier-recrossing factor; surface-shooting quench classifiers and first-crossing estimators | =kramers_transmission_coefficient= and =KappaConfig= implemented; quench and first-crossing drivers move from =rgsaddle= |
-| =hyperplane= | Constrained hyperplane sampling (=sample_hyperplane=) and zero-variance control variates | Mean constraint force and configuration retention implemented; torque and control variates move from =rgsaddle= |
+| =kappa= | Kramers analytical barrier-recrossing factor; surface-shooting quench classifiers and first-crossing estimators | =kramers_transmission_coefficient= and =KappaConfig= implemented; the quench and first-crossing drivers are not yet implemented |
+| =hyperplane= | Constrained hyperplane sampling (=sample_hyperplane=) and zero-variance control variates | Mean constraint force and configuration retention implemented; the in-plane virial, torque, and control variates are not yet implemented |
 | =pafi= | Projected Average Force Integration along reaction paths (=PafiConfig=, =FreeEnergyProfile=, =pafi_profile=, =pafi_profile_dyn=) | Implemented: mass-metric spline planes with not-a-knot ends, zero-temperature path-force check, burn-in and batch-means sampling per plane, adaptive rounds to a target error, log-stable reactant partition quadrature, trapezoid free-energy profile, barrier, and normalized rate with propagated errors; the engine is restored on return |
-| =ohtst= | OH-TST with a fixed hyperplane normal (=optimize_hyperplane=) | Implemented for a fixed normal with =rgsaddle::flux_mass=; normal optimization moves from =rgsaddle= |
+| =ohtst= | OH-TST with a fixed hyperplane normal (=optimize_hyperplane=) | Implemented for a fixed normal with =rgsaddle::flux_mass=; normal optimization is not yet implemented |
 | =ffs= | Forward Flux Sampling across ordered interfaces (=forward_flux_rate=) | Implemented: flux collection, staged trials, and uncertainty propagation. Exit restores positions, velocities, the periodic cell, the thermostat, and the constraint; the stochastic stream is left where the run put it |
-| =network= | Symmetry-resolved rate networks and kinetic Monte Carlo rate tables (=NetworkConfig=, =RateTableConfig=, =RateEdge=, =build_rate_table=) | =RateEdge::new= and configuration types implemented; =build_rate_table= moves from =rgsaddle= |
+| =network= | Symmetry-resolved rate networks and kinetic Monte Carlo rate tables (=NetworkConfig=, =RateTableConfig=, =RateEdge=, =build_rate_table=) | =RateEdge::new= and configuration types implemented; =build_rate_table= is not yet implemented |
 | =error= | Shared =FluxError= enum and =From<rgsaddle::SaddleError>= conversion | Implemented |
 
 * Cargo features
@@ -255,4 +255,4 @@ The value stored by =PafiConfig::default()= is the 9-plane value shown in the ta
 | =Surface= | =String= | Potential energy surface callback failure or converted =rgsaddle::SaddleError= |
 | =BackendUnavailable= | =&'static str= | Unlinked external MD session call on =RgpotSessionEngine= or unsupported unconstrained Langevin / constrained NVE mode in =LammpcEngine= |
 | =Lammpc= | =String= | Error returned by the =lammpc_session_*= C ABI or Cap'n Proto message decoding |
-| =Unimplemented= | =&'static str= | Estimator whose implementation is still migrating from =rgsaddle= (=build_rate_table=) |
+| =Unimplemented= | =&'static str= | Entry point that is not yet implemented (=build_rate_table=) |

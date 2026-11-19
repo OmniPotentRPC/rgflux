@@ -6,8 +6,8 @@
 //! recorded side histories and generic over [`crate::engine::DynamicsEngine`]),
 //! along with Kramers' analytical barrier-recrossing factor.
 //!
-//! Note: implementation moves from rgsaddle for steepest-descent quench basin
-//! classifiers and van Erp first-crossing effective positive flux estimators.
+//! Note: steepest-descent quench basin classifiers and van Erp first-crossing
+//! effective positive flux estimators are not yet implemented.
 //!
 //! ## Example
 //!
@@ -54,8 +54,10 @@ pub use bennett_chandler::{
 
 use crate::error::FluxError;
 
-/// Configuration for surface-quench and first-crossing transmission workflows
-/// (implementation moves from rgsaddle).
+/// Configuration for surface-quench and first-crossing transmission workflows.
+///
+/// Those workflows are not yet implemented, so no estimator reads this
+/// configuration yet.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct KappaConfig {

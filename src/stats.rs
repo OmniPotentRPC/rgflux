@@ -5,8 +5,8 @@
 //! non-overlapping batch means, Geyer's initial-monotone-sequence effective
 //! sample size, and Geweke's two-window stationarity check.
 //!
-//! Note: implementation moves from rgsaddle for spline-propagated profile
-//! covariance helpers; the core batch-means, `n_eff`, and stationarity
+//! Note: spline-propagated profile covariance helpers are not yet
+//! implemented; the core batch-means, `n_eff`, and stationarity
 //! estimators used by [`crate::kappa::bennett_chandler`] and engine validation
 //! live here directly.
 //!

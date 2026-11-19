@@ -8,7 +8,7 @@
 //! Note: the mean holonomic constraint force `<lambda>` and retained
 //! configurations are implemented here via [`sample_hyperplane`]; the in-plane
 //! virial, rotational torque `dA/dn`, and Assaraf-Caffarel / Stein zero-variance
-//! harmonic control variates move from `rgsaddle`.
+//! harmonic control variates are not yet implemented.
 //!
 //! ## Theory
 //!

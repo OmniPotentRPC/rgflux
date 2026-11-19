@@ -76,8 +76,8 @@ pub enum FluxError {
     #[error("lammpc backend error: {0}")]
     Lammpc(String),
 
-    /// An estimator whose implementation moves from `rgsaddle` or awaits wiring was called.
-    #[error("not yet wired in rgflux: {0}")]
+    /// A public entry point that is not yet implemented was called.
+    #[error("not yet implemented: {0}")]
     Unimplemented(&'static str),
 }
 

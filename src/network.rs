@@ -4,7 +4,9 @@
 //! graphs, first-passage / absorbing-boundary reductions, and BKL / Gillespie
 //! kinetic Monte Carlo (kMC) event tables.
 //!
-//! Note: implementation moves from rgsaddle.
+//! Note: `RateEdge::new` and the configuration types are implemented, but
+//! `build_rate_table` is not yet implemented and returns
+//! [`FluxError::Unimplemented`].
 //!
 //! ## Example
 //!
@@ -20,10 +22,9 @@
 //! let net_cfg = NetworkConfig::default().with_temperature(500.0).with_min_rate(1e-6);
 //! let kmc_cfg = RateTableConfig::default().with_max_steps(10_000).with_seed(42);
 //! assert_eq!(kmc_cfg.max_steps, 10_000);
-//! assert!(matches!(
-//!     build_rate_table(2, &[edge], &net_cfg),
-//!     Err(FluxError::Unimplemented(_))
-//! ));
+//! let err = build_rate_table(2, &[edge], &net_cfg).unwrap_err();
+//! assert!(matches!(err, FluxError::Unimplemented("network::build_rate_table")));
+//! assert_eq!(err.to_string(), "not yet implemented: network::build_rate_table");
 //! # Ok::<(), rgflux::FluxError>(())
 //! ```
 //!
@@ -149,13 +150,13 @@ impl RateEdge {
     }
 }
 
-/// Build a cumulative kMC rate table from `edges` (implementation moves from rgsaddle).
+/// Build a cumulative kMC rate table from `edges`.
+///
+/// Not yet implemented: always returns [`FluxError::Unimplemented`].
 pub fn build_rate_table(
     _n_states: usize,
     _edges: &[RateEdge],
     _config: &NetworkConfig,
 ) -> Result<Vec<f64>, FluxError> {
-    Err(FluxError::Unimplemented(
-        "network: implementation moves from rgsaddle",
-    ))
+    Err(FluxError::Unimplemented("network::build_rate_table"))
 }
