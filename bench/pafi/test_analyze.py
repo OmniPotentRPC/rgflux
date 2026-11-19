@@ -19,30 +19,100 @@ class AnalysisFailureTests(unittest.TestCase):
         cls.result = json.loads((ROOT / "results.json").read_text())
 
     def test_committed_result_passes(self):
+        validation = ANALYZE.validate_result(self.result)
+        self.assertEqual(validation["status"], "passed")
+        self.assertEqual(validation["nonfinite_samples"], 0)
         self.assertEqual(
-            ANALYZE.validate_result(self.result)["status"],
-            "passed",
+            validation,
+            self.result["execution_summary"]["analysis_validation"],
         )
 
     def test_nan_profile_fails(self):
         result = copy.deepcopy(self.result)
         result["cells"][0]["exact_reference"]["profile"][0] = float("nan")
-        with self.assertRaises(ANALYZE.AnalysisError):
+        with self.assertRaisesRegex(ANALYZE.AnalysisError, "non-finite value"):
             ANALYZE.validate_result(result)
 
     def test_truncated_profile_fails(self):
         result = copy.deepcopy(self.result)
         sampled = result["cells"][0]["exact_reference"]["sampled_profiles"]
         sampled["lammps_pafi"]["median"].pop()
-        with self.assertRaises(ANALYZE.AnalysisError):
+        with self.assertRaisesRegex(
+            ANALYZE.AnalysisError, r"lammps_pafi\.median: expected \d+ values"
+        ):
             ANALYZE.validate_result(result)
 
     def test_tenfold_profile_error_fails(self):
         result = copy.deepcopy(self.result)
         cell = result["fcc_vacancy"]["cells"][0]
         cell["max_absolute_profile_difference"]["median"] *= 10.0
-        with self.assertRaises(ANALYZE.AnalysisError):
+        with self.assertRaisesRegex(
+            ANALYZE.AnalysisError, "profile disagreement exceeds energy scale"
+        ):
             ANALYZE.validate_result(result)
+
+
+class VerdictProseTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.result = json.loads((ROOT / "results.json").read_text())
+        cls.markdown = (ROOT / "results.md").read_text()
+        cls.statistics = ANALYZE.verdict_statistics(cls.result)
+
+    def test_committed_verdict_matches_the_data(self):
+        summary = self.result["execution_summary"]
+        statistics = self.statistics
+        self.assertEqual(statistics["dimer_reference_failures"], 0)
+        self.assertEqual(
+            summary["process_failures"], {"dimer": 0, "fcc_vacancy": 0}
+        )
+        self.assertEqual(statistics["vacancy_rejections"], 0)
+        buckets = summary["rejection_buckets"]
+        self.assertEqual(buckets["genuine_exp_overflow"]["count"], 0)
+        self.assertEqual(buckets["other"]["count"], 0)
+        self.assertEqual(
+            statistics["dimer_rejections"],
+            buckets["zero_temperature_tol"]["count"]
+            + buckets["zero_reactant_partition"]["count"],
+        )
+        self.assertEqual(
+            statistics["dimer_executions"] + statistics["vacancy_executions"],
+            summary["planned"],
+        )
+
+    def test_markdown_states_the_computed_verdict(self):
+        section = "\n".join(
+            ANALYZE.verdict_section(self.statistics, self.result)
+        )
+        self.assertIn(section, self.markdown)
+        self.assertIn(
+            ANALYZE.straight_verdict_paragraph(self.statistics), self.markdown
+        )
+        self.assertIn("the reference accepted every execution.", self.markdown)
+        self.assertIn(
+            "No retained cell is classified as a genuine exponential overflow.",
+            self.markdown,
+        )
+        gates = ANALYZE.validate_result(self.result)["gates_checked"]
+        self.assertIn(f"Coverage gates passed ({gates} checks)", self.markdown)
+
+    def test_verdict_prose_follows_a_changed_result(self):
+        result = copy.deepcopy(self.result)
+        result["cells"][0]["failures"]["lammps_pafi"] += 1
+        result["execution_summary"]["planned"] += 1
+        statistics = ANALYZE.verdict_statistics(result)
+        section = "\n".join(ANALYZE.verdict_section(statistics, result))
+        self.assertIn("the reference retained 1 failed executions.", section)
+        self.assertNotIn("the reference accepted every execution.", section)
+        self.assertNotIn(section, self.markdown)
+
+    def test_inconsistent_execution_count_fails(self):
+        result = copy.deepcopy(self.result)
+        result["execution_summary"]["planned"] += 1
+        with self.assertRaisesRegex(
+            ANALYZE.AnalysisError, "planned executions"
+        ):
+            ANALYZE.verdict_statistics(result)
 
 
 class StrictPairingTests(unittest.TestCase):

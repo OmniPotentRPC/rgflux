@@ -650,6 +650,214 @@ def validate_result(result):
     return {"status": "passed", "gates_checked": gates_checked, "nonfinite_samples": 0}
 
 
+def verdict_statistics(result):
+    cells = result["cells"]
+    vacancy = result["fcc_vacancy"]["cells"]
+    vacancy_static = result["fcc_vacancy"]["static_energies"]
+    largest_samples = max(cell["samples"] for cell in cells)
+    headline = [cell for cell in cells if cell["samples"] == largest_samples]
+    straight_exact = [cell for cell in headline if cell["case"] == "straight"]
+    exact_temperatures = sorted({cell["temperature"] for cell in straight_exact})
+    periodic_error_ranges = []
+    native_basin_error_ranges = []
+    for temperature in exact_temperatures:
+        temperature_cells = [
+            cell for cell in straight_exact if cell["temperature"] == temperature
+        ]
+        periodic_error_ranges.append(
+            f'T={temperature:g}: '
+            + format_range(
+                [
+                    cell["exact_reference"]["finite_periodic_lammps"][
+                        "max_absolute_profile_error"
+                    ]["median"]
+                    for cell in temperature_cells
+                ]
+            )
+        )
+        native_errors = [
+            cell["exact_reference"]["max_absolute_profile_error"]["rgflux"][
+                "median"
+            ]
+            for cell in temperature_cells
+            if cell["exact_reference"]["max_absolute_profile_error"]["rgflux"][
+                "median"
+            ]
+            is not None
+        ]
+        native_basin_error_ranges.append(
+            f'T={temperature:g}: ' + format_range(native_errors)
+        )
+    nine_plane_cells = [
+        cell for cell in cells if cell["case"] == "straight" and cell["planes"] == 9
+    ]
+    nine_plane_rejects = sum(
+        cell["failures"]["rgflux"] for cell in nine_plane_cells
+    )
+    nine_plane_runs = sum(
+        cell["successes"]["rgflux"] + cell["failures"]["rgflux"]
+        for cell in nine_plane_cells
+    )
+    curved_17_errors = [
+        cell["max_absolute_profile_difference"]["median"]
+        for cell in headline
+        if cell["case"] == "curved" and cell["planes"] == 17
+    ]
+    curved_33_errors = [
+        cell["max_absolute_profile_difference"]["median"]
+        for cell in headline
+        if cell["case"] == "curved" and cell["planes"] == 33
+    ]
+    straight_17_errors = [
+        cell["max_absolute_profile_difference"]["median"]
+        for cell in headline
+        if cell["case"] == "straight"
+        and cell["planes"] == 17
+        and cell["max_absolute_profile_difference"]["median"] is not None
+    ]
+    periodic_exact_errors = [
+        cell["exact_reference"]["finite_periodic_lammps"][
+            "max_absolute_profile_error"
+        ]["median"]
+        for cell in straight_exact
+    ]
+    vacancy_profile_errors = [
+        cell["max_absolute_profile_difference"]["median"] for cell in vacancy
+    ]
+    vacancy_barrier_errors = [
+        cell["barrier"]["absolute_difference"]["median"] for cell in vacancy
+    ]
+    vacancy_static_minimum_error = abs(
+        vacancy_static["rgflux"]["minimum_energy"]
+        - vacancy_static["lammps"]["minimum_energy"]
+    )
+    vacancy_static_saddle_error = abs(
+        vacancy_static["rgflux"]["saddle_energy"]
+        - vacancy_static["lammps"]["saddle_energy"]
+    )
+    dimer_static_minimum_errors = [
+        cell["static_energy_absolute_difference"]["minimum"]["median"]
+        for cell in headline
+        if cell["static_energy_absolute_difference"]["minimum"]["median"]
+        is not None
+    ]
+    dimer_static_saddle_errors = [
+        cell["static_energy_absolute_difference"]["saddle"]["median"]
+        for cell in headline
+        if cell["static_energy_absolute_difference"]["saddle"]["median"] is not None
+    ]
+    native_calls_per_plane = sorted(
+        {
+            cell["force_calls_per_plane"]["rgflux"]["median"]
+            for cell in headline
+            if cell["force_calls_per_plane"]["rgflux"]["median"] is not None
+        }
+    )
+    reference_steps_per_plane = sorted(
+        {
+            cell["force_calls_per_plane"]["lammps_pafi"]["median"]
+            for cell in headline
+            if cell["force_calls_per_plane"]["lammps_pafi"]["median"] is not None
+        }
+    )
+    engines = ("rgflux", "lammps_pafi")
+    dimer_executions = sum(
+        cell["successes"][engine] + cell["failures"][engine]
+        for cell in cells
+        for engine in engines
+    )
+    vacancy_executions = sum(
+        cell["successes"][engine] + cell["failures"][engine]
+        for cell in vacancy
+        for engine in engines
+    )
+    summary = result["execution_summary"]
+    if dimer_executions + vacancy_executions != summary["planned"]:
+        raise AnalysisError(
+            f"planned executions {summary['planned']} differ from the cell "
+            f"totals {dimer_executions} + {vacancy_executions}"
+        )
+    return {
+        "headline": headline,
+        "straight_exact": straight_exact,
+        "periodic_error_ranges": periodic_error_ranges,
+        "native_basin_error_ranges": native_basin_error_ranges,
+        "nine_plane_rejects": nine_plane_rejects,
+        "nine_plane_runs": nine_plane_runs,
+        "curved_17_errors": curved_17_errors,
+        "curved_33_errors": curved_33_errors,
+        "straight_17_errors": straight_17_errors,
+        "periodic_exact_errors": periodic_exact_errors,
+        "vacancy_profile_errors": vacancy_profile_errors,
+        "vacancy_barrier_errors": vacancy_barrier_errors,
+        "vacancy_static_minimum_error": vacancy_static_minimum_error,
+        "vacancy_static_saddle_error": vacancy_static_saddle_error,
+        "dimer_static_minimum_errors": dimer_static_minimum_errors,
+        "dimer_static_saddle_errors": dimer_static_saddle_errors,
+        "native_calls_per_plane": native_calls_per_plane,
+        "reference_steps_per_plane": reference_steps_per_plane,
+        "cells": cells,
+        "vacancy": vacancy,
+        "vacancy_static": vacancy_static,
+        "dimer_executions": dimer_executions,
+        "vacancy_executions": vacancy_executions,
+        "dimer_reference_failures": sum(
+            cell["failures"]["lammps_pafi"] for cell in cells
+        ),
+        "dimer_rejections": sum(summary["raw_rejection_errors"]["dimer"].values()),
+        "vacancy_rejections": sum(
+            summary["raw_rejection_errors"]["fcc_vacancy"].values()
+        ),
+    }
+
+
+def straight_verdict_paragraph(statistics):
+    periodic_error_ranges = statistics["periodic_error_ranges"]
+    native_basin_error_ranges = statistics["native_basin_error_ranges"]
+    nine_plane_rejects = statistics["nine_plane_rejects"]
+    nine_plane_runs = statistics["nine_plane_runs"]
+    return (
+            "There is no common global equilibrium to declare one engine right. The native cutoff dimer is transversely unconfined, so its constrained partition diverges and its exact global free energy is undefined. The rgflux columns below are errors against the explicitly imposed r<4 interacting-basin regularization, not errors against its actual equilibrium. LAMMPS finite-box median maximum per-plane errors are "
+            + ", ".join(periodic_error_ranges)
+            + ". Native basin-regularized diagnostic errors are "
+            + ", ".join(native_basin_error_ranges)
+            + f". The 9-plane native cells reject {nine_plane_rejects}/{nine_plane_runs} runs."
+    )
+
+
+def verdict_section(statistics, result):
+    process_failures = result["execution_summary"]["process_failures"]
+    buckets = result["execution_summary"]["rejection_buckets"]
+    validation = result["execution_summary"]["analysis_validation"]
+    reference_failures = statistics["dimer_reference_failures"]
+    if reference_failures:
+        reference_outcome = (
+            f"the reference retained {reference_failures} failed executions."
+        )
+    else:
+        reference_outcome = "the reference accepted every execution."
+    lines = [
+        "",
+        "## Verdict",
+        "",
+        f'All {statistics["dimer_executions"]} planned dimer executions completed with {process_failures["dimer"]} process failures. '
+        f'rgflux retained {statistics["dimer_rejections"]} numerical or quadrature rejections; '
+        + reference_outcome,
+        f'The vacancy campaign adds {statistics["vacancy_executions"]} executions with '
+        f'{process_failures["fcc_vacancy"]} process failures and '
+        f'{statistics["vacancy_rejections"]} retained rgflux rejections.',
+        "",
+        f'- Coverage gates passed ({validation["gates_checked"]} checks); non-finite samples: {validation["nonfinite_samples"]}.',
+        f'- Curved-path median maximum profile differences change from {format_range(statistics["curved_17_errors"])} at 17 planes to {format_range(statistics["curved_33_errors"])} at 33 planes.',
+        f'- Accepted 17-plane straight profiles have median maximum pairwise differences of {format_range(statistics["straight_17_errors"])}.',
+        f'- The native global straight-path equilibrium is undefined. LAMMPS finite-periodic median maximum errors are {format_range(statistics["periodic_exact_errors"])}; the common interacting-basin comparison remains a regularized diagnostic.',
+        f'- Vacancy median maximum profile differences are {format_range(statistics["vacancy_profile_errors"])} eV and barrier differences are {format_range(statistics["vacancy_barrier_errors"])} eV. Static minimum and saddle differences are {statistics["vacancy_static_minimum_error"]:.3g} and {statistics["vacancy_static_saddle_error"]:.3g} eV.',
+        f'- Rejections split into {buckets["zero_temperature_tol"]["count"]} zero-temperature-tolerance cases, {buckets["zero_reactant_partition"]["count"]} zero-width reactant partitions, {buckets["genuine_exp_overflow"]["count"]} genuine exponential overflows, and {buckets["other"]["count"]} other cases.',
+    ]
+    return lines
+
+
+
 def main():
     args = arguments()
     if args.validate_results is not None:
@@ -1005,122 +1213,29 @@ def main():
     result["execution_summary"]["analysis_validation"] = validate_result(result)
     args.output_json.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
 
-    largest_samples = max(cell["samples"] for cell in cells)
-    headline = [cell for cell in cells if cell["samples"] == largest_samples]
-    straight_exact = [cell for cell in headline if cell["case"] == "straight"]
-    exact_temperatures = sorted({cell["temperature"] for cell in straight_exact})
-    periodic_error_ranges = []
-    native_basin_error_ranges = []
-    for temperature in exact_temperatures:
-        temperature_cells = [
-            cell for cell in straight_exact if cell["temperature"] == temperature
-        ]
-        periodic_error_ranges.append(
-            f'T={temperature:g}: '
-            + format_range(
-                [
-                    cell["exact_reference"]["finite_periodic_lammps"][
-                        "max_absolute_profile_error"
-                    ]["median"]
-                    for cell in temperature_cells
-                ]
-            )
+    statistics = verdict_statistics(result)
+    genuine_overflows = rejection_buckets["genuine_exp_overflow"]["count"]
+    if genuine_overflows:
+        overflow_sentence = (
+            f"{genuine_overflows} retained cells are classified as genuine "
+            "exponential overflows."
         )
-        native_errors = [
-            cell["exact_reference"]["max_absolute_profile_error"]["rgflux"][
-                "median"
-            ]
-            for cell in temperature_cells
-            if cell["exact_reference"]["max_absolute_profile_error"]["rgflux"][
-                "median"
-            ]
-            is not None
-        ]
-        native_basin_error_ranges.append(
-            f'T={temperature:g}: ' + format_range(native_errors)
+    else:
+        overflow_sentence = (
+            "No retained cell is classified as a genuine exponential overflow."
         )
-    nine_plane_cells = [
-        cell for cell in cells if cell["case"] == "straight" and cell["planes"] == 9
-    ]
-    nine_plane_rejects = sum(
-        cell["failures"]["rgflux"] for cell in nine_plane_cells
-    )
-    nine_plane_runs = sum(
-        cell["successes"]["rgflux"] + cell["failures"]["rgflux"]
-        for cell in nine_plane_cells
-    )
-    curved_17_errors = [
-        cell["max_absolute_profile_difference"]["median"]
-        for cell in headline
-        if cell["case"] == "curved" and cell["planes"] == 17
-    ]
-    curved_33_errors = [
-        cell["max_absolute_profile_difference"]["median"]
-        for cell in headline
-        if cell["case"] == "curved" and cell["planes"] == 33
-    ]
-    straight_17_errors = [
-        cell["max_absolute_profile_difference"]["median"]
-        for cell in headline
-        if cell["case"] == "straight"
-        and cell["planes"] == 17
-        and cell["max_absolute_profile_difference"]["median"] is not None
-    ]
-    periodic_exact_errors = [
-        cell["exact_reference"]["finite_periodic_lammps"][
-            "max_absolute_profile_error"
-        ]["median"]
-        for cell in straight_exact
-    ]
-    vacancy_profile_errors = [
-        cell["max_absolute_profile_difference"]["median"] for cell in vacancy
-    ]
-    vacancy_barrier_errors = [
-        cell["barrier"]["absolute_difference"]["median"] for cell in vacancy
-    ]
-    vacancy_static_minimum_error = abs(
-        vacancy_static["rgflux"]["minimum_energy"]
-        - vacancy_static["lammps"]["minimum_energy"]
-    )
-    vacancy_static_saddle_error = abs(
-        vacancy_static["rgflux"]["saddle_energy"]
-        - vacancy_static["lammps"]["saddle_energy"]
-    )
-    dimer_static_minimum_errors = [
-        cell["static_energy_absolute_difference"]["minimum"]["median"]
-        for cell in headline
-        if cell["static_energy_absolute_difference"]["minimum"]["median"]
-        is not None
-    ]
-    dimer_static_saddle_errors = [
-        cell["static_energy_absolute_difference"]["saddle"]["median"]
-        for cell in headline
-        if cell["static_energy_absolute_difference"]["saddle"]["median"] is not None
-    ]
-    native_calls_per_plane = sorted(
-        {
-            cell["force_calls_per_plane"]["rgflux"]["median"]
-            for cell in headline
-            if cell["force_calls_per_plane"]["rgflux"]["median"] is not None
-        }
-    )
-    reference_steps_per_plane = sorted(
-        {
-            cell["force_calls_per_plane"]["lammps_pafi"]["median"]
-            for cell in headline
-            if cell["force_calls_per_plane"]["lammps_pafi"]["median"] is not None
-        }
-    )
+    headline = statistics["headline"]
+    straight_exact = statistics["straight_exact"]
+    native_calls_per_plane = statistics["native_calls_per_plane"]
+    reference_steps_per_plane = statistics["reference_steps_per_plane"]
+    dimer_static_minimum_errors = statistics["dimer_static_minimum_errors"]
+    dimer_static_saddle_errors = statistics["dimer_static_saddle_errors"]
     lines = [
         "# Native PAFI benchmark",
         "",
         "## Exact-quadrature straight-path verdict",
         "",
-        "There is no common global equilibrium to declare one engine right. The native cutoff dimer is transversely unconfined, so its constrained partition diverges and its exact global free energy is undefined. The rgflux columns below are errors against the explicitly imposed r<4 interacting-basin regularization, not errors against its actual equilibrium. LAMMPS finite-box median maximum per-plane errors are "
-        + ", ".join(periodic_error_ranges)
-        + ". Native basin-regularized diagnostic errors are "
-        + ", ".join(native_basin_error_ranges)
-        + f". The 9-plane native cells reject {nine_plane_rejects}/{nine_plane_runs} runs.",
+        straight_verdict_paragraph(statistics),
         "",
         "Each vector is the median signed sampled-minus-exact error at every path plane, from reactant to product. Positive entries put the sampled free energy above the applicable exact quadrature.",
         "",
@@ -1153,34 +1268,7 @@ def main():
                 ),
             )
         )
-    lines.extend(
-        [
-            "",
-        "## Verdict",
-        "",
-        ]
-    )
-    lines.append(
-        f'All {len(entries)} planned dimer executions completed with {process_failures} process failures. '
-        f'rgflux retained {sum(rejection_reasons.values())} numerical or quadrature rejections; '
-        "the reference accepted every execution."
-    )
-    lines.append(
-        f'The vacancy campaign adds {len(vacancy_entries)} executions with '
-        f'{vacancy_process_failures} process failures and '
-        f'{sum(vacancy_rejections.values())} retained rgflux rejections.'
-    )
-    lines.extend(
-        [
-            "",
-            f'- Coverage gates passed ({result["execution_summary"]["analysis_validation"]["gates_checked"]} checks); non-finite samples: {result["execution_summary"]["analysis_validation"]["nonfinite_samples"]}.',
-            f"- Curved-path median maximum profile differences change from {format_range(curved_17_errors)} at 17 planes to {format_range(curved_33_errors)} at 33 planes.",
-            f"- Accepted 17-plane straight profiles have median maximum pairwise differences of {format_range(straight_17_errors)}.",
-            f"- The native global straight-path equilibrium is undefined. LAMMPS finite-periodic median maximum errors are {format_range(periodic_exact_errors)}; the common interacting-basin comparison remains a regularized diagnostic.",
-            f"- Vacancy median maximum profile differences are {format_range(vacancy_profile_errors)} eV and barrier differences are {format_range(vacancy_barrier_errors)} eV. Static minimum and saddle differences are {vacancy_static_minimum_error:.3g} and {vacancy_static_saddle_error:.3g} eV.",
-            f'- Rejections split into {rejection_buckets["zero_temperature_tol"]["count"]} zero-temperature-tolerance cases, {rejection_buckets["zero_reactant_partition"]["count"]} zero-width reactant partitions, {rejection_buckets["genuine_exp_overflow"]["count"]} genuine exponential overflows, and {rejection_buckets["other"]["count"]} other cases.',
-        ]
-    )
+    lines.extend(verdict_section(statistics, result))
     lines.extend(
         [
             "",
@@ -1523,7 +1611,7 @@ def main():
             "",
             "## Reproduction of the rgflux numerical rejection",
             "",
-            "Seed 1036330 selects dividing plane index zero. The reactant integration loop therefore has no interval, leaving a finite partition of zero; no exponential is evaluated. The cargo test `reproduces_zero_width_reactant_partition` and `repro_zero_width_reactant_partition.py` check the retained `PAFI reactant partition must be finite and positive` rejection. No retained cell is classified as a genuine exponential overflow.",
+            "Seed 1036330 selects dividing plane index zero. The reactant integration loop therefore has no interval, leaving a finite partition of zero; no exponential is evaluated. The cargo test `reproduces_zero_width_reactant_partition` and `repro_zero_width_reactant_partition.py` check the retained `PAFI reactant partition must be finite and positive` rejection. " + overflow_sentence,
             "",
             "## Reproduction",
             "",
