@@ -197,7 +197,7 @@
 //! assert_eq!(profile.free_energy.len(), config.planes);
 //! assert_eq!(profile.free_energy[0], 0.0);
 //! assert!(profile.barrier.is_finite() && profile.barrier_error > 0.0);
-//! assert!(profile.normalized_rate > 0.0);
+//! assert!(profile.normalized_rate.is_some_and(|rate| rate > 0.0));
 //! # Ok::<(), rgflux::FluxError>(())
 //! ```
 //!
@@ -398,25 +398,21 @@ pub struct FreeEnergyProfile {
     /// mass-weighted reactant Hessian `H` and the unit mass-weighted path
     /// normal `n` at the first image.
     pub reactant_frequency: f64,
-    /// Reactant partition
-    /// `Z_R = 2 * \int_0^{s_div} exp(-F(s) / k_B T) ds`, in units of `s`.
-    /// The integral is the trapezoid rule up to the last sample of the segment
-    /// that holds the dividing plane. It is the exponential of
-    /// [`Self::reactant_log_partition`], and the call fails with
-    /// [`FluxError::NonFinite`] when that exponential overflows.
-    pub reactant_partition: f64,
+    /// Reactant partition, when its finite logarithm has a representable
+    /// positive exponential.
+    pub reactant_partition: Option<f64>,
     /// Natural logarithm of the reactant partition,
     /// `ln Z_R = ln(2 * \int_0^{s_div} exp(-F(s) / k_B T) ds)`.
     pub reactant_log_partition: f64,
-    /// Normalized PAFI rate
-    /// `k = sqrt(k_B T / (2 pi)) * exp(-Delta F / k_B T) / Z_R`.
-    pub normalized_rate: f64,
+    /// Normalized PAFI rate, when its finite logarithm has a representable
+    /// positive exponential.
+    pub normalized_rate: Option<f64>,
     /// Natural logarithm of [`Self::normalized_rate`].
     /// This stays finite when [`Self::normalized_rate`] underflows.
     pub normalized_log_rate: f64,
-    /// Propagated standard error of [`Self::normalized_rate`]. The barrier and
-    /// the reactant partition both depend on the plane means.
-    pub normalized_rate_error: f64,
+    /// Propagated standard error of [`Self::normalized_rate`] when it is
+    /// representable.
+    pub normalized_rate_error: Option<f64>,
     /// Largest absolute discrepancy, over the sampled planes, between the
     /// Hermite integral of `dV/ds` and the anchor energy measured from the
     /// first plane. The acceptance check itself stays the trapezoid comparison
@@ -816,6 +812,11 @@ fn checked_exp(log_value: f64, context: &'static str) -> Result<f64, FluxError> 
         return Err(FluxError::NonFinite(context));
     }
     Ok(value)
+}
+
+fn finite_exponential(log_value: f64) -> Option<f64> {
+    let value = log_value.exp();
+    (value.is_finite() && value > 0.0).then_some(value)
 }
 
 fn lagrange_derivative_weights(nodes: &[f64], at: usize) -> Result<Vec<f64>, FluxError> {
@@ -1371,19 +1372,14 @@ fn integrate_profile(
         dividing.partition_end,
         kbt,
     )?;
-    let reactant_partition = checked_exp(reactant_log_partition, "PAFI reactant partition")?;
+    let reactant_partition = finite_exponential(reactant_log_partition);
     let normalized_log_rate = 0.5 * (kbt / TAU).ln() - barrier / kbt - reactant_log_partition;
     if !normalized_log_rate.is_finite() {
         return Err(FluxError::InvalidConfig(
             "PAFI normalized log rate must be finite",
         ));
     }
-    let normalized_rate = normalized_log_rate.exp();
-    if !normalized_rate.is_finite() || normalized_rate < 0.0 {
-        return Err(FluxError::InvalidConfig(
-            "PAFI normalized rate must be finite",
-        ));
-    }
+    let normalized_rate = finite_exponential(normalized_log_rate);
     let mut variance_ln_rate = 0.0_f64;
     for (gradient_index, sigma) in gradient_errors.iter().copied().enumerate() {
         let barrier_sensitivity = dividing.weights[gradient_index];
@@ -1401,12 +1397,10 @@ fn integrate_profile(
             "PAFI normalized-rate logarithmic error must be finite and non-negative",
         ));
     }
-    let normalized_rate_error = normalized_rate * sigma_ln_k;
-    if !normalized_rate_error.is_finite() || normalized_rate_error < 0.0 {
-        return Err(FluxError::InvalidConfig(
-            "PAFI normalized-rate standard error must be finite and non-negative",
-        ));
-    }
+    let normalized_rate_error = {
+        let value = (normalized_log_rate + sigma_ln_k.ln()).exp();
+        value.is_finite().then_some(value)
+    };
 
     Ok(FreeEnergyProfile {
         arc_lengths: quadrature.arcs.clone(),
@@ -1962,7 +1956,7 @@ mod tests {
         assert_abs_diff_eq!(profile.dividing_arc, 1.0, epsilon = 1.0e-12);
         assert_abs_diff_eq!(profile.barrier, 13.0 / 12.0, epsilon = 1.0e-12);
         assert_eq!(profile.barrier_error, 0.0);
-        assert_eq!(profile.normalized_rate_error, 0.0);
+        assert_eq!(profile.normalized_rate_error, Some(0.0));
         assert_abs_diff_eq!(profile.reactant_frequency, 2.0, epsilon = 1.0e-12);
         // The maximum is the node s = 1, so the reactant integral is the one
         // trapezoid on [0, 1]. F(1) = 13/12.
@@ -2106,12 +2100,16 @@ mod tests {
         let curvature = 4.0;
         let profile = profile_from(&arcs, &gradients, &errors, 1.0, curvature).expect("profile");
         assert!(profile.barrier > 700.0);
-        assert!(profile.normalized_rate <= f64::MIN_POSITIVE);
+        assert!(profile.normalized_rate.is_none());
         assert!(profile.reactant_log_partition.is_finite());
         let log_rate =
             0.5 * (1.0_f64 / TAU).ln() - profile.barrier - profile.reactant_log_partition;
         assert_abs_diff_eq!(profile.normalized_log_rate, log_rate, epsilon = 1.0e-9);
-        assert!(profile.reactant_partition.is_finite() && profile.reactant_partition > 0.0);
+        assert!(
+            profile
+                .reactant_partition
+                .is_some_and(|partition| partition.is_finite() && partition > 0.0)
+        );
         assert_abs_diff_eq!(
             profile.reactant_frequency,
             curvature.sqrt(),
@@ -2162,11 +2160,15 @@ mod tests {
                 epsilon = 16.0 * f64::EPSILON * rate_scale
             );
             assert!(
-                profile.normalized_rate.is_finite() && profile.normalized_rate >= 0.0,
+                profile
+                    .normalized_rate
+                    .is_none_or(|rate| rate.is_finite() && rate >= 0.0),
                 "{label}"
             );
             assert!(
-                profile.reactant_partition.is_finite() && profile.reactant_partition > 0.0,
+                profile
+                    .reactant_partition
+                    .is_some_and(|partition| partition.is_finite() && partition > 0.0),
                 "{label}"
             );
         }
@@ -2188,12 +2190,20 @@ mod tests {
         );
         assert_abs_diff_eq!(
             profile.reactant_log_partition,
-            profile.reactant_partition.ln(),
+            profile
+                .reactant_partition
+                .expect("representable reactant partition")
+                .ln(),
             epsilon = 1.0e-12
         );
-        let flux = (kbt / TAU).sqrt() * (-profile.barrier / kbt).exp() / profile.reactant_partition;
+        let flux = (kbt / TAU).sqrt() * (-profile.barrier / kbt).exp()
+            / profile
+                .reactant_partition
+                .expect("representable reactant partition");
         assert_abs_diff_eq!(
-            profile.normalized_rate,
+            profile
+                .normalized_rate
+                .expect("representable normalized rate"),
             flux,
             epsilon = f64::EPSILON * flux.abs()
         );
@@ -2202,7 +2212,11 @@ mod tests {
             flux.ln(),
             epsilon = 16.0 * f64::EPSILON * flux.ln().abs().max(1.0)
         );
-        assert!(profile.normalized_rate_error.is_finite() && profile.normalized_rate_error > 0.0);
+        assert!(
+            profile
+                .normalized_rate_error
+                .is_some_and(|error| error.is_finite() && error > 0.0)
+        );
     }
 
     fn polynomial_integral_error(planes: usize, degree: u32) -> f64 {
@@ -2599,18 +2613,20 @@ mod tests {
     }
 
     #[test]
-    fn reactant_partition_exponential_overflow_is_rejected() {
+    fn reactant_partition_exponential_overflow_keeps_the_logarithm() {
         // Linear `g(s) = a + b s` is integrated exactly. `F(1) = -1e6` and
         // `F(2) = 1`, so the dividing sample is the last plane and the shifted
         // trapezoid is finite while `exp(ln Z_R)` is not.
-        let result = profile_from(
+        let profile = profile_from(
             &[0.0, 1.0, 2.0],
             &[-2_000_000.5, 0.5, 2_000_001.5],
             &[0.0, 0.0, 0.0],
             1.0,
             1.0,
-        );
-        assert_eq!(result, Err(FluxError::NonFinite("PAFI reactant partition")));
+        )
+        .expect("finite logarithms");
+        assert!(profile.reactant_log_partition.is_finite());
+        assert!(profile.reactant_partition.is_none());
     }
 
     #[test]

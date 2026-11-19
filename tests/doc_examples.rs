@@ -143,12 +143,7 @@ fn reference_pafi_defaults_match_the_code() {
         "=max_rounds=",
         format!("=usize= | ={}=", defaults.max_rounds).as_str(),
     );
-    assert_row_contains(
-        &pafi_rows,
-        "=zero_temperature_tol=",
-        "=Option<f64>= | =None=",
-    );
-    assert!(defaults.zero_temperature_tol.is_none());
+    assert_row_contains(&pafi_rows, "=zero_temperature_tol=", "=f64=");
     let tolerance_row = pafi_rows
         .iter()
         .find(|row| row.contains("=zero_temperature_tol="))
