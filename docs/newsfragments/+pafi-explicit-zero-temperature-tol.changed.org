@@ -1,0 +1,4 @@
+=PafiConfig::zero_temperature_tol= is =Option<f64>=. =None=, the
+default, scales the tolerance with =planes=. An explicit value is used
+at every plane count, including a value equal to the tolerance at the
+default plane count.

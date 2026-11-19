@@ -271,8 +271,10 @@ fn normalized_pafi_rate_matches_analytic_profile() {
         "pafi_profile returned {profile_result:?}",
     );
     let profile = profile_result.expect("checked above");
-    let rate = profile.normalized_rate;
-    let rate_error = profile.normalized_rate_error;
+    let rate = profile.normalized_rate.expect("representable rate");
+    let rate_error = profile
+        .normalized_rate_error
+        .expect("representable rate error");
     let dividing = profile.dividing_index;
     assert!(rate_error.is_finite() && rate_error >= 0.0);
     assert!(dividing > 0);
@@ -281,7 +283,10 @@ fn normalized_pafi_rate_matches_analytic_profile() {
     let omega_0 = 8.0_f64.sqrt();
     assert!((profile.reactant_frequency - omega_0).abs() <= 1.0e-6 * omega_0);
     let gaussian_partition = (2.0 * PI * thermal).sqrt() / omega_0;
-    assert!((profile.reactant_partition - gaussian_partition).abs() <= 1.0e-6 * gaussian_partition);
+    assert!(
+        (profile.reactant_partition.expect("representable partition") - gaussian_partition).abs()
+            <= 1.0e-6 * gaussian_partition
+    );
     assert!(
         (profile.reactant_log_partition - gaussian_partition.ln()).abs()
             <= 1.0e-6 * gaussian_partition.ln().abs()

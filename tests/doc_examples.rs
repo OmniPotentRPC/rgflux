@@ -143,16 +143,24 @@ fn reference_pafi_defaults_match_the_code() {
         "=max_rounds=",
         format!("=usize= | ={}=", defaults.max_rounds).as_str(),
     );
+    assert_row_contains(
+        &pafi_rows,
+        "=zero_temperature_tol=",
+        "=Option<f64>= | =None=",
+    );
+    assert!(defaults.zero_temperature_tol.is_none());
     let tolerance_row = pafi_rows
         .iter()
         .find(|row| row.contains("=zero_temperature_tol="))
         .expect("zero_temperature_tol row");
     let (documented, tolerance) = documented_approximate_value(tolerance_row);
-    let difference = (defaults.zero_temperature_tol - documented).abs();
+    let intervals = (defaults.planes - 1) as f64;
+    let effective =
+        2.0 * (std::f64::consts::PI * std::f64::consts::PI / 12.0) / (intervals * intervals);
+    let difference = (effective - documented).abs();
     assert!(
         difference <= tolerance,
-        "default {} disagrees with documented {documented} by {difference}, above {tolerance}",
-        defaults.zero_temperature_tol
+        "effective default {effective} disagrees with documented {documented} by {difference}, above {tolerance}",
     );
     assert_row_contains(
         &pafi_rows,
