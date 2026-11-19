@@ -2034,6 +2034,25 @@ mod tests {
     }
 
     #[test]
+    fn non_finite_reactant_partition_exponent_is_rejected() {
+        // `f64::MIN_POSITIVE / 4` is a positive subnormal. The free energy
+        // stays finite, and `-F / kT` overflows, so the failure is the
+        // reactant partition rather than `integrate_means`.
+        let arcs = [0.0, 1.0];
+        let gradients = [1.0, 1.0];
+        let thermal = f64::MIN_POSITIVE * 0.25;
+        assert!(thermal.is_finite() && thermal > 0.0);
+        assert!(!(1.0 / thermal).is_finite());
+        let (free_energy, _, _) = integrate_means(&arcs, &gradients).expect("finite free energy");
+        assert!(free_energy.iter().all(|value| value.is_finite()));
+        let result = integrate_profile(&arcs, &gradients, &[0.0, 0.0], thermal);
+        assert_eq!(
+            result,
+            Err(FluxError::NonFinite("PAFI reactant partition exponent"))
+        );
+    }
+
+    #[test]
     fn a_descending_profile_keeps_the_gaussian_partition() {
         let arcs = [0.0, 1.0, 2.0];
         let gradients = [-1.0, -1.0, -1.0];
