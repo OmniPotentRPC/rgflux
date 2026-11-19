@@ -1,0 +1,576 @@
+//! Tests for PAFI monitor equidistribution (`s -> sigma(s)`) and spectral-tail
+//! adaptive plane refinement.
+
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+use approx::assert_abs_diff_eq;
+use ndarray::{Array1, Array2, ArrayView1};
+use rgflux::engine::ThermostatConfig;
+use rgflux::engine::native::{NativeConfig, NativeEngine};
+use rgflux::pafi::{
+    AdaptivePafiConfig, EquidistributionMap, MonitorInputs, MonitorKind, PafiConfig,
+    estimate_spectral_tail, pafi_profile, pafi_profile_adaptive, size_window_from_tau_int,
+};
+use rgflux::stats::StatsConfig;
+
+/// Analytic 1D symmetric double-well with a localized barrier:
+/// `V(x) = (1 - x^2)^2 / (1 + 6 * x^2)` on `[-1, 1]`.
+///
+/// Exact reactant minimum at `x = -1` (`V(-1) = 0`), product minimum at
+/// `x = +1` (`V(+1) = 0`), and barrier top at `x = 0` (`V(0) = 1`, `F* = 1`).
+struct LocalizedDoubleWell1D {
+    calls: AtomicUsize,
+}
+
+impl LocalizedDoubleWell1D {
+    const fn new() -> Self {
+        Self {
+            calls: AtomicUsize::new(0),
+        }
+    }
+
+    fn exact_potential(x: f64) -> f64 {
+        let u = 1.0 - x * x;
+        (u * u) / (1.0 + 6.0 * x * x)
+    }
+
+    fn exact_gradient(x: f64) -> f64 {
+        let u = 1.0 - x * x;
+        let denom = 1.0 + 6.0 * x * x;
+        let d_num = -4.0 * x * u;
+        let d_den = 12.0 * x;
+        (d_num * denom - u * u * d_den) / (denom * denom)
+    }
+
+    fn call_count(&self) -> usize {
+        self.calls.load(Ordering::Relaxed)
+    }
+}
+
+impl rgsaddle::PointSurface for LocalizedDoubleWell1D {
+    fn eval(&self, r: ArrayView1<'_, f64>) -> Result<(f64, Array1<f64>), rgsaddle::SaddleError> {
+        self.calls.fetch_add(1, Ordering::Relaxed);
+        let x = r[0];
+        Ok((
+            Self::exact_potential(x),
+            Array1::from_vec(vec![Self::exact_gradient(x)]),
+        ))
+    }
+}
+
+/// Analytic 1D asymmetric barrier on `[-1, 1]`:
+/// `V(x) = (1 - x^2)^2 / (1 + 8 * (x - 0.25)^2) + 0.05 * (x + 1)^2 * (2 - x)`.
+///
+/// Stationary endpoints `V'(-1) = 0` (`V(-1) = 0`) and `V'(+1) = 0` (`V(+1) = 0.2`),
+/// with a shifted, steep barrier peak near `x* = 0.23615866`.
+struct AsymmetricBarrier1D {
+    calls: AtomicUsize,
+}
+
+impl AsymmetricBarrier1D {
+    const fn new() -> Self {
+        Self {
+            calls: AtomicUsize::new(0),
+        }
+    }
+
+    fn exact_potential(x: f64) -> f64 {
+        let u = 1.0 - x * x;
+        let shift = x - 0.25;
+        let denom = 1.0 + 8.0 * shift * shift;
+        let tilt = 0.05 * (x + 1.0) * (x + 1.0) * (2.0 - x);
+        (u * u) / denom + tilt
+    }
+
+    fn exact_gradient(x: f64) -> f64 {
+        let u = 1.0 - x * x;
+        let shift = x - 0.25;
+        let denom = 1.0 + 8.0 * shift * shift;
+        let d_num = -4.0 * x * u;
+        let d_den = 16.0 * shift;
+        let d_tilt = 0.15 * (1.0 - x * x);
+        (d_num * denom - u * u * d_den) / (denom * denom) + d_tilt
+    }
+
+    fn exact_barrier() -> f64 {
+        let mut left = 0.1_f64;
+        let mut right = 0.35_f64;
+        for _ in 0..80 {
+            let mid = 0.5 * (left + right);
+            if Self::exact_gradient(mid) > 0.0 {
+                left = mid;
+            } else {
+                right = mid;
+            }
+        }
+        Self::exact_potential(0.5 * (left + right)) - Self::exact_potential(-1.0)
+    }
+
+    fn call_count(&self) -> usize {
+        self.calls.load(Ordering::Relaxed)
+    }
+}
+
+impl rgsaddle::PointSurface for AsymmetricBarrier1D {
+    fn eval(&self, r: ArrayView1<'_, f64>) -> Result<(f64, Array1<f64>), rgsaddle::SaddleError> {
+        self.calls.fetch_add(1, Ordering::Relaxed);
+        let x = r[0];
+        Ok((
+            Self::exact_potential(x),
+            Array1::from_vec(vec![Self::exact_gradient(x)]),
+        ))
+    }
+}
+
+/// 1D harmonic potential `V(x) = 0.5 * k * x^2`.
+struct Harmonic1D {
+    k: f64,
+}
+
+impl rgsaddle::PointSurface for Harmonic1D {
+    fn eval(&self, r: ArrayView1<'_, f64>) -> Result<(f64, Array1<f64>), rgsaddle::SaddleError> {
+        let x = r[0];
+        Ok((0.5 * self.k * x * x, Array1::from_vec(vec![self.k * x])))
+    }
+}
+
+/// 2D symmetric double-well with symmetric transverse stiffening:
+/// `V(x, y) = (1 - x^2)^2 + 0.5 * (1.5 + 0.5 * x^2) * y^2`.
+struct SymmetricWell2D;
+
+impl rgsaddle::PointSurface for SymmetricWell2D {
+    fn eval(&self, r: ArrayView1<'_, f64>) -> Result<(f64, Array1<f64>), rgsaddle::SaddleError> {
+        let x = r[0];
+        let y = r[1];
+        let u = 1.0 - x * x;
+        let ky = 1.5 + 0.5 * x * x;
+        let energy = u * u + 0.5 * ky * y * y;
+        let gx = -4.0 * x * u + 0.5 * x * y * y;
+        let gy = ky * y;
+        Ok((energy, Array1::from_vec(vec![gx, gy])))
+    }
+}
+
+fn path_1d(start: f64, end: f64, images: usize) -> Array2<f64> {
+    let mut path = Array2::zeros((images, 1));
+    for i in 0..images {
+        let t = (i as f64) / ((images - 1) as f64);
+        path[[i, 0]] = start + t * (end - start);
+    }
+    path
+}
+
+#[test]
+fn equidistribution_map_is_strictly_monotone_scale_invariant_and_never_collapses() {
+    let knots: Vec<f64> = (0..=40).map(|k| (k as f64) * 0.05).collect();
+    // Extreme localized spike at the midpoint plus flat zero tails.
+    let mut spiky_monitor = vec![0.0_f64; knots.len()];
+    spiky_monitor[19] = 500.0;
+    spiky_monitor[20] = 1.0e6;
+    spiky_monitor[21] = 500.0;
+
+    let map = EquidistributionMap::new(&knots, &spiky_monitor).expect("equidistribution map");
+    assert!(
+        map.floor() > 0.0,
+        "principled floor must be positive for a non-zero monitor"
+    );
+    assert_abs_diff_eq!(map.sigma(0.0).expect("sigma(0)"), 0.0, epsilon = 1.0e-15);
+    assert_abs_diff_eq!(map.sigma(2.0).expect("sigma(L)"), 1.0, epsilon = 1.0e-15);
+
+    // Strict monotonicity of sigma(s) and round-trip inversion.
+    let mut prev_sigma = 0.0_f64;
+    for step in 1..=200 {
+        let s = (step as f64) * 0.01;
+        let sig = map.sigma(s).expect("sigma");
+        assert!(
+            sig > prev_sigma,
+            "sigma must strictly increase: sigma({s}) = {sig} <= {prev_sigma}"
+        );
+        let recovered = map.inverse(sig).expect("inverse");
+        assert_abs_diff_eq!(recovered, s, epsilon = 1.0e-12);
+        prev_sigma = sig;
+    }
+
+    // Planes bunch near the spike (s = 1.0) while obeying the certified spacing floor.
+    let n_planes = 17usize;
+    let placed = map.place_planes(n_planes).expect("place planes");
+    let min_bound = map.min_spacing_bound(n_planes).expect("min spacing bound");
+    assert!(min_bound > 0.0, "certified min spacing bound must be > 0");
+    let mut min_ds = f64::INFINITY;
+    let mut max_ds = 0.0_f64;
+    for k in 1..n_planes {
+        let ds = placed[k] - placed[k - 1];
+        assert!(
+            ds >= min_bound * (1.0 - 64.0 * f64::EPSILON),
+            "plane interval {k} collapsed: ds={ds} < bound={min_bound}"
+        );
+        min_ds = min_ds.min(ds);
+        max_ds = max_ds.max(ds);
+    }
+    let mid_ds = (placed[n_planes / 2] - placed[n_planes / 2 - 1])
+        .min(placed[n_planes / 2 + 1] - placed[n_planes / 2]);
+    let end_ds = placed[1] - placed[0];
+    assert!(
+        mid_ds < 0.25 * end_ds,
+        "planes must bunch at the monitor spike: mid_ds={mid_ds}, end_ds={end_ds}"
+    );
+
+    // Scale invariance: multiplying the monitor by 1e4 leaves sigma and placed planes unchanged.
+    let scaled_monitor: Vec<f64> = spiky_monitor.iter().map(|&w| w * 1.0e4).collect();
+    let scaled_map = EquidistributionMap::new(&knots, &scaled_monitor).expect("scaled map");
+    let scaled_planes = scaled_map.place_planes(n_planes).expect("scaled planes");
+    for (a, b) in placed.iter().zip(&scaled_planes) {
+        assert_abs_diff_eq!(a, b, epsilon = 1.0e-12);
+    }
+
+    // All MonitorKind variants produce valid, strictly increasing plane placements.
+    let gradients: Vec<f64> = knots
+        .iter()
+        .map(|&s| LocalizedDoubleWell1D::exact_gradient(s - 1.0))
+        .collect();
+    let curvatures: Vec<f64> = knots
+        .iter()
+        .map(|&s| (-4.0 * (s - 1.0) * (s - 1.0)).exp())
+        .collect();
+    let variances: Vec<f64> = knots
+        .iter()
+        .map(|&s| 0.01 + 0.5 * (-8.0 * (s - 1.0).powi(2)).exp())
+        .collect();
+    let inputs = MonitorInputs::new(&knots)
+        .with_force_gradients(&gradients)
+        .with_path_curvatures(&curvatures)
+        .with_tau_weighted_variances(&variances);
+    for kind in [
+        MonitorKind::ForceGradient,
+        MonitorKind::PathCurvature,
+        MonitorKind::AutocorrelatedVariance,
+        MonitorKind::Combined,
+    ] {
+        let kind_map = EquidistributionMap::from_inputs(&inputs, kind).expect("monitor map");
+        let kind_planes = kind_map.place_planes(11).expect("kind planes");
+        for k in 1..kind_planes.len() {
+            assert!(kind_planes[k] > kind_planes[k - 1]);
+        }
+    }
+}
+
+#[test]
+fn harmonic_limit_has_zero_spectral_tail_and_exact_profile() {
+    let k_spring = 2.5_f64;
+    let length = 1.6_f64;
+    let path = path_1d(0.0, length, 9);
+    let mut engine = NativeEngine::new(
+        Harmonic1D { k: k_spring },
+        NativeConfig::default()
+            .with_masses(Array1::from_vec(vec![1.0]))
+            .with_thermostat(ThermostatConfig::default().with_temperature(0.1)),
+    )
+    .expect("harmonic engine");
+
+    let adaptive_cfg = AdaptivePafiConfig::default()
+        .with_base(
+            PafiConfig::default()
+                .with_planes(5)
+                .with_burn_in_steps(2)
+                .with_sample_steps(8)
+                .with_target_error(1.0e-6)
+                .with_stats(StatsConfig::default().with_min_batches(2)),
+        )
+        .with_max_planes(25)
+        .with_max_refinements(4);
+
+    let result =
+        pafi_profile_adaptive(&mut engine, path.view(), &adaptive_cfg).expect("harmonic adaptive");
+    let exact_barrier = 0.5 * k_spring * length * length;
+    assert_abs_diff_eq!(result.profile.barrier, exact_barrier, epsilon = 1.0e-12);
+    assert!(
+        result.tail.tail_bound <= 1.0e-12,
+        "harmonic limit must have zero spectral tail bound, got {}",
+        result.tail.tail_bound
+    );
+    assert!(
+        result.tail.flagged_intervals.is_empty(),
+        "harmonic limit must flag no intervals, got {:?}",
+        result.tail.flagged_intervals
+    );
+    assert_eq!(
+        result.refinement_rounds, 0,
+        "harmonic limit must stop without adding refinement planes"
+    );
+    for (&s, &f) in result
+        .profile
+        .arc_lengths
+        .iter()
+        .zip(&result.profile.free_energy)
+    {
+        assert_abs_diff_eq!(f, 0.5 * k_spring * s * s, epsilon = 1.0e-12);
+    }
+
+    // Verify spectral tail estimator flags intervals on a coarse under-resolved quartic barrier.
+    let coarse_arcs = [0.0, 0.5, 1.0, 1.5, 2.0];
+    let coarse_grads: Vec<f64> = coarse_arcs
+        .iter()
+        .map(|&s| LocalizedDoubleWell1D::exact_gradient(s - 1.0))
+        .collect();
+    let coarse_tail =
+        estimate_spectral_tail(&coarse_arcs, &coarse_grads, 1.0e-4).expect("coarse tail");
+    assert!(
+        coarse_tail.tail_bound > 1.0e-2,
+        "coarse 5-plane localized double well must have non-trivial spectral tail bound, got {}",
+        coarse_tail.tail_bound
+    );
+    assert!(
+        !coarse_tail.flagged_intervals.is_empty(),
+        "coarse 5-plane localized double well must flag intervals for refinement"
+    );
+}
+
+#[test]
+fn symmetric_hop_preserves_product_equals_reactant_free_energy() {
+    let path = path_1d(-1.0, 1.0, 17);
+    let mut engine = NativeEngine::new(
+        LocalizedDoubleWell1D::new(),
+        NativeConfig::default()
+            .with_masses(Array1::from_vec(vec![1.0]))
+            .with_thermostat(ThermostatConfig::default().with_temperature(0.1)),
+    )
+    .expect("1d symmetric engine");
+
+    let cfg = AdaptivePafiConfig::default()
+        .with_base(
+            PafiConfig::default()
+                .with_planes(5)
+                .with_burn_in_steps(2)
+                .with_sample_steps(8)
+                .with_target_error(2.0e-3)
+                .with_zero_temperature_tol(0.5)
+                .with_stats(StatsConfig::default().with_min_batches(2)),
+        )
+        .with_max_planes(25)
+        .with_max_refinements(5)
+        .with_monitor(MonitorKind::ForceGradient);
+
+    let adaptive =
+        pafi_profile_adaptive(&mut engine, path.view(), &cfg).expect("symmetric adaptive");
+    assert!(
+        adaptive.refinement_rounds >= 1 && adaptive.profile.arc_lengths.len() > 5,
+        "symmetric hop must refine beyond the initial 5 planes"
+    );
+    let f_reactant = adaptive.profile.free_energy[0];
+    let f_product = *adaptive
+        .profile
+        .free_energy
+        .last()
+        .expect("product plane exists");
+    assert_abs_diff_eq!(f_reactant, 0.0, epsilon = 1.0e-15);
+    assert_abs_diff_eq!(f_product, f_reactant, epsilon = 1.0e-13);
+
+    // Check plane coordinate reflection symmetry s_{N-1-k} = L - s_k.
+    let arcs = &adaptive.profile.arc_lengths;
+    let total_arc = *arcs.last().expect("total arc");
+    for k in 0..arcs.len() {
+        assert_abs_diff_eq!(
+            arcs[k] + arcs[arcs.len() - 1 - k],
+            total_arc,
+            epsilon = 1.0e-12
+        );
+    }
+
+    // 2D thermal symmetric hop: F(product) == F(reactant) within statistical SE.
+    let mut path_2d = Array2::zeros((17, 2));
+    for i in 0..17 {
+        path_2d[[i, 0]] = -1.0 + 2.0 * (i as f64) / 16.0;
+    }
+    let mut engine_2d = NativeEngine::new(
+        SymmetricWell2D,
+        NativeConfig::default()
+            .with_masses(Array1::from_vec(vec![1.0, 1.0]))
+            .with_thermostat(
+                ThermostatConfig::default()
+                    .with_gamma(1.5)
+                    .with_temperature(0.1),
+            ),
+    )
+    .expect("2d symmetric engine");
+    let cfg_2d = AdaptivePafiConfig::default()
+        .with_base(
+            PafiConfig::default()
+                .with_planes(7)
+                .with_burn_in_steps(1_000)
+                .with_sample_steps(4_000)
+                .with_time_step(0.002)
+                .with_zero_temperature_tol(0.2)
+                .with_stats(StatsConfig::default().with_min_batches(4)),
+        )
+        .with_max_planes(15)
+        .with_max_refinements(3);
+    let adaptive_2d =
+        pafi_profile_adaptive(&mut engine_2d, path_2d.view(), &cfg_2d).expect("2d adaptive");
+    let end_idx = adaptive_2d.profile.free_energy.len() - 1;
+    let end_f = adaptive_2d.profile.free_energy[end_idx];
+    let end_se = adaptive_2d.profile.standard_error[end_idx];
+    assert!(
+        end_f.abs() <= 2.5 * end_se,
+        "2D symmetric hop product free energy {end_f} exceeds 2.5 * SE ({end_se})"
+    );
+}
+
+#[test]
+fn adaptive_reaches_matched_barrier_error_with_fewer_planes_and_force_calls() {
+    let path = path_1d(-1.0, 1.0, 65);
+    let burn_in = 2usize;
+    let samples = 8usize;
+
+    // 1. Analytic 1D double-well: V(x) = (1 - x^2)^2 / (1 + 6 * x^2), exact F* = 1.0.
+    let exact_dw_barrier = 1.0_f64;
+    let dw_adaptive_cfg = AdaptivePafiConfig::default()
+        .with_base(
+            PafiConfig::default()
+                .with_planes(5)
+                .with_burn_in_steps(burn_in)
+                .with_sample_steps(samples)
+                .with_target_error(4.0e-3)
+                .with_zero_temperature_tol(0.5)
+                .with_stats(StatsConfig::default().with_min_batches(2)),
+        )
+        .with_max_planes(17)
+        .with_max_refinements(5)
+        .with_monitor(MonitorKind::ForceGradient);
+
+    let mut dw_adaptive_engine = NativeEngine::new(
+        LocalizedDoubleWell1D::new(),
+        NativeConfig::default()
+            .with_masses(Array1::from_vec(vec![1.0]))
+            .with_thermostat(ThermostatConfig::default().with_temperature(0.1)),
+    )
+    .expect("dw adaptive engine");
+    let dw_adaptive = pafi_profile_adaptive(&mut dw_adaptive_engine, path.view(), &dw_adaptive_cfg)
+        .expect("dw adaptive profile");
+    let dw_adaptive_err = (dw_adaptive.profile.barrier - exact_dw_barrier).abs();
+    let dw_adaptive_planes = dw_adaptive.profile.arc_lengths.len();
+    let dw_adaptive_calls = dw_adaptive_engine.surface().call_count();
+
+    // Find the minimum even-spacing plane count that reaches the same F* error.
+    let mut dw_even_planes = 0usize;
+    let mut dw_even_calls = 0usize;
+    let mut dw_even_err = f64::INFINITY;
+    for candidate_planes in (5..=99).step_by(2) {
+        let mut engine = NativeEngine::new(
+            LocalizedDoubleWell1D::new(),
+            NativeConfig::default()
+                .with_masses(Array1::from_vec(vec![1.0]))
+                .with_thermostat(ThermostatConfig::default().with_temperature(0.1)),
+        )
+        .expect("dw even engine");
+        let cfg = PafiConfig::default()
+            .with_planes(candidate_planes)
+            .with_burn_in_steps(burn_in)
+            .with_sample_steps(samples)
+            .with_zero_temperature_tol(0.5)
+            .with_stats(StatsConfig::default().with_min_batches(2));
+        let prof = pafi_profile(&mut engine, path.view(), &cfg).expect("dw even profile");
+        let err = (prof.barrier - exact_dw_barrier).abs();
+        if err <= dw_adaptive_err {
+            dw_even_planes = candidate_planes;
+            dw_even_calls = engine.surface().call_count();
+            dw_even_err = err;
+            break;
+        }
+    }
+    eprintln!(
+        "1D double-well matched error: adaptive planes={dw_adaptive_planes} calls={dw_adaptive_calls} err={dw_adaptive_err:.6e} vs even planes={dw_even_planes} calls={dw_even_calls} err={dw_even_err:.6e}"
+    );
+    assert!(
+        dw_adaptive_err <= 5.0e-3,
+        "1D double-well adaptive error {dw_adaptive_err} exceeded target"
+    );
+    assert!(
+        dw_even_planes > dw_adaptive_planes,
+        "adaptive ({dw_adaptive_planes} planes) must use fewer planes than even spacing ({dw_even_planes} planes) at matched error"
+    );
+    assert!(
+        dw_even_calls > dw_adaptive_calls,
+        "adaptive ({dw_adaptive_calls} calls) must use fewer force calls than even spacing ({dw_even_calls} calls) at matched error"
+    );
+
+    // 2. Analytic 1D asymmetric barrier with known exact F(s) and F*.
+    let exact_asym_barrier = AsymmetricBarrier1D::exact_barrier();
+    let asym_adaptive_cfg = AdaptivePafiConfig::default()
+        .with_base(
+            PafiConfig::default()
+                .with_planes(5)
+                .with_burn_in_steps(burn_in)
+                .with_sample_steps(samples)
+                .with_target_error(5.0e-3)
+                .with_zero_temperature_tol(0.5)
+                .with_stats(StatsConfig::default().with_min_batches(2)),
+        )
+        .with_max_planes(19)
+        .with_max_refinements(5)
+        .with_monitor(MonitorKind::ForceGradient);
+
+    let mut asym_adaptive_engine = NativeEngine::new(
+        AsymmetricBarrier1D::new(),
+        NativeConfig::default()
+            .with_masses(Array1::from_vec(vec![1.0]))
+            .with_thermostat(ThermostatConfig::default().with_temperature(0.1)),
+    )
+    .expect("asym adaptive engine");
+    let asym_adaptive =
+        pafi_profile_adaptive(&mut asym_adaptive_engine, path.view(), &asym_adaptive_cfg)
+            .expect("asym adaptive profile");
+    let asym_adaptive_err = (asym_adaptive.profile.barrier - exact_asym_barrier).abs();
+    let asym_adaptive_planes = asym_adaptive.profile.arc_lengths.len();
+    let asym_adaptive_calls = asym_adaptive_engine.surface().call_count();
+
+    let mut asym_even_planes = 0usize;
+    let mut asym_even_calls = 0usize;
+    let mut asym_even_err = f64::INFINITY;
+    for candidate_planes in 5..=120 {
+        let mut engine = NativeEngine::new(
+            AsymmetricBarrier1D::new(),
+            NativeConfig::default()
+                .with_masses(Array1::from_vec(vec![1.0]))
+                .with_thermostat(ThermostatConfig::default().with_temperature(0.1)),
+        )
+        .expect("asym even engine");
+        let cfg = PafiConfig::default()
+            .with_planes(candidate_planes)
+            .with_burn_in_steps(burn_in)
+            .with_sample_steps(samples)
+            .with_zero_temperature_tol(0.5)
+            .with_stats(StatsConfig::default().with_min_batches(2));
+        let prof = pafi_profile(&mut engine, path.view(), &cfg).expect("asym even profile");
+        let err = (prof.barrier - exact_asym_barrier).abs();
+        if err <= asym_adaptive_err {
+            asym_even_planes = candidate_planes;
+            asym_even_calls = engine.surface().call_count();
+            asym_even_err = err;
+            break;
+        }
+    }
+    eprintln!(
+        "1D asymmetric barrier matched error: adaptive planes={asym_adaptive_planes} calls={asym_adaptive_calls} err={asym_adaptive_err:.6e} vs even planes={asym_even_planes} calls={asym_even_calls} err={asym_even_err:.6e}"
+    );
+    assert!(
+        asym_adaptive_err <= 8.0e-3,
+        "1D asymmetric barrier adaptive error {asym_adaptive_err} exceeded target"
+    );
+    assert!(
+        asym_even_planes > asym_adaptive_planes,
+        "asymmetric barrier: adaptive ({asym_adaptive_planes} planes) must use fewer planes than even spacing ({asym_even_planes} planes)"
+    );
+    assert!(
+        asym_even_calls > asym_adaptive_calls,
+        "asymmetric barrier: adaptive ({asym_adaptive_calls} calls) must use fewer force calls than even spacing ({asym_even_calls} calls)"
+    );
+}
+
+#[test]
+fn tau_int_window_sizing_scales_with_autocorrelation_and_batches() {
+    let stats = StatsConfig::default().with_min_batches(16);
+    let (burn, sample) = size_window_from_tau_int(12.5, 40, 128, &stats).expect("window size");
+    // g = ceil(2 * 12.5) = 25; sample >= 16 * 25 = 400; burn >= 8 * 25 = 200.
+    assert_eq!(sample, 400);
+    assert_eq!(burn, 200);
+}

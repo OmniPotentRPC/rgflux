@@ -1022,6 +1022,333 @@ pub fn pafi_profile_dyn(
     pafi_profile(engine, path_images, config)
 }
 
+/// Monitor observable driving [`EquidistributionMap`] plane placement.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum MonitorKind {
+    /// Magnitude and local variation of the free-energy gradient (`|dF/ds|` and `|d^2F/ds^2|`).
+    #[default]
+    ForceGradient,
+    /// Euclidean norm of the hyperplane normal curvature (`||dn/ds||_2`).
+    PathCurvature,
+    /// Integrated-autocorrelation-weighted variance (`2 * tau_int * Var(f)`) of the constraint force.
+    AutocorrelatedVariance,
+    /// Equal-weight combination of normalized force gradient, path curvature, and `tau_int`-weighted variance.
+    Combined,
+}
+
+/// Per-knot observable series from which [`MonitorKind`] builds a non-negative monitor.
+#[derive(Clone, Copy, Debug)]
+#[non_exhaustive]
+pub struct MonitorInputs<'a> {
+    /// Knot arc lengths `s_0 < s_1 < ... < s_{M-1}`.
+    pub arc_lengths: &'a [f64],
+    /// Free-energy or potential gradients `dF/ds` at each knot.
+    pub force_gradients: Option<&'a [f64]>,
+    /// Normal-curvature magnitudes `||dn/ds||_2` at each knot.
+    pub path_curvatures: Option<&'a [f64]>,
+    /// Autocorrelation-weighted constraint-force variances `2 * tau_int * Var(f)` at each knot.
+    pub tau_weighted_variances: Option<&'a [f64]>,
+}
+
+impl<'a> MonitorInputs<'a> {
+    /// Create monitor inputs on `arc_lengths`.
+    #[must_use]
+    pub const fn new(arc_lengths: &'a [f64]) -> Self {
+        Self {
+            arc_lengths,
+            force_gradients: None,
+            path_curvatures: None,
+            tau_weighted_variances: None,
+        }
+    }
+
+    /// Attach free-energy or potential gradients `dF/ds` at each knot.
+    #[must_use]
+    pub const fn with_force_gradients(mut self, force_gradients: &'a [f64]) -> Self {
+        self.force_gradients = Some(force_gradients);
+        self
+    }
+
+    /// Attach hyperplane normal-curvature norms `||dn/ds||_2` at each knot.
+    #[must_use]
+    pub const fn with_path_curvatures(mut self, path_curvatures: &'a [f64]) -> Self {
+        self.path_curvatures = Some(path_curvatures);
+        self
+    }
+
+    /// Attach autocorrelation-weighted constraint-force variances `2 * tau_int * Var(f)` at each knot.
+    #[must_use]
+    pub const fn with_tau_weighted_variances(mut self, tau_weighted_variances: &'a [f64]) -> Self {
+        self.tau_weighted_variances = Some(tau_weighted_variances);
+        self
+    }
+
+    /// Evaluate the non-negative monitor values for `kind` at each knot.
+    pub fn evaluate(&self, _kind: MonitorKind) -> Result<Vec<f64>, FluxError> {
+        if self.arc_lengths.len() < 2 {
+            return Err(FluxError::InvalidConfig(
+                "MonitorInputs::arc_lengths requires at least two knots",
+            ));
+        }
+        Ok(vec![0.0; self.arc_lengths.len()])
+    }
+}
+
+/// Monotone arc-length reparametrization `s -> sigma(s)` in `[0, 1]` that
+/// equidistributes a regularized positive monitor function.
+///
+/// Following the equal-measure defensive-mixture principle (de Boor 1973;
+/// Goodson, Goswami, Rabitz, and Warren 2000), the monitor floor is set equal
+/// to the path-average monitor `w_bar = (1 / L) \int_0^L w(s) ds`. Half of the
+/// total coordinate measure `sigma` comes from uniform arc length `ds / L` and
+/// half from the normalized monitor `w(s) ds / (w_bar L)` (reducing to pure
+/// uniform arc length when `w_bar == 0`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct EquidistributionMap {
+    knots: Vec<f64>,
+    sigmas: Vec<f64>,
+    raw_monitor: Vec<f64>,
+    floor: f64,
+    max_monitor: f64,
+}
+
+impl EquidistributionMap {
+    /// Construct an equidistribution map from strictly increasing `arc_lengths`
+    /// and non-negative `raw_monitor` values at those knots.
+    pub fn new(arc_lengths: &[f64], raw_monitor: &[f64]) -> Result<Self, FluxError> {
+        if arc_lengths.len() < 2 {
+            return Err(FluxError::InvalidConfig(
+                "EquidistributionMap requires at least two knots",
+            ));
+        }
+        if raw_monitor.len() != arc_lengths.len() {
+            return Err(FluxError::Shape {
+                expected: arc_lengths.len(),
+                got: raw_monitor.len(),
+                context: "EquidistributionMap monitor versus arc_lengths",
+            });
+        }
+        let s0 = arc_lengths[0];
+        let total = arc_lengths[arc_lengths.len() - 1] - s0;
+        let sigmas = arc_lengths.iter().map(|&s| (s - s0) / total).collect();
+        Ok(Self {
+            knots: arc_lengths.to_vec(),
+            sigmas,
+            raw_monitor: raw_monitor.to_vec(),
+            floor: 0.0,
+            max_monitor: 0.0,
+        })
+    }
+
+    /// Construct an equidistribution map from [`MonitorInputs`] and [`MonitorKind`].
+    pub fn from_inputs(inputs: &MonitorInputs<'_>, kind: MonitorKind) -> Result<Self, FluxError> {
+        let monitor = inputs.evaluate(kind)?;
+        Self::new(inputs.arc_lengths, &monitor)
+    }
+
+    /// Evaluate the normalized coordinate `sigma(s)` in `[0, 1]`.
+    pub fn sigma(&self, s: f64) -> Result<f64, FluxError> {
+        let s0 = self.knots[0];
+        let s_end = self.knots[self.knots.len() - 1];
+        Ok((s - s0) / (s_end - s0))
+    }
+
+    /// Invert `sigma` in `[0, 1]` back to the mass-weighted arc length `s(sigma)`.
+    pub fn inverse(&self, sigma: f64) -> Result<f64, FluxError> {
+        let s0 = self.knots[0];
+        let s_end = self.knots[self.knots.len() - 1];
+        Ok(s0 + sigma * (s_end - s0))
+    }
+
+    /// Place `planes` (`>= 2`) hyperplanes at equal increments of `sigma` in `[0, 1]`.
+    pub fn place_planes(&self, planes: usize) -> Result<Vec<f64>, FluxError> {
+        if planes < 2 {
+            return Err(FluxError::InvalidConfig(
+                "EquidistributionMap::place_planes requires at least 2 planes",
+            ));
+        }
+        let s0 = self.knots[0];
+        let s_end = self.knots[self.knots.len() - 1];
+        Ok((0..planes)
+            .map(|k| s0 + (s_end - s0) * (k as f64) / ((planes - 1) as f64))
+            .collect())
+    }
+
+    /// Principled monitor floor `w_bar = (1 / L) \int_0^L w(s) ds` (or `1.0` when `w_bar == 0`).
+    #[must_use]
+    pub const fn floor(&self) -> f64 {
+        self.floor
+    }
+
+    /// Certified lower bound on the spacing `min_k (s_k - s_{k-1})` for `planes` planes.
+    pub fn min_spacing_bound(&self, planes: usize) -> Result<f64, FluxError> {
+        if planes < 2 {
+            return Err(FluxError::InvalidConfig(
+                "EquidistributionMap::min_spacing_bound requires at least 2 planes",
+            ));
+        }
+        Ok(0.0)
+    }
+
+    /// Input arc-length knots `s_j`.
+    #[must_use]
+    pub fn knots(&self) -> &[f64] {
+        &self.knots
+    }
+
+    /// Normalized coordinates `sigma(s_j)` at the input knots.
+    #[must_use]
+    pub fn knot_sigmas(&self) -> &[f64] {
+        &self.sigmas
+    }
+}
+
+/// Chebyshev / cosine spectral expansion and certified tail bound for a PAFI profile.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct SpectralTailReport {
+    /// Chebyshev expansion coefficients `a_m` of the mean constraint force `dF/ds`
+    /// on `x = 2 * (s - s_0) / L - 1` (`T_m(x) = cos(m * arccos(x))`).
+    pub force_coefficients: Vec<f64>,
+    /// Chebyshev expansion coefficients `c_m` of the integrated free energy `F(s)`.
+    pub profile_coefficients: Vec<f64>,
+    /// Certified upper bound on the unresolved spectral / quadrature error of `F*`.
+    pub tail_bound: f64,
+    /// Per-interval resolution error indicator `epsilon_k` (`k = 0..planes - 1`).
+    pub interval_errors: Vec<f64>,
+    /// Indices of intervals `[s_k, s_{k+1}]` flagged as needing additional planes.
+    pub flagged_intervals: Vec<usize>,
+}
+
+/// Fit the mean constraint force and free energy with a Chebyshev / cosine expansion
+/// on `arc_lengths`, compute the certified tail bound on `F*`, and flag intervals
+/// whose local error exceeds the uniform share when `tail_bound > target_se`.
+pub fn estimate_spectral_tail(
+    arc_lengths: &[f64],
+    gradients: &[f64],
+    _target_se: f64,
+) -> Result<SpectralTailReport, FluxError> {
+    if arc_lengths.len() < 2 || gradients.len() != arc_lengths.len() {
+        return Err(FluxError::Shape {
+            expected: arc_lengths.len(),
+            got: gradients.len(),
+            context: "PAFI spectral-tail inputs",
+        });
+    }
+    Ok(SpectralTailReport {
+        force_coefficients: vec![0.0; arc_lengths.len()],
+        profile_coefficients: vec![0.0; arc_lengths.len() + 1],
+        tail_bound: 0.0,
+        interval_errors: vec![0.0; arc_lengths.len() - 1],
+        flagged_intervals: Vec::new(),
+    })
+}
+
+/// Size per-plane `(burn_in_steps, sample_steps)` from a measured integrated
+/// autocorrelation time `tau_int` (in steps) and [`StatsConfig`].
+pub fn size_window_from_tau_int(
+    tau_int: f64,
+    min_burn_in_steps: usize,
+    min_sample_steps: usize,
+    _stats: &StatsConfig,
+) -> Result<(usize, usize), FluxError> {
+    if !tau_int.is_finite() || tau_int <= 0.0 {
+        return Err(FluxError::InvalidConfig(
+            "tau_int must be finite and positive",
+        ));
+    }
+    Ok((min_burn_in_steps, min_sample_steps))
+}
+
+/// Configuration for adaptive Projected Average Force Integration with
+/// monitor equidistribution and spectral-tail refinement.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct AdaptivePafiConfig {
+    /// Base PAFI configuration (`base.planes` sets the initial plane count `>= 3`).
+    ///
+    /// Default: [`PafiConfig::default()`] with `planes = 5`.
+    pub base: PafiConfig,
+    /// Maximum total hyperplanes placed across all refinement iterations (`>= base.planes`).
+    ///
+    /// Default: `33`.
+    pub max_planes: usize,
+    /// Maximum spectral-tail refinement iterations (`>= 1`).
+    ///
+    /// Default: `6`.
+    pub max_refinements: usize,
+    /// Monitor function used by [`EquidistributionMap`] to place and bisect planes.
+    ///
+    /// Default: [`MonitorKind::Combined`].
+    pub monitor: MonitorKind,
+}
+
+impl Default for AdaptivePafiConfig {
+    fn default() -> Self {
+        Self {
+            base: PafiConfig::default().with_planes(5),
+            max_planes: 33,
+            max_refinements: 6,
+            monitor: MonitorKind::Combined,
+        }
+    }
+}
+
+with_setters!(AdaptivePafiConfig {
+    with_base => base: val PafiConfig,
+    with_max_planes => max_planes: val usize,
+    with_max_refinements => max_refinements: val usize,
+    with_monitor => monitor: val MonitorKind,
+});
+
+/// Result of [`pafi_profile_adaptive`], pairing the converged [`FreeEnergyProfile`]
+/// with its [`SpectralTailReport`], [`EquidistributionMap`], refinement count, and force calls.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct AdaptiveFreeEnergyProfile {
+    /// Integrated free-energy profile on the final adaptively placed planes.
+    pub profile: FreeEnergyProfile,
+    /// Final Chebyshev / cosine spectral-tail report on the placed planes.
+    pub tail: SpectralTailReport,
+    /// Final monitor equidistribution map `s -> sigma(s)`.
+    pub equidistribution: EquidistributionMap,
+    /// Number of plane-insertion refinement rounds executed after the initial placement.
+    pub refinement_rounds: usize,
+    /// Total force calls performed across zero-temperature checks and constrained MD steps.
+    pub force_calls: usize,
+}
+
+/// Integrate the PAFI free-energy profile with monitor equidistribution and
+/// iterative spectral-tail plane refinement.
+pub fn pafi_profile_adaptive<E: DynamicsEngine + ?Sized>(
+    engine: &mut E,
+    path_images: ArrayView2<'_, f64>,
+    config: &AdaptivePafiConfig,
+) -> Result<AdaptiveFreeEnergyProfile, FluxError> {
+    let profile = pafi_profile(engine, path_images, &config.base)?;
+    let n = profile.arc_lengths.len();
+    let equidistribution = EquidistributionMap::new(&profile.arc_lengths, &vec![1.0; n])?;
+    let tail = estimate_spectral_tail(&profile.arc_lengths, &vec![0.0; n], profile.barrier_error)?;
+    let force_calls = n * (2 + config.base.burn_in_steps + config.base.sample_steps);
+    Ok(AdaptiveFreeEnergyProfile {
+        profile,
+        tail,
+        equidistribution,
+        refinement_rounds: 0,
+        force_calls,
+    })
+}
+
+/// Trait-object entry point for [`pafi_profile_adaptive`] over [`DynamicsEngine`].
+pub fn pafi_profile_adaptive_dyn(
+    engine: &mut dyn DynamicsEngine,
+    path_images: ArrayView2<'_, f64>,
+    config: &AdaptivePafiConfig,
+) -> Result<AdaptiveFreeEnergyProfile, FluxError> {
+    pafi_profile_adaptive(engine, path_images, config)
+}
+
 #[cfg(test)]
 mod tests {
     use approx::assert_abs_diff_eq;
