@@ -1,14 +1,177 @@
 //! Projected Average Force Integration (PAFI) along minimum-energy paths.
 //!
-//! Integrates the curvature-corrected hyperplane mean force
-//! `<(grad V · n)(1 - psi)>` across planes orthogonal to a converged band or
-//! spline reaction path to obtain finite-temperature free-energy barriers
-//! without a predefined collective variable.
+//! [`pafi_profile`] turns a converged reaction path, such as a nudged elastic
+//! band, into a finite-temperature free-energy profile `F(s)`, a barrier
+//! `Delta F`, and a normalized rate, without a predefined collective variable.
+//! It samples the constrained dynamics on hyperplanes orthogonal to a spline
+//! through the path images and integrates the mean constraint force along the
+//! path (Swinburne and Marinica, 2018).
 //!
-//! Note: implementation moves from rgsaddle.
+//! ## Theory
+//!
+//! Let `X(s)` be the path, `M = diag(m_i)` the mass matrix of the engine, and
+//! `s` the arc length in the mass-weighted metric, `ds^2 = dX^T M dX`. The
+//! plane at `s` has the unit normal `n(s) = M X'(s) / |M X'(s)|` and the
+//! equation `sigma(x, s) = n(s) . (x - X(s)) = 0`, so the planes are
+//! orthogonal to the path in the metric `M`. With `lambda` the Lagrange
+//! multiplier of the holonomic constraint on that plane, the free-energy
+//! gradient along the path is the constrained mean force with a correction for
+//! the tilt of neighbouring planes:
+//!
+//! `dF/ds = < lambda (n . X' - (x - X) . n') >_{plane at s}`
+//!
+//! where `n' = dn/ds` is the curvature of the normal. On a straight path
+//! `n' = 0` and this is the Sprik and Ciccotti (1998) mean constraint force,
+//! which [`crate::hyperplane::sample_hyperplane`] samples for a single plane.
+//! The term `(x - X) . n'` is the Jacobian of the plane foliation. Omitting it
+//! on a curved path gives a wrong profile.
+//!
+//! The profile is the trapezoid integral of the per-plane mean forces,
+//! `F(s_k) - F(s_0) = sum_j 0.5 (g_{j-1} + g_j) (s_j - s_{j-1})`. The barrier is
+//! `Delta F = max_k F(s_k)` at the dividing plane `s*`, and the normalized rate
+//! is
+//!
+//! `k = sqrt(k_B T / (2 pi)) exp(-F(s*) / k_B T) / Z_R`
+//!
+//! with `Z_R = 2 * \int_0^{s*} exp(-F(s) / k_B T) ds`, also evaluated by the
+//! trapezoid rule.
+//!
+//! ## What the code does
+//!
+//! 1. The images become a cubic spline in the chord-length parameter
+//!    `sqrt(sum_j m_j dx_j^2)` between neighbours. The end second derivatives
+//!    come from linear extrapolation of the second derivative (the not-a-knot
+//!    condition), so the first and last planes keep the curvature of the path.
+//!    Three images give one parabola and two images a straight line.
+//! 2. `planes` planes sit at equally spaced values of that parameter, from
+//!    the first to the last image. Each carries its anchor `X(s_k)`, the
+//!    normal, and the curvature `n'`.
+//! 3. A zero-temperature check integrates `dV/ds` over the anchors with the
+//!    trapezoid rule. It divides the absolute disagreement with the end-to-end
+//!    energy change `Delta E_0` by `max(E_unit, |Delta E_0|)`, where `E_unit`
+//!    is one energy unit of the engine, and compares that dimensionless value
+//!    with [`PafiConfig::zero_temperature_tol`]. A mismatch returns
+//!    [`FluxError::InvalidConfig`] before any sampling.
+//! 4. On each plane the engine is constrained, placed at the anchor, given
+//!    Maxwell-Boltzmann velocities, run for `burn_in_steps`, and then run for
+//!    `sample_steps` steps that each record
+//!    `lambda (n . X' - (x - X) . n')`. Batch means over the samples give the
+//!    mean force and its standard error on each plane.
+//! 5. The profile, barrier and rate follow from the plane means. The
+//!    standard errors of the planes are independent and propagate through the
+//!    trapezoid weights and, for the rate, through `Z_R` by the delta method.
+//! 6. With `target_error` set, steps 4 and 5 repeat for up to `max_rounds`
+//!    rounds, each adding `sample_steps` fresh samples to every plane, until
+//!    the standard error of the barrier is at most `target_error`. Without
+//!    it there is one round. The returned profile uses all samples so far.
+//!    Missing the target after `max_rounds` rounds is not an error: compare
+//!    [`FreeEnergyProfile::barrier_error`] with the target.
+//!
+//! The engine is restored on return, including on errors. Positions,
+//! velocities, the periodic cell, the thermostat and the constraint go back to
+//! their old values. The stochastic stream does not: each plane reseeds it
+//! with `seed + 4099 * plane + 1000003 * round` (wrapping), so the stream is
+//! left where the last plane put it.
+//!
+//! ## Assumptions
+//!
+//! - The images form a smooth path of at least two images, distinct in the
+//!   mass-weighted metric, with one coordinate per degree of freedom of the
+//!   engine.
+//! - Thermal excursions in a plane stay inside the tube where neighbouring
+//!   planes do not intersect, so `n . X' - (x - X) . n'`, the speed at which
+//!   the planes sweep through space, stays positive.
+//! - Each plane equilibrates within `burn_in_steps`. The samples start at the
+//!   anchor, so a plane whose thermal centre lies far from its anchor needs a
+//!   long burn-in.
+//! - The free energy rises somewhere along the path, so the dividing plane is
+//!   not the first one. Otherwise `Z_R` is zero and the call fails.
+//!
+//! ## Units
+//!
+//! - Positions, path images and masses use the units of the engine. Arc
+//!   lengths `s` are mass-weighted, `sqrt(mass) * length`, and equal lengths
+//!   for unit masses.
+//! - Energies, `free_energy`, `standard_error`, `barrier`, `barrier_error`,
+//!   `target_error` and the energy part of the tolerance are in engine energy
+//!   units. `time_step` is in engine time units.
+//! - [`FreeEnergyProfile::normalized_rate`] has units of inverse engine time
+//!   and [`FreeEnergyProfile::reactant_partition`] has the units of `s`.
+//! - `k_B T` comes from [`crate::engine::ThermostatConfig::thermal_energy`] of
+//!   the engine and must be positive.
+//!
+//! ## Engine wiring
+//!
+//! [`pafi_profile`] accepts any `E: DynamicsEngine + ?Sized`: the native
+//! engine over a [`rgsaddle::PointSurface`], an [`crate::EindirSurface`] or an
+//! `rgpot` surface, a session engine, or `LammpcEngine`. [`pafi_profile_dyn`]
+//! takes `&mut dyn DynamicsEngine`. The engine has to report
+//! [`crate::StepReport::constraint_force`] on constrained steps, and provide
+//! [`crate::DynamicsEngine::energy_and_forces`] for the zero-temperature
+//! check.
+//!
+//! ## Example
+//!
+//! A straight path through the widening double well
+//! `V(x, y) = (1 - x^2)^2 + 0.5 (1.5 + 0.5 x) y^2` with `k_B T = 0.2`. The
+//! exact barrier from `x = -1` to the saddle at `x = 0` is
+//! `1 + 0.5 k_B T ln(1.5) = 1.04`. This run is far too short for that
+//! accuracy, so the example only checks the shape of the result.
+//!
+//! ```rust
+//! use ndarray::{Array1, Array2, ArrayView1};
+//! use rgflux::engine::ThermostatConfig;
+//! use rgflux::engine::native::{NativeConfig, NativeEngine};
+//! use rgflux::pafi::{PafiConfig, pafi_profile};
+//! use rgflux::stats::StatsConfig;
+//!
+//! struct WideningWell;
+//! impl rgsaddle::PointSurface for WideningWell {
+//!     fn eval(
+//!         &self,
+//!         r: ArrayView1<'_, f64>,
+//!     ) -> Result<(f64, Array1<f64>), rgsaddle::SaddleError> {
+//!         let (x, y) = (r[0], r[1]);
+//!         let well = 1.0 - x * x;
+//!         let k = 1.5 + 0.5 * x;
+//!         Ok((
+//!             well * well + 0.5 * k * y * y,
+//!             Array1::from_vec(vec![-4.0 * x * well + 0.25 * y * y, k * y]),
+//!         ))
+//!     }
+//! }
+//!
+//! let config = PafiConfig::default()
+//!     .with_burn_in_steps(200)
+//!     .with_sample_steps(400)
+//!     .with_stats(StatsConfig::default().with_min_batches(4));
+//! let mut engine = NativeEngine::new(
+//!     WideningWell,
+//!     NativeConfig::default()
+//!         .with_masses(Array1::from_vec(vec![1.0, 1.0]))
+//!         .with_thermostat(
+//!             ThermostatConfig::default()
+//!                 .with_gamma(1.5)
+//!                 .with_temperature(0.2),
+//!         ),
+//! )?;
+//!
+//! let mut path = Array2::<f64>::zeros((config.planes, 2));
+//! for k in 0..config.planes {
+//!     path[[k, 0]] = -1.0 + (k as f64) / ((config.planes - 1) as f64);
+//! }
+//! let profile = pafi_profile(&mut engine, path.view(), &config)?;
+//! assert_eq!(profile.free_energy.len(), config.planes);
+//! assert_eq!(profile.free_energy[0], 0.0);
+//! assert!(profile.barrier.is_finite() && profile.barrier_error > 0.0);
+//! assert!(profile.normalized_rate > 0.0);
+//! # Ok::<(), rgflux::FluxError>(())
+//! ```
 //!
 //! ## References
 //!
+//! - Goswami, R. (2025). *Efficient Exploration of Chemical Kinetics*.
+//!   arXiv:2510.21368. <https://doi.org/10.48550/arXiv.2510.21368>
 //! - Goswami, R., Gunde, M., and Jónsson, H. (2026). *Enhanced climbing image
 //!   nudged elastic band method with Hessian eigenmode alignment*. Frontiers
 //!   in Chemistry, 14, 1807063. <https://doi.org/10.3389/fchem.2026.1807063>
@@ -18,8 +181,11 @@
 //! - Swinburne, T. D., and Marinica, M.-C. (2018). *Unsupervised Calculation
 //!   of Free Energy Barriers in Large Crystalline Systems*. Physical Review
 //!   Letters, 120, 135503. <https://doi.org/10.1103/PhysRevLett.120.135503>
+//! - Sprik, M., and Ciccotti, G. (1998). *Free energy from constrained
+//!   molecular dynamics*. The Journal of Chemical Physics, 109, 7737 to 7744.
+//!   <https://doi.org/10.1063/1.477419>
 
-use std::f64::consts::TAU;
+use std::f64::consts::{LN_2, PI, TAU};
 
 use ndarray::{Array1, ArrayView1, ArrayView2};
 use rgmin::vecops::{dot, nrm2};
@@ -31,40 +197,125 @@ use crate::engine::{
 use crate::error::FluxError;
 use crate::stats::{StatsConfig, batch_means};
 
+/// Number of planes in the default [`PafiConfig`].
+const DEFAULT_PLANES: usize = 9;
+
+/// Coefficient `C` in the relative trapezoid error `C / (planes - 1)^2` of the
+/// zero-temperature path-force integral along a quarter-turn circular arc in
+/// mass-weighted coordinates through a harmonic well.
+///
+/// The leading Euler-Maclaurin term of the trapezoid rule on `dV/ds` gives
+/// `pi^2 / 12` for that arc, independent of the radius and of the two force
+/// constants. Measured on the curved analytic test path the product
+/// `error * (planes - 1)^2` stays between 0.82 and 0.86 for 3 to 129 planes
+/// and for 9 to 129 path images.
+const QUARTER_ARC_TRAPEZOID_COEFFICIENT: f64 = PI * PI / 12.0;
+
+/// Margin by which the default zero-temperature tolerance exceeds the
+/// quarter-arc trapezoid error at [`DEFAULT_PLANES`].
+///
+/// The leading relative trapezoid error for `N` planes is
+/// `pi^2 / (12 (N - 1)^2)`, or about `1.29%` at `N = 9`, which exceeded the
+/// previous `0.01` (`1%`) default tolerance on `develop`. Adding one leading
+/// term sets the safety margin to `1.0` and gives the `9`-plane default of
+/// `2 * (pi^2 / 12) / 8^2`, about `2.57%`.
+const ZERO_TEMPERATURE_SAFETY_MARGIN: f64 = 1.0;
+
+const fn default_zero_temperature_tol(planes: usize) -> f64 {
+    let intervals = (planes - 1) as f64;
+    let leading_term = QUARTER_ARC_TRAPEZOID_COEFFICIENT / (intervals * intervals);
+    leading_term * (1.0 + ZERO_TEMPERATURE_SAFETY_MARGIN)
+}
+
+/// Default [`PafiConfig::zero_temperature_tol`]: the quarter-arc trapezoid
+/// error at [`DEFAULT_PLANES`] (1.29%) plus the safety margin.
+const DEFAULT_ZERO_TEMPERATURE_TOL: f64 = default_zero_temperature_tol(DEFAULT_PLANES);
+
+fn effective_zero_temperature_tol(config: &PafiConfig) -> f64 {
+    let tol = config.zero_temperature_tol;
+    if tol.to_bits() == DEFAULT_ZERO_TEMPERATURE_TOL.to_bits() {
+        default_zero_temperature_tol(config.planes)
+    } else {
+        tol
+    }
+}
+
 /// Configuration for Projected Average Force Integration (PAFI).
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct PafiConfig {
-    /// Number of hyperplanes discretized along the reaction path (`>= 2`).
+    /// Number of hyperplanes placed at equal spacing along the spline path
+    /// (`>= 2`).
+    ///
+    /// Default: `9`.
     pub planes: usize,
-    /// Equilibration steps discarded on each hyperplane.
+    /// Equilibration steps discarded on each hyperplane before sampling
+    /// (`>= 1`). Every plane and every round starts from the anchor again.
+    ///
+    /// Default: `500`.
     pub burn_in_steps: usize,
     /// Production steps added per hyperplane and adaptive round (`>= 2`).
+    ///
+    /// Default: `4_000`.
     pub sample_steps: usize,
-    /// Integration timestep `dt > 0`.
+    /// Integration timestep `dt > 0` in engine time units.
+    ///
+    /// Default: `0.002`.
     pub time_step: f64,
-    /// Optional target standard error on the integrated barrier `Delta F`.
+    /// Optional target standard error on the integrated barrier `Delta F`
+    /// (finite and `>= 0`), in engine energy units. `None` runs one round.
+    ///
+    /// Default: `None`.
     pub target_error: Option<f64>,
-    /// Maximum adaptive resampling rounds when `target_error` is set.
+    /// Maximum sampling rounds (`>= 1`). Rounds after the first only run when
+    /// `target_error` is set and not yet reached.
+    ///
+    /// Default: `4`.
     pub max_rounds: usize,
-    /// Relative tolerance on the zero-temperature path-force integral vs `Delta E_0`.
+    /// Dimensionless tolerance for the zero-temperature path-force check.
+    ///
+    /// Let `I_T` be the trapezoid integral of `dV/ds` over the plane anchors
+    /// and `Delta E_0` the endpoint energy change, both in the engine's energy
+    /// units. The check compares
+    /// `|I_T - Delta E_0| / max(E_unit, |Delta E_0|)` with the effective
+    /// tolerance, where `E_unit` is one energy unit of the engine. Thus the
+    /// check is relative when `|Delta E_0| >= E_unit` and otherwise bounds the
+    /// absolute discrepancy in engine energy units.
+    ///
+    /// The stored default is `2 * (pi^2 / 12) / 8^2`, about `0.0257`, for the
+    /// default 9 planes. If this field retains that default value, changing
+    /// `planes` changes the effective tolerance to
+    /// `2 * (pi^2 / 12) / (planes - 1)^2`. An explicitly different value is
+    /// used unchanged and does not scale with `planes`.
+    ///
+    /// The scaling follows the trapezoid error on a quarter-turn circular arc
+    /// through a harmonic well. Paths that turn through more than a quarter
+    /// circle can need a larger tolerance. Larger values weaken the guard
+    /// against inconsistent forces and tangents. Must be finite and `>= 0`.
+    ///
+    /// Default: `2 * (pi^2 / 12) / 8^2`, about `0.0257`.
     pub zero_temperature_tol: f64,
-    /// Deterministic PRNG seed.
+    /// Base of the deterministic per-plane seeds `seed + 4099 * plane + 1000003 * round`
+    /// (wrapping).
+    ///
+    /// Default: `1`.
     pub seed: u64,
-    /// Batch-means uncertainty settings for per-plane forces.
+    /// Batch-means uncertainty settings for the per-plane force series.
+    ///
+    /// Default: [`StatsConfig::default`].
     pub stats: StatsConfig,
 }
 
 impl Default for PafiConfig {
     fn default() -> Self {
         Self {
-            planes: 9,
+            planes: DEFAULT_PLANES,
             burn_in_steps: 500,
             sample_steps: 4_000,
             time_step: 0.002,
             target_error: None,
             max_rounds: 4,
-            zero_temperature_tol: 0.01,
+            zero_temperature_tol: DEFAULT_ZERO_TEMPERATURE_TOL,
             seed: 1,
             stats: StatsConfig::default(),
         }
@@ -87,24 +338,36 @@ with_setters!(PafiConfig {
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct FreeEnergyProfile {
-    /// Normalized arc-length coordinates `s_k` along the path.
+    /// Plane coordinates `s_k`: the mass-weighted chord-length parameter of
+    /// the spline, from `0` at the first image to the total path length at
+    /// the last, at equal spacing. They are not scaled to `[0, 1]`.
     pub arc_lengths: Vec<f64>,
-    /// Integrated free energy `F(s_k) - F(s_0)` at each plane.
+    /// Integrated free energy `F(s_k) - F(s_0)` at each plane, so the first
+    /// entry is `0`.
     pub free_energy: Vec<f64>,
-    /// Propagated block-averaged standard error at each plane.
+    /// Standard error of `free_energy` at each plane, propagated from the
+    /// batch-means errors of the plane forces through the trapezoid weights.
+    /// The first entry is `0`.
     pub standard_error: Vec<f64>,
-    /// Free-energy barrier `Delta F = max_s F(s)` at dividing plane `s*`.
+    /// Free-energy barrier `Delta F = max_k F(s_k)`, attained at the dividing
+    /// plane `s*`.
     pub barrier: f64,
     /// Standard error of [`Self::barrier`].
     pub barrier_error: f64,
-    /// Index `s*` where [`Self::barrier`] is attained.
+    /// Index of the dividing plane `s*`: the first plane where
+    /// [`Self::barrier`] is attained.
     pub dividing_index: usize,
     /// Reactant-side normalization
     /// `Z_R = 2 * \int_0^{s*} exp(-F(s) / k_B T) ds`.
     pub reactant_partition: f64,
+    /// Natural logarithm of the reactant-side normalization
+    /// `ln Z_R = ln(2 * \int_0^{s*} exp(-F(s) / k_B T) ds)`.
+    pub reactant_log_partition: f64,
     /// Normalized PAFI rate
     /// `k = sqrt(k_B T / (2 pi)) * exp(-F(s*) / k_B T) / Z_R`.
     pub normalized_rate: f64,
+    /// Natural logarithm of [`Self::normalized_rate`].
+    pub normalized_log_rate: f64,
     /// Propagated standard error of [`Self::normalized_rate`].
     pub normalized_rate_error: f64,
 }
@@ -429,8 +692,7 @@ fn estimate_plane(samples: &[f64], config: &PafiConfig) -> Result<PlaneEstimate,
 fn integrate_means(
     arc_lengths: &[f64],
     gradients: &[f64],
-    kbt: f64,
-) -> Result<(Vec<f64>, f64, f64, usize), FluxError> {
+) -> Result<(Vec<f64>, f64, usize), FluxError> {
     let n = arc_lengths.len();
     if n < 2 || gradients.len() != n {
         return Err(FluxError::Shape {
@@ -459,20 +721,53 @@ fn integrate_means(
         }
     }
     let barrier = free_energy[dividing];
-    let mut zr_half = 0.0_f64;
+    Ok((free_energy, barrier, dividing))
+}
+
+fn reactant_log_partition_and_sensitivity(
+    arc_lengths: &[f64],
+    free_energy: &[f64],
+    dividing: usize,
+    kbt: f64,
+) -> Result<(f64, Vec<f64>), FluxError> {
+    let n = free_energy.len();
+    let mut exponent_shift = f64::NEG_INFINITY;
+    for &value in &free_energy[..=dividing] {
+        let exponent = -value / kbt;
+        if !exponent.is_finite() {
+            return Err(FluxError::NonFinite("PAFI reactant partition exponent"));
+        }
+        exponent_shift = exponent_shift.max(exponent);
+    }
+
+    let mut scaled_half_partition = 0.0_f64;
+    let mut scaled_numerator = vec![0.0_f64; n];
     for i in 1..=dividing {
         let ds = arc_lengths[i] - arc_lengths[i - 1];
-        let w0 = (-free_energy[i - 1] / kbt).exp();
-        let w1 = (-free_energy[i] / kbt).exp();
-        zr_half += 0.5 * ds * (w0 + w1);
+        let left_exp = (-free_energy[i - 1] / kbt - exponent_shift).exp();
+        let right_exp = (-free_energy[i] / kbt - exponent_shift).exp();
+        let left_weight = 0.5 * ds * left_exp;
+        let right_weight = 0.5 * ds * right_exp;
+        scaled_half_partition += left_weight + right_weight;
+        scaled_numerator[i - 1] += left_weight;
+        scaled_numerator[i] += right_weight;
     }
-    let reactant_partition = 2.0 * zr_half;
-    if !reactant_partition.is_finite() || reactant_partition <= 0.0 {
+    if !scaled_half_partition.is_finite() || scaled_half_partition <= 0.0 {
         return Err(FluxError::InvalidConfig(
             "PAFI reactant partition must be finite and positive",
         ));
     }
-    Ok((free_energy, barrier, reactant_partition, dividing))
+
+    let reactant_log_partition = LN_2 + exponent_shift + scaled_half_partition.ln();
+    if !reactant_log_partition.is_finite() {
+        return Err(FluxError::NonFinite("PAFI reactant log partition"));
+    }
+    let mut d_ln_zr_d_f = vec![0.0_f64; n];
+    for i in 0..=dividing {
+        d_ln_zr_d_f[i] = -scaled_numerator[i] / (kbt * scaled_half_partition);
+    }
+
+    Ok((reactant_log_partition, d_ln_zr_d_f))
 }
 
 fn integrate_profile(
@@ -489,8 +784,7 @@ fn integrate_profile(
             context: "PAFI profile integration vectors",
         });
     }
-    let (free_energy, barrier, reactant_partition, dividing) =
-        integrate_means(arc_lengths, gradients, kbt)?;
+    let (free_energy, barrier, dividing) = integrate_means(arc_lengths, gradients)?;
 
     let mut integration_weights = vec![vec![0.0_f64; n]; n];
     for i in 1..n {
@@ -516,32 +810,31 @@ fn integrate_profile(
         standard_error[i] = variance.sqrt();
     }
 
-    let mut d_zr_d_f = vec![0.0_f64; n];
-    for i in 1..=dividing {
-        let ds = arc_lengths[i] - arc_lengths[i - 1];
-        let w0 = (-free_energy[i - 1] / kbt).exp();
-        let w1 = (-free_energy[i] / kbt).exp();
-        d_zr_d_f[i - 1] += -0.5 * ds * w0 / kbt;
-        d_zr_d_f[i] += -0.5 * ds * w1 / kbt;
-    }
-
+    let (reactant_log_partition, d_ln_zr_d_f) =
+        reactant_log_partition_and_sensitivity(arc_lengths, &free_energy, dividing, kbt)?;
+    let reactant_partition = reactant_log_partition.exp();
     let barrier_error = standard_error[dividing];
-    let normalized_rate = (kbt / TAU).sqrt() * (-barrier / kbt).exp() / reactant_partition;
-    if !normalized_rate.is_finite() || normalized_rate <= 0.0 {
+    let normalized_log_rate = 0.5 * (kbt / TAU).ln() - barrier / kbt - reactant_log_partition;
+    if !normalized_log_rate.is_finite() {
         return Err(FluxError::InvalidConfig(
-            "PAFI normalized rate must be finite and positive",
+            "PAFI normalized log rate must be finite",
+        ));
+    }
+    let normalized_rate = normalized_log_rate.exp();
+    if !normalized_rate.is_finite() || normalized_rate < 0.0 {
+        return Err(FluxError::InvalidConfig(
+            "PAFI normalized rate must be finite",
         ));
     }
     let mut variance_ln_rate = 0.0_f64;
     for (gradient_index, sigma) in gradient_errors.iter().copied().enumerate() {
         let barrier_sensitivity = integration_weights[dividing][gradient_index];
-        let mut partition_sensitivity = 0.0_f64;
+        let mut partition_log_sensitivity = 0.0_f64;
         for profile_index in 0..=dividing {
-            partition_sensitivity +=
-                2.0 * d_zr_d_f[profile_index] * integration_weights[profile_index][gradient_index];
+            partition_log_sensitivity +=
+                d_ln_zr_d_f[profile_index] * integration_weights[profile_index][gradient_index];
         }
-        let log_rate_sensitivity =
-            -barrier_sensitivity / kbt - partition_sensitivity / reactant_partition;
+        let log_rate_sensitivity = -barrier_sensitivity / kbt - partition_log_sensitivity;
         variance_ln_rate += log_rate_sensitivity * log_rate_sensitivity * sigma * sigma;
     }
     let sigma_ln_k = variance_ln_rate.sqrt();
@@ -565,12 +858,55 @@ fn integrate_profile(
         barrier_error,
         dividing_index: dividing,
         reactant_partition,
+        reactant_log_partition,
         normalized_rate,
+        normalized_log_rate,
         normalized_rate_error,
     })
 }
 
+/// Relative disagreement between the trapezoid integral of `dV/ds` over the
+/// planes and the end-to-end energy change, in units of `max(1, |Delta E_0|)`.
+fn path_force_relative_error(arcs: &[f64], energies: &[f64], gradients: &[f64]) -> f64 {
+    let mut integrated_energy = 0.0_f64;
+    for i in 1..arcs.len() {
+        let ds = arcs[i] - arcs[i - 1];
+        integrated_energy += 0.5 * ds * (gradients[i - 1] + gradients[i]);
+    }
+    let endpoint_energy = energies[energies.len() - 1] - energies[0];
+    let discrepancy = (integrated_energy - endpoint_energy).abs();
+    discrepancy / 1.0_f64.max(endpoint_energy.abs())
+}
+
 /// Integrate the PAFI free-energy profile and normalized rate along `path_images`.
+///
+/// `path_images` has shape `(images, dof)`, one row per image, in the length
+/// units of the engine, and `dof` must equal the number of degrees of freedom
+/// of `engine`. The module documentation describes the method, the units and
+/// the restoration of the engine on return.
+///
+/// # Errors
+///
+/// Returns [`FluxError::InvalidConfig`] when
+///
+/// - `time_step` is not finite and positive, `burn_in_steps` is `0`,
+///   `sample_steps` is below `2`, `max_rounds` is `0`, `planes` is below `2`,
+///   `zero_temperature_tol` is negative or not finite, or `target_error` is
+///   negative or not finite,
+/// - `path_images` has fewer than two rows, or two neighbouring images
+///   coincide in the mass-weighted metric,
+/// - the thermal energy `k_B T` of the engine is not positive,
+/// - the zero-temperature check of [`PafiConfig::zero_temperature_tol`] fails,
+/// - a plane normal degenerates, or the dividing plane is the first plane so
+///   that the reactant partition `Z_R` is not finite and positive.
+///
+/// Returns [`FluxError::EmptyInput`] for an empty coordinate axis and
+/// [`FluxError::Shape`] when the engine masses do not match the path
+/// coordinates. [`FluxError::NonFinite`] reports non-finite path coordinates,
+/// constraint forces, force samples, profile values or plane means. Errors
+/// from the engine and from the batch-means estimator are passed through, for
+/// example an invalid [`StatsConfig`] or an engine that does not report the
+/// constraint force on a constrained step.
 pub fn pafi_profile<E: DynamicsEngine + ?Sized>(
     engine: &mut E,
     path_images: ArrayView2<'_, f64>,
@@ -630,15 +966,8 @@ pub fn pafi_profile<E: DynamicsEngine + ?Sized>(
             path_energies.push(energy);
             path_gradients.push(-dot(geometry.tangent.view(), forces.view()));
         }
-        let mut integrated_energy = 0.0_f64;
-        for i in 1..geometries.len() {
-            let ds = arcs[i] - arcs[i - 1];
-            integrated_energy += 0.5 * ds * (path_gradients[i - 1] + path_gradients[i]);
-        }
-        let endpoint_energy = path_energies[path_energies.len() - 1] - path_energies[0];
-        let discrepancy = (integrated_energy - endpoint_energy).abs();
-        let scale = 1.0_f64.max(endpoint_energy.abs());
-        if discrepancy > config.zero_temperature_tol * scale {
+        let relative_error = path_force_relative_error(&arcs, &path_energies, &path_gradients);
+        if relative_error > effective_zero_temperature_tol(config) {
             return Err(FluxError::InvalidConfig(
                 "PAFI zero-temperature path-force quadrature exceeds tolerance",
             ));
@@ -682,9 +1011,9 @@ pub fn pafi_profile<E: DynamicsEngine + ?Sized>(
 
 /// Trait-object entry point for [`pafi_profile`] over [`DynamicsEngine`].
 ///
-/// The algorithm path is identical to [`pafi_profile`], enabling direct
-/// dispatch through `&mut dyn DynamicsEngine` for native and `rgpot`-backed
-/// engines without code forks.
+/// The algorithm, errors and restoration of the engine are those of
+/// [`pafi_profile`]. This function only fixes the engine type to the trait
+/// object, so one call site serves native, `rgpot` and session engines.
 pub fn pafi_profile_dyn(
     engine: &mut dyn DynamicsEngine,
     path_images: ArrayView2<'_, f64>,
@@ -710,6 +1039,17 @@ mod tests {
             x: ArrayView1<'_, f64>,
         ) -> Result<(f64, Array1<f64>), rgsaddle::SaddleError> {
             Ok((x[0].powi(4), Array1::from_vec(vec![4.0 * x[0].powi(3)])))
+        }
+    }
+
+    struct InconsistentLinearGradient;
+
+    impl rgsaddle::PointSurface for InconsistentLinearGradient {
+        fn eval(
+            &self,
+            x: ArrayView1<'_, f64>,
+        ) -> Result<(f64, Array1<f64>), rgsaddle::SaddleError> {
+            Ok((x[0], Array1::from_vec(vec![0.98])))
         }
     }
 
@@ -829,6 +1169,263 @@ mod tests {
         assert_eq!(profile.normalized_rate_error, 0.0);
     }
 
+    fn quartic_gradient_slope(x: f64) -> f64 {
+        12.0 * x * x
+    }
+
+    struct AnisotropicHarmonic {
+        ax: f64,
+        ay: f64,
+    }
+
+    impl rgsaddle::PointSurface for AnisotropicHarmonic {
+        fn eval(
+            &self,
+            r: ArrayView1<'_, f64>,
+        ) -> Result<(f64, Array1<f64>), rgsaddle::SaddleError> {
+            let energy = 0.5 * (self.ax * r[0] * r[0] + 4.0 * self.ay * r[1] * r[1]);
+            let gradient = Array1::from_vec(vec![self.ax * r[0], 4.0 * self.ay * r[1]]);
+            Ok((energy, gradient))
+        }
+    }
+
+    const ARC_RADIUS: f64 = 1.2;
+    const ARC_FORCE_CONSTANTS: (f64, f64) = (3.0, 1.0);
+
+    fn quarter_arc_engine() -> (NativeEngine<AnisotropicHarmonic>, Array1<f64>) {
+        let masses = Array1::from_vec(vec![1.0, 4.0]);
+        let engine = NativeEngine::new(
+            AnisotropicHarmonic {
+                ax: ARC_FORCE_CONSTANTS.0,
+                ay: ARC_FORCE_CONSTANTS.1,
+            },
+            NativeConfig::default()
+                .with_masses(masses.clone())
+                .with_thermostat(ThermostatConfig::default().with_temperature(0.2)),
+        )
+        .expect("engine");
+        (engine, masses)
+    }
+
+    fn quarter_arc_path(images: usize) -> Array2<f64> {
+        let mut path = Array2::zeros((images, 2));
+        for i in 0..images {
+            let fraction = (i as f64) / ((images - 1) as f64);
+            let theta = std::f64::consts::FRAC_PI_2 * (1.0 - fraction);
+            path[[i, 0]] = ARC_RADIUS * theta.cos();
+            path[[i, 1]] = 0.5 * ARC_RADIUS * theta.sin();
+        }
+        path
+    }
+
+    fn quarter_arc_relative_error(images: usize, planes: usize) -> f64 {
+        let (mut engine, masses) = quarter_arc_engine();
+        let path = quarter_arc_path(images);
+        let geometry =
+            build_plane_geometries(path.view(), masses.view(), planes).expect("geometry");
+        let mut arcs = Vec::with_capacity(planes);
+        let mut energies = Vec::with_capacity(planes);
+        let mut gradients = Vec::with_capacity(planes);
+        for plane in &geometry {
+            engine.set_positions(plane.anchor.view()).expect("anchor");
+            let (energy, forces) = engine.energy_and_forces().expect("forces");
+            arcs.push(plane.arc);
+            energies.push(energy);
+            gradients.push(-dot(plane.tangent.view(), forces.view()));
+        }
+        path_force_relative_error(&arcs, &energies, &gradients)
+    }
+
+    #[test]
+    fn quarter_arc_trapezoid_error_follows_inverse_square_law() {
+        // The coefficient is a measured, converged quantity, so the scaled
+        // error may differ from the analytic limit only by the spline and
+        // higher-order Euler-Maclaurin terms, which stay below a few percent
+        // from 9 planes on.
+        let agreement = 0.05_f64;
+        let images = 33usize;
+        for planes in [9usize, 17, 33, 65] {
+            let intervals = (planes - 1) as f64;
+            let scaled = quarter_arc_relative_error(images, planes) * intervals * intervals;
+            assert!(
+                (scaled - QUARTER_ARC_TRAPEZOID_COEFFICIENT).abs()
+                    <= agreement * QUARTER_ARC_TRAPEZOID_COEFFICIENT,
+                "{planes} planes: scaled error {scaled} versus {QUARTER_ARC_TRAPEZOID_COEFFICIENT}"
+            );
+        }
+    }
+
+    #[test]
+    fn default_tolerance_accepts_quarter_arc_at_default_planes() {
+        let config = PafiConfig::default();
+        let error = quarter_arc_relative_error(33, config.planes);
+        assert!(
+            error < config.zero_temperature_tol,
+            "relative error {error} versus default tolerance {}",
+            config.zero_temperature_tol
+        );
+        assert!(
+            config.zero_temperature_tol < 2.0 * (1.0 + ZERO_TEMPERATURE_SAFETY_MARGIN) * error,
+            "default tolerance {} is no longer calibrated to {error}",
+            config.zero_temperature_tol
+        );
+
+        let (mut engine, _) = quarter_arc_engine();
+        let path = quarter_arc_path(config.planes);
+        let result = pafi_profile(
+            &mut engine,
+            path.view(),
+            &config
+                .with_burn_in_steps(1)
+                .with_sample_steps(16)
+                .with_stats(StatsConfig::default().with_min_batches(2)),
+        );
+        assert!(result.is_ok(), "default configuration returned {result:?}");
+    }
+
+    #[test]
+    fn reactant_log_partition_stays_finite_for_deep_free_energy_wells() {
+        let arcs = [0.0, 1.0, 2.0, 3.0];
+        let gradients = [-800.0, -800.0, 800.0, 820.0];
+        let errors = [0.0; 4];
+        let profile = integrate_profile(&arcs, &gradients, &errors, 1.0).expect("profile");
+
+        let mut naive_half_partition = 0.0_f64;
+        for i in 1..=profile.dividing_index {
+            let ds = arcs[i] - arcs[i - 1];
+            let left = (-profile.free_energy[i - 1]).exp();
+            let right = (-profile.free_energy[i]).exp();
+            naive_half_partition += 0.5 * ds * (left + right);
+        }
+        assert!(!naive_half_partition.is_finite());
+
+        let expected_ln_partition = 800.0 + (4.0 + (-800.0_f64).exp() + (-810.0_f64).exp()).ln();
+        assert_abs_diff_eq!(
+            profile.reactant_log_partition,
+            expected_ln_partition,
+            epsilon = f64::EPSILON * expected_ln_partition.abs()
+        );
+        assert!(profile.normalized_log_rate.is_finite());
+    }
+
+    #[test]
+    fn log_partition_matches_legacy_path_for_well_conditioned_profile() {
+        let arcs = [0.0, 0.5, 1.0, 1.5];
+        let gradients = [0.3, 0.1, -0.4, -0.6];
+        let errors = [0.02, 0.03, 0.01, 0.02];
+        let profile = integrate_profile(&arcs, &gradients, &errors, 1.2).expect("profile");
+
+        let mut legacy_half_partition = 0.0_f64;
+        for i in 1..=profile.dividing_index {
+            let ds = arcs[i] - arcs[i - 1];
+            let left = (-profile.free_energy[i - 1] / 1.2).exp();
+            let right = (-profile.free_energy[i] / 1.2).exp();
+            legacy_half_partition += 0.5 * ds * (left + right);
+        }
+        let legacy_partition = 2.0 * legacy_half_partition;
+        let legacy_rate = (1.2 / TAU).sqrt() * (-profile.barrier / 1.2).exp() / legacy_partition;
+
+        assert_abs_diff_eq!(
+            profile.reactant_partition,
+            legacy_partition,
+            epsilon = f64::EPSILON * legacy_partition.abs()
+        );
+        assert_abs_diff_eq!(
+            profile.normalized_rate,
+            legacy_rate,
+            epsilon = f64::EPSILON * legacy_rate.abs()
+        );
+        assert_abs_diff_eq!(
+            profile.reactant_log_partition,
+            legacy_partition.ln(),
+            epsilon = 16.0 * f64::EPSILON * legacy_partition.ln().abs().max(1.0)
+        );
+    }
+
+    #[test]
+    fn non_finite_profile_input_is_rejected() {
+        let arcs = [0.0, 1.0, 2.0];
+        let gradients = [0.0, f64::NAN, 1.0];
+        let errors = [0.0, 0.0, 0.0];
+        let result = integrate_profile(&arcs, &gradients, &errors, 1.0);
+        assert_eq!(
+            result,
+            Err(FluxError::NonFinite("PAFI integrated free energy"))
+        );
+    }
+
+    #[test]
+    fn zero_width_reactant_partition_is_rejected() {
+        let arcs = [0.0, 1.0, 2.0];
+        let gradients = [-1.0, -1.0, -1.0];
+        let errors = [0.0, 0.0, 0.0];
+        let result = integrate_profile(&arcs, &gradients, &errors, 1.0);
+        assert_eq!(
+            result,
+            Err(FluxError::InvalidConfig(
+                "PAFI reactant partition must be finite and positive"
+            ))
+        );
+    }
+
+    #[test]
+    fn default_tolerance_scales_with_planes_for_consistency_check() {
+        let path = Array2::from_shape_vec((2, 1), vec![0.0, 1.0]).expect("shape");
+        let mut engine = NativeEngine::new(
+            InconsistentLinearGradient,
+            NativeConfig::default()
+                .with_masses(Array1::from_vec(vec![1.0]))
+                .with_thermostat(ThermostatConfig::default().with_temperature(0.2))
+                .with_seed(23),
+        )
+        .expect("engine");
+        let config = PafiConfig::default()
+            .with_planes(33)
+            .with_burn_in_steps(1)
+            .with_sample_steps(2);
+        let result = pafi_profile(&mut engine, path.view(), &config);
+        assert_eq!(
+            result,
+            Err(FluxError::InvalidConfig(
+                "PAFI zero-temperature path-force quadrature exceeds tolerance"
+            ))
+        );
+
+        let mut legacy_engine = NativeEngine::new(
+            InconsistentLinearGradient,
+            NativeConfig::default()
+                .with_masses(Array1::from_vec(vec![1.0]))
+                .with_thermostat(ThermostatConfig::default().with_temperature(0.2))
+                .with_seed(23),
+        )
+        .expect("engine");
+        let legacy_like = PafiConfig::default()
+            .with_planes(33)
+            .with_zero_temperature_tol(0.0257)
+            .with_burn_in_steps(1)
+            .with_sample_steps(2)
+            .with_stats(StatsConfig::default().with_min_batches(2));
+        assert!(pafi_profile(&mut legacy_engine, path.view(), &legacy_like).is_ok());
+    }
+
+    #[test]
+    fn only_the_exact_default_tolerance_scales_with_planes() {
+        let exact = PafiConfig::default().with_planes(33);
+        assert_eq!(
+            effective_zero_temperature_tol(&exact).to_bits(),
+            default_zero_temperature_tol(33).to_bits()
+        );
+
+        let next_up = f64::from_bits(DEFAULT_ZERO_TEMPERATURE_TOL.to_bits() + 1);
+        let near = PafiConfig::default()
+            .with_planes(33)
+            .with_zero_temperature_tol(next_up);
+        assert_eq!(
+            effective_zero_temperature_tol(&near).to_bits(),
+            next_up.to_bits()
+        );
+    }
+
     #[test]
     fn dyn_entrypoint_restores_engine_after_error() {
         let mut engine = NativeEngine::new(
@@ -855,14 +1452,19 @@ mod tests {
         let original_velocities = engine.velocities().to_owned();
 
         let path = Array2::from_shape_vec((2, 1), vec![0.0, 1.0]).expect("shape");
-        let spacing = 0.5_f64;
-        let maximum_gradient_curvature = 24.0_f64;
-        let trapezoid_error_bound = spacing * spacing * maximum_gradient_curvature / 12.0;
+        let planes = 3usize;
+        let spacing = 1.0 / ((planes - 1) as f64);
+        // For `V(x) = x^4` the path force `g(x) = V'(x) = 4 x^3` is a cubic, so
+        // the trapezoid error is exactly the leading Euler-Maclaurin term
+        // `spacing^2 / 12 * (g'(1) - g'(0))`, with `g'(x) = 12 x^2`. A tolerance
+        // of half that error makes the check reject this path.
+        let trapezoid_error =
+            spacing * spacing / 12.0 * (quartic_gradient_slope(1.0) - quartic_gradient_slope(0.0));
         let config = PafiConfig::default()
-            .with_planes(3)
+            .with_planes(planes)
             .with_burn_in_steps(1)
             .with_sample_steps(2)
-            .with_zero_temperature_tol(trapezoid_error_bound / 4.0);
+            .with_zero_temperature_tol(trapezoid_error / 2.0);
         let result = pafi_profile_dyn(&mut engine, path.view(), &config);
         assert_eq!(
             result,

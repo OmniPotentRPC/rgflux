@@ -1,1 +1,1 @@
-- Added an optional =lammpc= feature with =engine::lammpc::LammpcEngine=, a direct =DynamicsEngine= backend over =lammpc_session_*= for LAMMPS-driven trajectories.
+Added an optional =lammpc= feature with =engine::lammpc::LammpcEngine=, a direct =DynamicsEngine= backend over =lammpc_session_*= for LAMMPS-driven trajectories.

@@ -1,0 +1,1 @@
+The curved PAFI integration test now compares the last free-energy increment with the one from a path that continues past it, so natural spline endpoints fail the test. It runs 9 planes with the default time step and the default zero-temperature tolerance. =cargo test= builds with =opt-level = 2= through =[profile.test]=, and the curved test takes 0.7 s instead of 44 s.

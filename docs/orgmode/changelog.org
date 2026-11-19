@@ -7,4 +7,22 @@
 
 ** Added
 
-- Initial =rgflux= scaffold over =rgsaddle= and =rgmin=, with =engine::DynamicsEngine=, =engine::native=, =stats=, and =kappa::bennett_chandler=.
+- =ffs::forward_flux_rate= computes direct Forward Flux Sampling transition rates across ordered reaction-coordinate interfaces over any =DynamicsEngine=, with batch-means initial escape flux uncertainty, cluster-variance conditional stage probabilities, and engine state restoration.
+- =hyperplane::sample_hyperplane= samples the mean holonomic constraint force and retained configurations of a plane, and =ohtst::optimize_hyperplane= places the offset of a fixed-normal plane on its stationary surface and returns the harmonic hyperplanar TST rate with a delta-method standard error.
+- =pafi::pafi_profile= and =pafi::pafi_profile_dyn= turn the images of a converged reaction path into a free-energy profile, barrier, dividing plane, and normalized rate with propagated standard errors. They sample hyperplanes orthogonal to a mass-metric spline through the images, check the path force against the zero-temperature energy change, add rounds of sampling until an optional target error is reached, and restore the engine on return.
+- Added an optional =lammpc= feature with =engine::lammpc::LammpcEngine=, a direct =DynamicsEngine= backend over =lammpc_session_*= for LAMMPS-driven trajectories.
+- Initial =rgflux= crate scaffold: the =DynamicsEngine= trait and native BAOAB/RATTLE reference backend, feature-gated =rgpot= static PES and =rgpot-session= MD session (=openmm=, =nblib=, =lammps=) adapters, batch-means and stationarity diagnostics in =stats=, the Bennett-Chandler reactive-flux estimator in =kappa::bennett_chandler=, and the =network= module layout.
+
+** Developer
+
+- The curved PAFI integration test now compares the last free-energy increment with the one from a path that continues past it, so natural spline endpoints fail the test. It runs 9 planes with the default time step and the default zero-temperature tolerance. =cargo test= builds with =opt-level = 2= through =[profile.test]=, and the curved test takes 0.7 s instead of 44 s.
+
+** Changed
+
+- The value stored by default in =PafiConfig::zero_temperature_tol= is now about 2.6% instead of 1%. The check divides the path-force integral discrepancy by the larger of one engine energy unit and the endpoint energy change magnitude. While the field retains its default value, the effective tolerance scales as =2 (pi^2 / 12) / (planes - 1)^2=; an explicitly different value is used unchanged.
+
+** Fixed
+
+- =ffs::forward_flux_rate= restores positions, velocities, the periodic cell, the thermostat, and the holonomic constraint on return, and leaves the stochastic stream where the flux and trial reseeds put it. =ohtst::optimize_hyperplane= takes the flux mass from =rgsaddle::flux_mass=, keeps a length mismatch on =FluxError::Shape=, and keeps a non-positive mass on =FluxError::InvalidConfig=.
+- =stats::batch_means= returns the first sample as the mean of a series that is constant up to rounding, so identical non-dyadic samples are no longer averaged to a neighbouring float.
+- Correct PAFI mass-metric projection, spline geometry, adaptive sampling, profile integration, uncertainty propagation, and engine-state restoration.

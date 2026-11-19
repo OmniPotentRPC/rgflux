@@ -11,11 +11,25 @@
 
 #+begin_src sh
 cargo fmt --all -- --check
-cargo clippy --locked --all-targets --all-features -- -D warnings
-cargo test --locked --all-features
+cargo clippy --locked --all-targets --features rgpot,rgpot-session -- -D warnings
+cargo test --locked --features rgpot,rgpot-session
+cargo test --locked --doc --features rgpot,rgpot-session
 ci/check_rustdoc.sh
 python3 ci/check_dependency_pins.py
 python3 docs/check_paths.py
+python3 ci/check_links.py
+emacs --batch -l docs/export.el
+sphinx-build -b linkcheck -n -W --keep-going docs/source target/docs-linkcheck
+sphinx-build -b html -n -W --keep-going docs/source docs/build
+#+end_src
+
+When =liblammpc= is installed, also run =--all-features= clippy, tests, and rustdoc:
+
+#+begin_src sh
+cargo clippy --locked --all-targets --all-features -- -D warnings
+cargo test --locked --all-features
+cargo test --locked --doc --all-features
+RUSTDOCFLAGS="-D warnings" cargo doc --locked --no-deps --all-features --document-private-items
 #+end_src
 
 * Dependency pins

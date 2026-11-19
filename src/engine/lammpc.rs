@@ -8,6 +8,31 @@
 //! unwrapped Cartesian coordinates. LAMMPS reports wrapped `x`; the integer
 //! image count implied by the periodic cell is applied before those
 //! coordinates are stored, matching the engine contract.
+//!
+//! ## Units and linking
+//!
+//! All quantities follow LAMMPS `metal` units: positions and box vectors in
+//! Angstrom, velocities in Angstrom/ps, forces in eV/Angstrom, potential and
+//! kinetic energies and `k_B T` in eV, masses in amu (scaled by
+//! [`MASS_VELOCITY_TO_EV`] in kinetic energy and Maxwell-Boltzmann draws),
+//! timesteps in ps, and Langevin friction `gamma` in `1/ps`.
+//!
+//! At build time, `build.rs` resolves `liblammpc` from `LAMMPC_LIB_DIR`,
+//! `pkg-config` (`lammpc`), or `LAMMPC_DIR` (`lib/`, `lib64/`, or
+//! `lib/*-linux-gnu/`).
+//!
+//! ## References
+//!
+//! - Goswami, R. (2025). *Efficient Exploration of Chemical Kinetics*.
+//!   arXiv:2510.21368. <https://doi.org/10.48550/arXiv.2510.21368>
+//! - Goswami, R., et al. (2026). *TheochemUI/eOn: v2.9.0.1*. Zenodo.
+//!   <https://doi.org/10.5281/zenodo.18529496>
+//! - Leimkuhler, B., and Matthews, C. (2016). *Efficient molecular dynamics
+//!   using geodesic integration and solvent-solute splitting*. Proceedings of
+//!   the Royal Society A, 472, 20160138. <https://doi.org/10.1098/rspa.2016.0138>
+//! - Sprik, M., and Ciccotti, G. (1998). *Free energy from constrained
+//!   molecular dynamics*. The Journal of Chemical Physics, 109, 7737-7744.
+//!   <https://doi.org/10.1063/1.477419>
 
 use std::ffi::{CStr, c_char, c_int, c_void};
 use std::ptr::NonNull;
@@ -160,28 +185,52 @@ unsafe extern "C" {
 #[non_exhaustive]
 pub struct LammpcConfig {
     /// Atomic numbers in live atom order (`n_atoms` entries).
+    ///
+    /// Default: `vec![18, 18]`.
     pub atomic_numbers: Vec<i32>,
     /// LAMMPS type map (`type i+1 -> Z`) used to build `LammpsParams`.
+    ///
+    /// Default: `vec![18]`.
     pub type_to_atomic_number: Vec<i32>,
     /// Per-type masses in amu (`type_to_atomic_number` order).
+    ///
+    /// Default: `vec![39.948]`.
     pub masses_by_type: Vec<f64>,
     /// `pair_style` argument string.
+    ///
+    /// Default: `"lj/cut 8.5"`.
     pub pair_style: String,
     /// `pair_coeff` lines, one entry per command.
+    ///
+    /// Default: `vec!["1 1 0.010323 3.405"]`.
     pub pair_coeffs: Vec<String>,
     /// Optional extra setup lines applied after pair setup.
+    ///
+    /// Default: empty `Vec`.
     pub extra_setup: Vec<String>,
     /// LAMMPS boundary argument string (`"p p p"` by default).
+    ///
+    /// Default: `"p p p"`.
     pub boundary: String,
     /// Optional LAMMPS suffix (`omp`, `gpu`, `kk`).
+    ///
+    /// Default: empty `String`.
     pub suffix: String,
     /// Thermostat controls in metal units (`gamma` in `1/ps`, `k_B T` in `eV`).
+    ///
+    /// Default: [`ThermostatConfig::default()`].
     pub thermostat: ThermostatConfig,
     /// Optional hyperplane constraint.
+    ///
+    /// Default: `None`.
     pub constraint: Option<HyperplaneConstraint>,
     /// Optional row-major 3x3 cell in Angstrom.
+    ///
+    /// Default: `Some([30.0, 0.0, 0.0, 0.0, 30.0, 0.0, 0.0, 0.0, 30.0])`.
     pub cell: Option<[f64; 9]>,
     /// Initial deterministic seed consumed by `lammpc_session_md_initialize`.
+    ///
+    /// Default: `1`.
     pub seed: u64,
 }
 

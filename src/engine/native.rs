@@ -39,6 +39,8 @@
 //!
 //! ## References
 //!
+//! - Goswami, R. (2025). *Efficient Exploration of Chemical Kinetics*.
+//!   arXiv:2510.21368. <https://doi.org/10.48550/arXiv.2510.21368>
 //! - Leimkuhler, B., and Matthews, C. (2012). *Rational Construction of
 //!   Stochastic Numerical Methods for Molecular Sampling*. Applied Mathematics
 //!   Research eXpress. <https://doi.org/10.1093/amrx/abs010>
@@ -91,16 +93,28 @@ pub enum ConstraintProjection {
 #[non_exhaustive]
 pub struct NativeConfig {
     /// Per-coordinate masses `m_i > 0` (defines `dof = masses.len()`).
+    ///
+    /// Default: `Array1::from_vec(vec![1.0])`.
     pub masses: Array1<f64>,
     /// Langevin thermostat parameters (`gamma` and `k_B * T`).
+    ///
+    /// Default: [`ThermostatConfig::default()`].
     pub thermostat: ThermostatConfig,
     /// Optional holonomic hyperplane constraint `n · x - offset = 0`.
+    ///
+    /// Default: `None`.
     pub constraint: Option<HyperplaneConstraint>,
     /// Constraint projection algorithm (`Rattle` by default, or `Shake`).
+    ///
+    /// Default: [`ConstraintProjection::Rattle`].
     pub projection: ConstraintProjection,
     /// Optional row-major 3x3 periodic simulation cell.
+    ///
+    /// Default: `None`.
     pub cell: Option<[f64; 9]>,
     /// Initial deterministic 64-bit PRNG seed for BAOAB Ornstein-Uhlenbeck noise.
+    ///
+    /// Default: `1`.
     pub seed: u64,
 }
 

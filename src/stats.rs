@@ -78,15 +78,25 @@ pub const MIN_STATIONARITY_SAMPLES: usize = 4;
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct StatsConfig {
-    /// Target minimum number of non-overlapping batches when `n` is large enough.
+    /// Target minimum number of non-overlapping batches when `n` is large enough (`>= 2`).
+    ///
+    /// Default: [`DEFAULT_MIN_BATCHES`] (`16`).
     pub min_batches: usize,
-    /// Explicit batch width, or `None` for automatic `max(ceil(2 * tau_int), floor(sqrt(n)))`.
+    /// Explicit batch width (`>= 1`), or `None` for automatic `max(ceil(2 * tau_int), floor(sqrt(n)))`.
+    ///
+    /// Default: `None`.
     pub batch_size: Option<usize>,
     /// Leading window fraction `(0, 1)` compared in Geweke's stationarity test.
+    ///
+    /// Default: [`DEFAULT_FIRST_FRACTION`] (`0.25`).
     pub stationarity_first_fraction: f64,
     /// Trailing window fraction `(0, 1)` compared in Geweke's stationarity test.
+    ///
+    /// Default: [`DEFAULT_LAST_FRACTION`] (`0.50`).
     pub stationarity_last_fraction: f64,
     /// Maximum allowed `|z|` score in [`check_stationarity`].
+    ///
+    /// Default: [`DEFAULT_MAX_Z_SCORE`] (`3.0`).
     pub max_z_score: f64,
 }
 

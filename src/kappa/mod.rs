@@ -9,28 +9,41 @@
 //! Note: implementation moves from rgsaddle for steepest-descent quench basin
 //! classifiers and van Erp first-crossing effective positive flux estimators.
 //!
+//! ## Example
+//!
+//! ```rust
+//! use rgflux::kappa::kramers_transmission_coefficient;
+//!
+//! // At gamma = 2 * omega_b (alpha = 1), kappa_K = sqrt(2) - 1.
+//! let kappa = kramers_transmission_coefficient(4.0, 2.0)?;
+//! assert!((kappa - (2.0_f64.sqrt() - 1.0)).abs() <= 1e-15);
+//! # Ok::<(), rgflux::FluxError>(())
+//! ```
+//!
 //! ## References
 //!
+//! - Goswami, R. (2025). *Efficient Exploration of Chemical Kinetics*.
+//!   arXiv:2510.21368. <https://doi.org/10.48550/arXiv.2510.21368>
 //! - Goswami, R., and Jónsson, H. (2026). *Adaptive Pruning for Increased
 //!   Robustness and Reduced Computational Overhead in Gaussian Process
 //!   Accelerated Saddle Point Searches*. ChemPhysChem, 27, e202500730.
 //!   <https://doi.org/10.1002/cphc.202500730>
 //! - Bennett, C. H. (1977). *Molecular Dynamics and Transition State Theory:
 //!   The Simulation of Infrequent Events*. In *Algorithms for Chemical
-//!   Computations*, ACS Symposium Series, 46, 63–97.
+//!   Computations*, ACS Symposium Series, 46, 63-97.
 //!   <https://doi.org/10.1021/bk-1977-0046.ch004>
 //! - Chandler, D. (1978). *Statistical mechanics of isomerization dynamics in
 //!   liquids and the transition state approximation*. The Journal of Chemical
-//!   Physics, 68, 2959. <https://doi.org/10.1063/1.436049>
+//!   Physics, 68, 2959-2970. <https://doi.org/10.1063/1.436049>
 //! - Kramers, H. A. (1940). *Brownian motion in a field of force and the
-//!   diffusion model of chemical reactions*. Physica, 7, 284–304.
+//!   diffusion model of chemical reactions*. Physica, 7, 284-304.
 //!   <https://doi.org/10.1016/S0031-8914(40)90098-2>
 //! - Anderson, J. B. (1973). *Statistical theories of chemical reactions.
 //!   Distributions in the transition region*. The Journal of Chemical Physics,
-//!   58, 4684–4692. <https://doi.org/10.1063/1.1679032>
+//!   58, 4684-4692. <https://doi.org/10.1063/1.1679032>
 //! - van Erp, T. S., Moroni, D., and Bolhuis, P. G. (2003). *A novel path
 //!   sampling method for the calculation of rate constants*. The Journal of
-//!   Chemical Physics, 118, 7762–7774. <https://doi.org/10.1063/1.1562614>
+//!   Chemical Physics, 118, 7762-7774. <https://doi.org/10.1063/1.1562614>
 
 pub mod bennett_chandler;
 
@@ -47,10 +60,16 @@ use crate::error::FluxError;
 #[non_exhaustive]
 pub struct KappaConfig {
     /// Consecutive basin-commitment checkpoints required to stop a half-trajectory.
+    ///
+    /// Default: `4`.
     pub commit_checkpoints: usize,
     /// Steepest-descent force tolerance when assigning end states by quenching.
+    ///
+    /// Default: `0.001`.
     pub quench_force_tol: f64,
     /// Maximum quench steps per trajectory endpoint.
+    ///
+    /// Default: `2_000`.
     pub quench_max_steps: usize,
 }
 

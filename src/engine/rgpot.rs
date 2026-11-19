@@ -4,6 +4,18 @@
 //! [`rgpot_core::potential::PotentialImpl`]. [`RgpotSurface`] wraps that handle
 //! as a [`crate::engine::ForceSurface`] so `engine::native` can integrate
 //! trajectories directly over any `rgpot` potential.
+//!
+//! ## Units
+//!
+//! Positions and box vectors passed to `rgpot_force_input_t` are in Angstrom,
+//! energies in eV, and Cartesian forces in eV/Angstrom.
+//!
+//! ## References
+//!
+//! - Goswami, R. (2025). *Efficient Exploration of Chemical Kinetics*.
+//!   arXiv:2510.21368. <https://doi.org/10.48550/arXiv.2510.21368>
+//! - Goswami, R., et al. (2026). *TheochemUI/eOn: v2.9.0.1*. Zenodo.
+//!   <https://doi.org/10.5281/zenodo.18529496>
 
 use std::sync::Mutex;
 
@@ -27,8 +39,12 @@ pub const DEFAULT_RGPOT_BOX_EDGE: f64 = 100.0;
 #[non_exhaustive]
 pub struct RgpotConfig {
     /// Atomic numbers `Z_i` (`n_atoms` entries) passed to `rgpot_force_input_t`.
+    ///
+    /// Default: `vec![1]`.
     pub atomic_numbers: Vec<i32>,
     /// Fallback row-major 3x3 box matrix passed when the caller supplies `cell = None`.
+    ///
+    /// Default: cubic box with edge [`DEFAULT_RGPOT_BOX_EDGE`] (`100.0` Angstrom).
     pub default_cell: [f64; 9],
 }
 

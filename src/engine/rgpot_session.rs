@@ -40,6 +40,16 @@
 //! - **Neighbour-list exchange slots**:
 //!   `rgpot_md_session_get_neighbors` and `rgpot_md_session_set_neighbors`
 //!   (`rgpot_md_session_ops::{get_neighbors, set_neighbors}`).
+//!
+//! ## References
+//!
+//! - Goswami, R. (2025). *Efficient Exploration of Chemical Kinetics*.
+//!   arXiv:2510.21368. <https://doi.org/10.48550/arXiv.2510.21368>
+//! - Goswami, R., et al. (2026). *TheochemUI/eOn: v2.9.0.1*. Zenodo.
+//!   <https://doi.org/10.5281/zenodo.18529496>
+//! - Leimkuhler, B., and Matthews, C. (2016). *Efficient molecular dynamics
+//!   using geodesic integration and solvent-solute splitting*. Proceedings of
+//!   the Royal Society A, 472, 20160138. <https://doi.org/10.1098/rspa.2016.0138>
 
 use std::path::PathBuf;
 
@@ -81,22 +91,40 @@ impl SessionEngineKind {
 #[non_exhaustive]
 pub struct RgpotSessionConfig {
     /// Backend engine name (`"openmm"`, `"nblib"`, or `"lammps"`).
+    ///
+    /// Default: [`SessionEngineKind::OpenMm`].
     pub engine: SessionEngineKind,
     /// Optional explicit plugin shared-library path for `CAbiMdSession::open_engine`.
+    ///
+    /// Default: `None`.
     pub engine_path: Option<PathBuf>,
     /// Serialized system specification bytes (`spec`, `spec_len`) passed at session creation.
+    ///
+    /// Default: empty `Vec`.
     pub spec: Vec<u8>,
     /// Backend-specific option string passed to `rgpot_md_session_create`.
+    ///
+    /// Default: `None`.
     pub options: Option<String>,
     /// Initial per-coordinate masses (`3 * n_atoms`, in amu) before session query.
+    ///
+    /// Default: `Array1::from_elem(3, 1.0)`.
     pub masses: Array1<f64>,
     /// Langevin thermostat configuration (`gamma` in `1/ps`, `k_B * T` in `eV`).
+    ///
+    /// Default: [`ThermostatConfig::default()`].
     pub thermostat: ThermostatConfig,
     /// Optional holonomic hyperplane constraint forwarded as `(plane_point, plane_normal)`.
+    ///
+    /// Default: `None`.
     pub constraint: Option<HyperplaneConstraint>,
     /// Optional row-major 3x3 periodic box vectors in Angstrom.
+    ///
+    /// Default: `None`.
     pub cell: Option<[f64; 9]>,
     /// Deterministic 64-bit PRNG seed forwarded to `MdLangevinConfig::seed`.
+    ///
+    /// Default: `1`.
     pub seed: u64,
 }
 

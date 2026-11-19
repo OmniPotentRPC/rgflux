@@ -30,25 +30,34 @@ html_context = {
     "source_user": "OmniPotentRPC",
     "source_repo": "rgflux",
     "source_version": "main",
-    "source_docs_path": "/docs/source/",
+    "source_docs_path": "/docs/orgmode/",
+    "page_source_suffix": ".org",
 }
 
 html_theme_options = {
     "accent_color": "gold",
     "color_mode": "dark",
     "dark_code": True,
+    "show_ai_links": False,
     "github_url": "https://github.com/OmniPotentRPC/rgflux",
     "nav_links": [
         {"title": "Get started", "url": "getting-started"},
         {"title": "How-to", "url": "howto"},
         {"title": "Reference", "url": "reference"},
         {"title": "Explanation", "url": "explanation"},
-        {"title": "API", "url": "https://docs.rs/rgflux", "external": True},
+        {"title": "Source", "url": "https://github.com/OmniPotentRPC/rgflux/tree/develop/src", "external": True},
         {"title": "Search", "url": "search"},
     ],
 }
 
 intersphinx_mapping: dict = {}
+
+# Publisher landing pages behind doi.org redirects (ACS, AIP, APS, Wiley, OUP,
+# Royal Society) return HTTP 403 to automated linkcheck clients; ci/check_links.py
+# verifies every DOI directly against the Handle System REST API.
+linkcheck_ignore = [
+    r"^https://doi\.org/",
+]
 
 copybutton_prompt_text = r"\$ "
 copybutton_prompt_is_regexp = True

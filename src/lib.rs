@@ -8,17 +8,41 @@
 //! ## Modules
 //!
 //! - [`engine`]: [`DynamicsEngine`] trait, [`ForceSurface`], the pure-Rust
-//!   [`engine::native`] BAOAB + RATTLE/SHAKE backend, and optional `rgpot`
+//!   [`engine::native`] BAOAB + RATTLE/SHAKE backend, the optional
+//!   `engine::lammpc` backend over `lammpc_session_*`, and optional `rgpot`
 //!   and `rgpot-session` adapters.
 //! - [`stats`]: non-overlapping batch means, Geyer effective sample size
 //!   (`n_eff`), and Geweke two-window stationarity checks.
 //! - [`kappa`] and [`kappa::bennett_chandler`]: Bennett-Chandler reactive-flux
-//!   transmission coefficient estimator and generic [`DynamicsEngine`] shooter.
-//! - [`hyperplane`]: holonomic hyperplane free-energy gradient sampling.
-//! - [`pafi`]: Projected Average Force Integration along reaction paths.
-//! - [`ohtst`]: OH-TST with a fixed hyperplane normal; the normal is not optimized.
-//! - [`ffs`]: Forward Flux Sampling across ordered interfaces.
+//!   transmission coefficient estimator, generic [`DynamicsEngine`] shooter,
+//!   and Kramers spatial-diffusion factor.
+//! - [`hyperplane`]: holonomic hyperplane free-energy gradient (`dA/dc`) and
+//!   dividing-surface configuration sampling via [`hyperplane::sample_hyperplane`].
+//! - [`pafi`]: Projected Average Force Integration along reaction paths
+//!   ([`pafi::PafiConfig`], [`pafi::FreeEnergyProfile`], [`pafi::pafi_profile`]).
+//! - [`ohtst`]: OH-TST with a fixed hyperplane normal via
+//!   [`ohtst::optimize_hyperplane`]; variational normal optimization moves
+//!   from `rgsaddle`.
+//! - [`ffs`]: direct Forward Flux Sampling across ordered interfaces via
+//!   [`ffs::forward_flux_rate`].
 //! - [`network`]: symmetry-resolved kinetic networks and kMC rate tables.
+//!
+//! ## Quick example
+//!
+//! ```rust
+//! use rgflux::kappa::bennett_chandler::{
+//!     BennettChandlerConfig, ReactiveTrajectory, Side, estimate_bennett_chandler,
+//! };
+//!
+//! let trajectories = vec![
+//!     ReactiveTrajectory::new(1.2, vec![Side::Product; 16])?,
+//!     ReactiveTrajectory::new(-0.9, vec![Side::Reactant; 16])?,
+//!     ReactiveTrajectory::new(0.8, vec![Side::Product; 16])?,
+//! ];
+//! let estimate = estimate_bennett_chandler(&trajectories, &BennettChandlerConfig::default())?;
+//! assert_eq!(estimate.plateau, 1.0);
+//! # Ok::<(), rgflux::FluxError>(())
+//! ```
 //!
 //! ## References
 //!
@@ -27,6 +51,18 @@
 //! - Goswami, R., Gunde, M., and Jónsson, H. (2026). *Enhanced climbing image
 //!   nudged elastic band method with Hessian eigenmode alignment*. Frontiers
 //!   in Chemistry, 14, 1807063. <https://doi.org/10.3389/fchem.2026.1807063>
+//! - Goswami, R., and Jónsson, H. (2026). *Adaptive Pruning for Increased
+//!   Robustness and Reduced Computational Overhead in Gaussian Process
+//!   Accelerated Saddle Point Searches*. ChemPhysChem, 27, e202500730.
+//!   <https://doi.org/10.1002/cphc.202500730>
+//! - Goswami, R., Masterov, M., Kamath, S., Peña-Torres, A., and Jónsson, H.
+//!   (2025). *Efficient Implementation of Gaussian Process Regression
+//!   Accelerated Saddle Point Searches with Application to Molecular
+//!   Reactions*. Journal of Chemical Theory and Computation, 21(16),
+//!   7935-7943. <https://doi.org/10.1021/acs.jctc.5c00866>
+//! - Goswami, R. (2026). *Reproducible orchestration of best practices for
+//!   reaction path optimization with the nudged elastic band*. MethodsX, 16,
+//!   103899. <https://doi.org/10.1016/j.mex.2026.103899>
 
 #![deny(missing_docs)]
 

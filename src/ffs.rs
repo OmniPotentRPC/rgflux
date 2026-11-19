@@ -4,8 +4,119 @@
 //! in equilibrium or non-equilibrium stochastic dynamics without requiring
 //! detailed balance or knowledge of the stationary phase-space density.
 //!
+//! ## Theory
+//!
+//! Direct Forward Flux Sampling (Allen, Warren, and ten Wolde 2005; Allen,
+//! Frenkel, and ten Wolde 2006a, 2006b) partitions the transition from reactant
+//! basin `A` (`lambda(x) <= lambda_0`) to product state `B`
+//! (`lambda(x) >= lambda_n`) across strictly increasing interfaces
+//! `lambda_0 < lambda_1 < ... < lambda_n`:
+//!
+//! 1. **Initial escape flux (`Phi_{A,0}`)**: Starting from an initial state inside
+//!    basin `A` (`lambda(x_0) <= lambda_0`), [`forward_flux_rate`] reseeds the
+//!    engine, discards `burn_in_steps` integration steps, and counts positive-going
+//!    crossings of `lambda_0` until `points_per_interface` (`M_0 >= 2`) crossing
+//!    phase points `(x, v)` and inter-crossing waiting intervals `Delta tau_m > 0`
+//!    are collected within `max_flux_steps`. A crossing is armed whenever
+//!    `lambda(x) <= lambda_0` and fires on the first step with `lambda(x) > lambda_0`.
+//!    If an excursion reaches the product boundary `lambda(x) >= lambda_n`, the
+//!    engine is reset to the initial basin-`A` phase point and re-armed. From the
+//!    batch-means average interval `tau_bar` and standard error `sigma_tau`
+//!    ([`crate::stats::batch_means`]), the escape flux and its delta-method
+//!    standard error are `Phi_{A,0} = 1 / tau_bar` and
+//!    `sigma_{Phi} = sigma_tau / tau_bar^2`.
+//! 2. **Conditional interface advancement (`P(lambda_{i+1} | lambda_i)`)**: At each
+//!    stage `i = 0 .. n - 1` with `M_i >= 2` starting points on `lambda_i`,
+//!    `trials_per_interface` (`K >= 1`) trajectories are launched by uniformly
+//!    drawing a starting point `c in 0..M_i`, restoring its `(x, v)`, reseeding
+//!    the engine's stochastic stream via [`crate::engine::DynamicsEngine::reseed`],
+//!    and integrating up to `max_trial_steps` until `lambda(x) >= lambda_{i+1}`
+//!    (success, saving `(x, v)` when `i + 1 < n - 1`) or `lambda(x) <= lambda_0`
+//!    (return to basin `A`, failure). With `k_c` trials and `s_c` successes from
+//!    cluster `c` (`p_i = (sum_c s_c) / K`), the cluster-variance standard error is
+//!    `sigma_{p_i} = sqrt((M_i / (M_i - 1)) * sum_c (s_c - p_i k_c)^2) / K`.
+//! 3. **Composite rate and uncertainty**: The forward rate is
+//!    `k_AB = Phi_{A,0} * prod_i p_i` with relative standard error propagated in
+//!    quadrature:
+//!    `sigma_k = k_AB * sqrt((sigma_{Phi} / Phi_{A,0})^2 + sum_i (sigma_{p_i} / p_i)^2)`.
+//!
+//! ## Assumptions
+//!
+//! - Stochastic dynamics (`gamma > 0` under Langevin thermostatting) so that
+//!   repeated trials from a stored phase point `(x, v)` diverge after
+//!   [`crate::engine::DynamicsEngine::reseed`].
+//! - Strictly increasing interface levels `lambda_0 < lambda_1 < ... < lambda_n`
+//!   (`interfaces.len() >= 2`) and initial positions inside basin `A`
+//!   (`order_param(positions) <= lambda_0`).
+//! - At least two collected configurations at every interface (`M_i >= 2`) and
+//!   at least one successful trial per stage.
+//!
+//! ## Units
+//!
+//! - `order_param(x)` and `FfsConfig::interfaces` share the caller's scalar
+//!   order-parameter unit.
+//! - `FfsConfig::time_step` has engine time unit `[T]`.
+//! - `FfsEstimate::initial_flux`, `FfsEstimate::rate`, and
+//!   `FfsEstimate::standard_error` have inverse time units `[T]^-1`.
+//! - `FfsEstimate::interface_probabilities` are dimensionless in `(0, 1]`.
+//!
+//! ## Engine wiring
+//!
+//! [`forward_flux_rate`] accepts `&mut E` for any `E: DynamicsEngine + ?Sized`
+//! (`NativeEngine` over `PointSurface`, `EindirSurface`, or `RgpotSurface`,
+//! `LammpcEngine` under the `lammpc` feature when a constraint is active, or
+//! `RgpotSessionEngine` once `rgpot_core::md_session` is linked). On entry it
+//! captures an `EngineSnapshot` and restores `positions`, `velocities`,
+//! `cell`, `thermostat`, and `constraint` before returning; the stochastic
+//! stream is left where the flux and trial [`DynamicsEngine::reseed`] calls
+//! placed it.
+//!
+//! ## Example
+//!
+//! ```rust
+//! use ndarray::{Array1, ArrayView1};
+//! use rgflux::engine::native::{NativeConfig, NativeEngine};
+//! use rgflux::engine::{DynamicsEngine, ThermostatConfig};
+//! use rgflux::ffs::{FfsConfig, forward_flux_rate};
+//!
+//! struct DoubleWell1D;
+//! impl rgsaddle::PointSurface for DoubleWell1D {
+//!     fn eval(&self, x: ArrayView1<f64>) -> Result<(f64, Array1<f64>), rgsaddle::SaddleError> {
+//!         let dx = x[0] * x[0] - 1.0;
+//!         Ok((dx * dx, Array1::from_vec(vec![4.0 * x[0] * dx])))
+//!     }
+//! }
+//!
+//! let cfg = NativeConfig::default()
+//!     .with_masses(Array1::from_vec(vec![1.0]))
+//!     .with_thermostat(ThermostatConfig::default().with_gamma(2.0).with_temperature(0.9))
+//!     .with_seed(11);
+//! let mut engine = NativeEngine::new(DoubleWell1D, cfg)?;
+//! engine.set_positions(Array1::from_vec(vec![-1.0]).view())?;
+//! engine.shoot_velocities(11)?;
+//!
+//! let ffs_cfg = FfsConfig::default()
+//!     .with_interfaces(vec![-0.8, -0.3, 0.2])
+//!     .with_points_per_interface(8)
+//!     .with_trials_per_interface(24)
+//!     .with_max_trial_steps(2_000)
+//!     .with_max_flux_steps(100_000)
+//!     .with_time_step(0.01)
+//!     .with_seed(11);
+//! let est = forward_flux_rate(&mut engine, |x| x[0], &ffs_cfg)?;
+//! assert!(est.initial_flux > 0.0);
+//! assert_eq!(est.interface_probabilities.len(), 2);
+//! assert!(est.rate > 0.0 && est.standard_error.is_finite());
+//! # Ok::<(), rgflux::FluxError>(())
+//! ```
+//!
 //! ## References
 //!
+//! - Goswami, R. (2025). *Efficient Exploration of Chemical Kinetics*.
+//!   arXiv:2510.21368. <https://doi.org/10.48550/arXiv.2510.21368>
+//! - Allen, R. J., Warren, P. B., and ten Wolde, P. R. (2005). *Sampling Rare
+//!   Switching Events in Biochemical Networks*. Physical Review Letters, 94,
+//!   018104. <https://doi.org/10.1103/PhysRevLett.94.018104>
 //! - Allen, R. J., Frenkel, D., and ten Wolde, P. R. (2006). *Simulating rare
 //!   events in equilibrium or nonequilibrium stochastic systems*. The Journal
 //!   of Chemical Physics, 124, 024102. <https://doi.org/10.1063/1.2140273>
@@ -13,9 +124,6 @@
 //!   sampling-type schemes for simulating rare events: Efficiency analysis*.
 //!   The Journal of Chemical Physics, 124, 194111.
 //!   <https://doi.org/10.1063/1.2198827>
-//! - Allen, R. J., Warren, P. B., and ten Wolde, P. R. (2005). *Sampling Rare
-//!   Switching Events in Biochemical Networks*. Physical Review Letters, 94,
-//!   018104. <https://doi.org/10.1103/PhysRevLett.94.018104>
 //! - Allen, R. J., Valeriani, C., and ten Wolde, P. R. (2009). *Forward flux
 //!   sampling for rare event simulations*. Journal of Physics: Condensed
 //!   Matter, 21, 463102. <https://doi.org/10.1088/0953-8984/21/46/463102>
@@ -32,23 +140,41 @@ use crate::stats::{StatsConfig, batch_means};
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct FfsConfig {
-    /// Strictly monotone interface levels `lambda_0 < lambda_1 < ... < lambda_n`.
+    /// Strictly monotone interface levels `lambda_0 < lambda_1 < ... < lambda_n` (`len >= 2`).
+    ///
+    /// Default: `vec![-0.5, 0.0, 0.5]`.
     pub interfaces: Vec<f64>,
-    /// Target crossing configurations collected at each interface.
+    /// Target crossing configurations collected at the first interface (`>= 2`).
+    ///
+    /// Default: `128`.
     pub points_per_interface: usize,
-    /// Trial trajectories launched per interface to estimate `P(lambda_{i+1} | lambda_i)`.
+    /// Trial trajectories launched per interface to estimate `P(lambda_{i+1} | lambda_i)` (`>= 1`).
+    ///
+    /// Default: `256`.
     pub trials_per_interface: usize,
-    /// Maximum integration steps per trial trajectory before aborting.
+    /// Maximum integration steps per trial trajectory before aborting (`>= 1`).
+    ///
+    /// Default: `10_000`.
     pub max_trial_steps: usize,
-    /// Maximum integration steps spent collecting the initial flux crossings.
+    /// Maximum integration steps spent collecting the initial flux crossings (`>= 1`).
+    ///
+    /// Default: `200_000`.
     pub max_flux_steps: usize,
     /// Burn-in integration steps discarded before flux counting starts.
+    ///
+    /// Default: `0`.
     pub burn_in_steps: usize,
     /// Integration timestep `dt > 0`.
+    ///
+    /// Default: `0.005`.
     pub time_step: f64,
     /// Deterministic PRNG seed.
+    ///
+    /// Default: `1`.
     pub seed: u64,
     /// Batch-means controls for the initial escape flux `Phi_{A,0}`.
+    ///
+    /// Default: [`StatsConfig::default()`].
     pub stats: StatsConfig,
 }
 
@@ -227,6 +353,19 @@ fn finalize_and_restore<E: DynamicsEngine + ?Sized>(
 /// The stochastic stream is left where the run put it: flux collection and
 /// each trial call [`DynamicsEngine::reseed`], and the exit restore has no
 /// stream to put back.
+///
+/// # Errors
+///
+/// - [`FluxError::InvalidConfig`] when `config.interfaces` has fewer than two
+///   strictly increasing levels, `points_per_interface < 2`,
+///   `trials_per_interface == 0`, step budgets are zero, `time_step <= 0`, the
+///   initial engine state satisfies `order_param(positions) > interfaces[0]`,
+///   a flux or trial step budget is exceeded, or a stage records zero
+///   successful trials.
+/// - [`FluxError::NonFinite`] when an interface level, order-parameter value,
+///   or flux estimate is NaN or infinite.
+/// - Any [`FluxError`] returned by `engine` during stepping, reseeding, or
+///   snapshot restoration.
 pub fn forward_flux_rate<E, F>(
     engine: &mut E,
     order_param: F,
