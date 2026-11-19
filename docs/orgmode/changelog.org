@@ -3,6 +3,16 @@
 
 # towncrier release notes start
 
+* Unreleased
+
+** Changed
+
+- PAFI free-energy profiles integrate the plane means with the cubic Hermite rule. Two planes reduce that rule to the trapezoid rule. Three planes are exact for a quadratic gradient, and four or more planes are exact for a cubic gradient. The barrier is the global maximum of the interpolant. =reactant_log_partition= and =normalized_log_rate= remain the log of the reactant partition and of the normalized rate, now from the projected reactant frequency at the first image. =FreeEnergyProfile= also reports =dividing_arc=, =reactant_frequency=, and =quadrature_residual=. The zero-temperature acceptance check is still the trapezoid comparison.
+
+** Fixed
+
+- The PAFI dividing-plane search inspected only the intervals next to the highest sampled free energy, and the normalized rate used a doubled integral of =exp(-F / kT)= for =Z_R=. The search now covers every interval, and =Z_R= comes from the reactant Hessian.
+
 * 0.1.0 (2026-11-19)
 
 ** Added

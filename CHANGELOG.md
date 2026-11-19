@@ -5,6 +5,16 @@ All notable changes to `rgflux` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- PAFI free-energy profiles integrate the plane means with the cubic Hermite rule. Two planes reduce that rule to the trapezoid rule. Three planes are exact for a quadratic gradient, and four or more planes are exact for a cubic gradient. The barrier is the global maximum of the interpolant, which can lie away from the highest sample. `reactant_log_partition` and `normalized_log_rate` remain the log of the reactant partition and of the normalized rate. Both now follow the projected reactant frequency at the first image, `Z_R = sqrt(2 π kT) / ω_0` and `k = (ω_0 / 2π) exp(-ΔF / kT)`, including when the exponential underflows. `FreeEnergyProfile` also reports `dividing_arc`, `reactant_frequency`, and `quadrature_residual`. The zero-temperature acceptance check is still the trapezoid comparison, with the same default and the same inverse-square scaling in `planes`.
+
+### Fixed
+
+- The PAFI dividing-plane search inspected only the intervals next to the highest sampled free energy, so a larger maximum of the interpolant on another interval was missed. The normalized rate used a doubled integral of `exp(-F / kT)` for `Z_R`, which biased `k` after the barrier itself had converged. The search now covers every interval, and `Z_R` comes from the reactant Hessian.
+
 ## [0.1.0] - 2026-11-19
 
 ### Added
