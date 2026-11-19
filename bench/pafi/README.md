@@ -149,6 +149,8 @@ python3 bench/pafi/analyze.py \
 
 `analyze.py` reads `bench/pafi/raw/dimer`, `bench/pafi/raw/vacancy`, `bench/pafi/raw/vacancy-path.json`, `bench/pafi/raw/vacancy-static.json`, and `bench/pafi/raw/metadata.json` unless those paths are overridden. If `metadata.json` or a raw record named by `manifest.json` is absent, it exits with `metadata.json is missing` or `raw record is missing` and does not write a traceback.
 
+The cargo gates in `tests/pafi_coverage_gates.rs` run these scripts with the interpreter named by `PAFI_PYTHON`, or else the first of `python3` and `python` on `PATH`. `analyze.py` needs Python 3.10 or newer, and a gate that finds an older or missing interpreter stops with that requirement stated. The analyzer test passes when `unittest` prints `Ran N tests` followed by `OK`; warnings printed after that line do not fail it.
+
 The retained campaign rejected the curved, 17 plane, `k_B T=0.05`, 64 sample run with seed 1036330 and the error `PAFI reactant partition must be finite and positive`. The cargo test below and the wrapper after it are guard tests of that existing behaviour. They exercise unchanged rgflux library code, pass on the sources from before this benchmark existed, and check only the rejection status and error string. They are not a regression test for a source change. The quadrature has no reactant interval when the dividing plane is index zero, which would give a partition of zero, but the guards do not observe the dividing index. The release harness includes the cargo test:
 
 ```sh
