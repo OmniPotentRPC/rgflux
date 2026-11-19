@@ -1,0 +1,1 @@
+Validate =[patch.crates-io]= git overrides in =ci/check_dependency_pins.py= now that workspace dependencies use crates.io releases.

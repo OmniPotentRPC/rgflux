@@ -74,6 +74,8 @@ jobs:
         run: python3 ci/check_links.py
       - name: Git dependencies pin a full rev and resolve once
         run: python3 ci/check_dependency_pins.py
+      - name: Dependency pin unit tests
+        run: python3 -m unittest discover -s ci -p 'test_*.py'
 
   msrv:
     runs-on: ubuntu-latest
