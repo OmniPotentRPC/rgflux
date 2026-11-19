@@ -58,8 +58,9 @@
 //!    `lambda (n . X' - (x - X) . n')`. Batch means over the samples give the
 //!    mean force and its standard error on each plane.
 //! 5. The profile, barrier and rate follow from the plane means. The
-//!    standard errors of the planes are independent and propagate through the
-//!    trapezoid weights and, for the rate, through `Z_R` by the delta method.
+//!    standard errors of the planes are independent and propagate in log space
+//!    through the trapezoid weights and, for the rate, through `Z_R` by the
+//!    delta method.
 //! 6. With `target_error` set, steps 4 and 5 repeat for up to `max_rounds`
 //!    rounds, each adding `sample_steps` fresh samples to every plane, until
 //!    the standard error of the barrier is at most `target_error`. Without
@@ -350,6 +351,9 @@ pub struct FreeEnergyProfile {
     /// Standard error of `free_energy` at each plane, propagated from the
     /// batch-means errors of the plane forces through the trapezoid weights.
     /// The first entry is `0`.
+    ///
+    /// The Euclidean norm of the weighted plane uncertainties is formed in
+    /// log space, so a finite uncertainty whose square overflows stays finite.
     pub standard_error: Vec<f64>,
     /// Free-energy barrier `Delta F = max_k F(s_k)`, attained at the dividing
     /// plane `s*`.
@@ -849,6 +853,26 @@ fn ln_euclidean_norm(ln_abs_terms: &[f64]) -> f64 {
     0.5 * (max_log_square + scaled_sum.ln())
 }
 
+/// `sqrt(sum (weight_i * sigma_i)^2)` without forming the squares.
+///
+/// A finite factor above about `1e154` makes `sigma * sigma` overflow. The
+/// log-space norm keeps that finite value. Every term zero yields `0`. A
+/// norm that does not fit in `f64` yields `+inf`.
+fn linear_euclidean_norm(weights: &[f64], sigmas: &[f64]) -> f64 {
+    let ln_abs_terms: Vec<f64> = weights
+        .iter()
+        .copied()
+        .zip(sigmas.iter().copied())
+        .map(|(weight, sigma)| ln_abs_product(weight, sigma))
+        .collect();
+    let ln_norm = ln_euclidean_norm(&ln_abs_terms);
+    if ln_norm == f64::NEG_INFINITY {
+        0.0
+    } else {
+        ln_norm.exp()
+    }
+}
+
 /// Linear standard error `exp(log_rate + ln_sigma)`.
 ///
 /// The linear rate is not an input. `Some(0.0)` when `ln_sigma` is negative
@@ -895,11 +919,7 @@ fn integrate_profile(
     }
     let mut standard_error = vec![0.0_f64; n];
     for i in 1..n {
-        let mut variance = 0.0_f64;
-        for (weight, sigma) in integration_weights[i].iter().zip(gradient_errors) {
-            variance += weight * weight * sigma * sigma;
-        }
-        standard_error[i] = variance.sqrt();
+        standard_error[i] = linear_euclidean_norm(&integration_weights[i], gradient_errors);
     }
 
     let (reactant_log_partition, d_ln_zr_d_f) =
@@ -1550,6 +1570,11 @@ mod tests {
     /// value carried through `f64` operations.
     const FAR_BELOW_RANGE_RATE_ERROR_TOLERANCE: f64 = 256.0 * f64::EPSILON;
 
+    /// `exp(ln|weight| + ln|sigma|)` near the top of the finite range.
+    /// The absolute error in the log is about one unit in the last place of
+    /// `ln(sigma)`, which is a relative error of order `1e-13` on the norm.
+    const EXTREME_SIGMA_NORM_RELATIVE_TOLERANCE: f64 = 1024.0 * f64::EPSILON;
+
     fn assert_relative_close(actual: f64, expected: f64, tolerance: f64) {
         let scale = expected.abs();
         let discrepancy = (actual - expected).abs();
@@ -1637,6 +1662,58 @@ mod tests {
         assert_eq!(profile.normalized_log_rate.exp(), 0.0);
         assert!(profile.normalized_rate.is_none());
         assert_eq!(profile.normalized_rate_error, Some(0.0));
+    }
+
+    #[test]
+    fn profile_error_stays_finite_for_an_extreme_finite_plane_uncertainty() {
+        // `sigma * sigma` overflows at `1e200`. The trapezoid weight on this
+        // one-step path is `1/2`, so the linear sum of squares is infinite
+        // while the norm `sigma / 2` is finite. That same uncertainty has a
+        // finite normalized rate error.
+        let sigma: f64 = 1.0e200;
+        let linear_square = sigma * sigma;
+        assert!(
+            !linear_square.is_finite(),
+            "this sigma must overflow the linear square the old norm formed"
+        );
+        let arcs = [0.0, 1.0];
+        let gradients = [2.0, 2.0];
+        let errors = [0.0, sigma];
+        let kbt = 1.0;
+        let profile = integrate_profile(&arcs, &gradients, &errors, kbt).expect("profile");
+        let expected_profile_error = 0.5 * sigma;
+        assert!(expected_profile_error.is_finite());
+        assert_relative_close(
+            profile.standard_error[1],
+            expected_profile_error,
+            EXTREME_SIGMA_NORM_RELATIVE_TOLERANCE,
+        );
+        assert_eq!(profile.standard_error[0], 0.0);
+        assert_eq!(
+            profile.barrier_error.to_bits(),
+            profile.standard_error[1].to_bits()
+        );
+
+        let (free_energy, _, dividing) = integrate_means(&arcs, &gradients).expect("means");
+        let (_, d_ln_zr) =
+            reactant_log_partition_and_sensitivity(&arcs, &free_energy, dividing, kbt)
+                .expect("partition");
+        let weight = 0.5;
+        let sensitivity = -weight / kbt - d_ln_zr[dividing] * weight;
+        let expected_rate_error =
+            (profile.normalized_log_rate + sensitivity.abs().ln() + sigma.ln()).exp();
+        assert!(
+            expected_rate_error.is_finite(),
+            "normalized rate error {expected_rate_error} is outside the finite range"
+        );
+        let reported = profile
+            .normalized_rate_error
+            .expect("finite normalized rate error");
+        assert_relative_close(
+            reported,
+            expected_rate_error,
+            NORMALIZED_RATE_ERROR_RELATIVE_TOLERANCE,
+        );
     }
 
     #[test]
