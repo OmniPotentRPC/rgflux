@@ -149,7 +149,13 @@ python3 bench/pafi/analyze.py \
 
 `analyze.py` reads `bench/pafi/raw/dimer`, `bench/pafi/raw/vacancy`, `bench/pafi/raw/vacancy-path.json`, `bench/pafi/raw/vacancy-static.json`, and `bench/pafi/raw/metadata.json` unless those paths are overridden. If `metadata.json` or a raw record named by `manifest.json` is absent, it exits with `metadata.json is missing` or `raw record is missing` and does not write a traceback.
 
-The cargo gates in `tests/pafi_coverage_gates.rs` run these scripts with the interpreter named by `PAFI_PYTHON`, or else the first of `python3` and `python` on `PATH`. `analyze.py` needs Python 3.10 or newer, and a gate that finds an older or missing interpreter stops with that requirement stated. The analyzer test passes when `unittest` prints `Ran N tests` followed by `OK`; warnings printed after that line do not fail it.
+The cargo gates in `tests/pafi_coverage_gates.rs` run these scripts with the interpreter named by `PAFI_PYTHON`, or else the first of `python3` and `python` on `PATH`. `analyze.py` needs Python 3.10 or newer, and a gate that finds an older or missing interpreter stops with that requirement stated. The analyzer test passes when `unittest` prints `Ran N tests` followed by `OK`; warnings printed after that line do not fail it. By default, `cargo test` runs the standard-library gates without compiling `pafi-vacancy-coverage` or importing NumPy and SciPy. Enabling `--features pafi-python` compiles the `pafi-vacancy-coverage` `pyo3` example (requiring `python3-dev` and `LIBRARY_PATH` containing `sysconfig.get_config_var("LIBPL")`) and runs `RegenerationTests` in `bench/pafi/test_analyze.py`, which requires the pinned packages in `bench/pafi/requirements.txt` (`numpy==2.5.5` and `scipy==1.18.1`, matching `bench/pafi/raw/python-lock.txt`):
+
+```sh
+python3 -m pip install -r bench/pafi/requirements.txt
+LIBRARY_PATH="$(python3 -c 'import sysconfig; print(":".join(dict.fromkeys(filter(None, (sysconfig.get_config_var("LIBPL"), sysconfig.get_config_var("LIBDIR"))))))')" \
+  cargo test --locked --features pafi-python
+```
 
 The retained campaign rejected the curved, 17 plane, `k_B T=0.05`, 64 sample run with seed 1036330 and the error `PAFI reactant partition must be finite and positive`. The cargo test below and the wrapper after it are guard tests of that existing behaviour. They exercise unchanged rgflux library code, pass on the sources from before this benchmark existed, and check only the rejection status and error string. They are not a regression test for a source change. The quadrature has no reactant interval when the dividing plane is index zero, which would give a partition of zero, but the guards do not observe the dividing index. The release harness includes the cargo test:
 

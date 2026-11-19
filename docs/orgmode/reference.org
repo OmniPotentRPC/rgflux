@@ -24,6 +24,7 @@
 | =rgpot= | =dep:rgpot-core= | Enables =engine::rgpot::RgpotSurface= and =RgpotConfig= over =rgpot_core::potential::PotentialImpl= DLPack callbacks |
 | =rgpot-session= | =dep:rgpot-core= | Enables =engine::rgpot_session::RgpotSessionEngine=, =RgpotSessionConfig=, and =SessionEngineKind= (=OpenMm=, =NbLib=, =Lammps=) |
 | =lammpc= | =dep:rgpot-core=, =dep:capnp= | Enables =engine::lammpc::LammpcEngine=, =LammpcConfig=, and =MASS_VELOCITY_TO_EV= over =liblammpc= (=lammpc_session_*=) |
+| =pafi-python= | =dep:pyo3= | Builds the =pafi-vacancy-coverage= =pyo3= example and enables the NumPy/SciPy PAFI result-regeneration gate in =tests/pafi_coverage_gates.rs= |
 
 * Configuration structs and field defaults
 

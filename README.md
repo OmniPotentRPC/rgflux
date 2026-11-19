@@ -15,6 +15,7 @@ Optional Cargo features:
 - `rgpot`: enables `engine::rgpot::RgpotSurface` and `RgpotConfig` wrapping `rgpot-core` DLPack potential callbacks.
 - `rgpot-session`: enables `engine::rgpot_session::RgpotSessionEngine`, `RgpotSessionConfig`, and `SessionEngineKind` (`openmm`, `nblib`, `lammps`).
 - `lammpc`: enables `engine::lammpc::LammpcEngine`, `LammpcConfig`, and `MASS_VELOCITY_TO_EV` over `liblammpc` (`lammpc_session_*`).
+- `pafi-python`: builds the `pafi-vacancy-coverage` `pyo3` benchmark example and runs the NumPy/SciPy PAFI result-regeneration gate in `tests/pafi_coverage_gates.rs` (`bench/pafi/requirements.txt`).
 
 ## Modules
 

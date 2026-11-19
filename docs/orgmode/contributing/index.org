@@ -6,6 +6,7 @@
 - Current stable Rust with =clippy= and =rustfmt=.
 - =jq= and =rustup= for minimum supported Rust version (=rust-version = "1.88"=) checks.
 - Python 3.12+ and Emacs 29+ (=emacs-nox=) when building the Sphinx documentation from =docs/orgmode=.
+- =python3-dev= and =bench/pafi/requirements.txt= (=numpy==2.5.5=, =scipy==1.18.1=) when building the =pafi-vacancy-coverage= =pyo3= example and running the PAFI result-regeneration gate under =--features pafi-python=.
 
 * Build and test
 
@@ -21,6 +22,14 @@ python3 ci/check_links.py
 emacs --batch -l docs/export.el
 sphinx-build -b linkcheck -n -W --keep-going docs/source target/docs-linkcheck
 sphinx-build -b html -n -W --keep-going docs/source docs/build
+#+end_src
+
+When =python3-dev= and =bench/pafi/requirements.txt= are installed, also run the =pafi-python= feature checks:
+
+#+begin_src sh
+python3 -m pip install -r bench/pafi/requirements.txt
+LIBRARY_PATH="$(python3 -c 'import sysconfig; print(":".join(dict.fromkeys(filter(None, (sysconfig.get_config_var("LIBPL"), sysconfig.get_config_var("LIBDIR"))))))')" \
+  cargo test --locked --features pafi-python
 #+end_src
 
 When =liblammpc= is installed, also run =--all-features= clippy, tests, and rustdoc:
