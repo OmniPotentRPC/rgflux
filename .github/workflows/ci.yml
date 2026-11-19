@@ -69,6 +69,7 @@ jobs:
           python3 bench/pafi/repro_zero_width_reactant_partition.py \
             --native-bin target/debug/pafi-dimer-coverage
           python3 bench/pafi/test_analyze.py
+          python3 bench/pafi/test_repro.py
           python3 bench/pafi/analyze.py \
             --validate-results bench/pafi/results.json
       - name: Public items are documented

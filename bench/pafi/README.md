@@ -92,7 +92,7 @@ The vacancy grid was declared before collection: 17 and 33 PAFI planes; `k_B T=0
 
 ## Build
 
-Build the native executable in release mode. Every source location is an explicit argument:
+Build the native executable in release mode. Every source location is an explicit argument. The generated manifest pins `ndarray` to 0.17.2, `pyo3` to 0.27.2, `serde` to 1.0.229, and `serde_json` to 1.0.154. The script copies the committed `bench/pafi/Cargo.lock` into the build directory and runs `cargo build --release --locked`. It does not run `cargo generate-lockfile`. The build directory then contains `source-commits.json` with the `rgflux`, `rgpot`, and `rgsaddle` commits that were compiled.
 
 ```sh
 python3 bench/pafi/build_native.py \
@@ -117,7 +117,13 @@ python3 bench/pafi/run_campaign.py \
   --native-bin <native-build-dir>/target/release/rgflux-pafi-bench \
   --python <python-executable> \
   --reference-script bench/pafi/run_reference.py \
-  --raw-dir <raw-results-dir> \
+  --rgflux-source <rgflux-source> \
+  --rgpot-source <rgpot-source> \
+  --rgsaddle-source <rgsaddle-source> \
+  --lammps-source <lammps-source> \
+  --pafi-source <pafi-source> \
+  --raw-dir bench/pafi/raw/dimer \
+  --metadata bench/pafi/raw/metadata.json \
   --straight-planes 9,17 \
   --curved-planes 17,33 \
   --temperatures 0.05,0.1,0.2 \
@@ -133,18 +139,15 @@ python3 bench/pafi/run_campaign.py \
   --high-core-set <four-cores>
 ```
 
-Raw logs and working files remain outside the repository. Aggregate the completed campaign:
+Raw logs and per-run work directories are scratch. Each raw record, `manifest.json`, and `metadata.json` are written under `bench/pafi/raw`, which is the directory `analyze.py` reads by default. Aggregate the completed campaign:
 
 ```sh
 python3 bench/pafi/analyze.py \
-  --raw-dir <raw-results-dir> \
-  --vacancy-raw-dir <vacancy-raw-results-dir> \
-  --vacancy-path <vacancy-path-json> \
-  --vacancy-static-reference <vacancy-static-json> \
-  --metadata <metadata-json> \
   --output-json bench/pafi/results.json \
   --output-markdown bench/pafi/results.md
 ```
+
+`analyze.py` reads `bench/pafi/raw/dimer`, `bench/pafi/raw/vacancy`, `bench/pafi/raw/vacancy-path.json`, `bench/pafi/raw/vacancy-static.json`, and `bench/pafi/raw/metadata.json` unless those paths are overridden. If `metadata.json` or a raw record named by `manifest.json` is absent, it exits with `metadata.json is missing` or `raw record is missing` and does not write a traceback.
 
 The retained campaign exposed a zero-width reactant region: seed 1036330 selects dividing plane index zero, so no reactant integration interval exists and the finite partition is zero. The release harness includes this regression as a cargo test:
 
@@ -166,9 +169,11 @@ Generate the vacancy path once from the pinned rgsaddle revision:
 ```sh
 <vacancy-build-dir>/target/release/rgflux-pafi-bench generate \
   --site-packages <rgpot-site-packages> \
-  --output <vacancy-path-json> \
+  --output bench/pafi/raw/vacancy-path.json \
   --rgsaddle-sha <rgsaddle-sha>
 ```
+
+`bench/pafi/raw/vacancy-path.json` is the nine image pathway from that command. Its iteration count and maximum force match the published vacancy summary. The command regenerates the file.
 
 Run the complete vacancy campaign:
 
@@ -176,10 +181,16 @@ Run the complete vacancy campaign:
 python3 bench/pafi/run_vacancy_campaign.py \
   --native-bin <vacancy-build-dir>/target/release/rgflux-pafi-bench \
   --site-packages <rgpot-site-packages> \
-  --path <vacancy-path-json> \
+  --path bench/pafi/raw/vacancy-path.json \
   --python <python-executable> \
   --reference-script bench/pafi/run_vacancy_reference.py \
-  --raw-dir <vacancy-raw-results-dir> \
+  --rgflux-source <rgflux-source> \
+  --rgpot-source <rgpot-source> \
+  --rgsaddle-source <rgsaddle-source> \
+  --lammps-source <lammps-source> \
+  --pafi-source <pafi-source> \
+  --raw-dir bench/pafi/raw/vacancy \
+  --metadata bench/pafi/raw/metadata.json \
   --planes 17,33 \
   --temperatures 0.025,0.05,0.075 \
   --samples 256 \
@@ -199,7 +210,15 @@ Evaluate the shared NEB images independently with the release comparator:
 ```sh
 python3 bench/pafi/compare_vacancy_static.py \
   --lammps <lammps-executable> \
-  --path <vacancy-path-json> \
+  --path bench/pafi/raw/vacancy-path.json \
   --work-dir <static-work-dir> \
-  --output <vacancy-static-json>
+  --output bench/pafi/raw/vacancy-static.json
 ```
+
+`bench/pafi/raw/vacancy-static.json` in this tree is the retained comparator output. Its image energies are the `fcc_vacancy.static_energies` already stored in `bench/pafi/results.json`. A fresh `rgpot.MorsePot` evaluation of `bench/pafi/raw/vacancy-path.json` reproduced the rgflux image energies exactly. The command above regenerates the file from the vacancy path with LAMMPS.
+
+## Regeneration
+
+The campaign scripts write `bench/pafi/raw/metadata.json`. It records the `rgflux`, `rgpot`, `rgsaddle`, `rgmin`, LAMMPS, and PAFI commits when those checkouts are passed, the pinned native crate versions, importable package versions, the host, the seeds, and the command lines. Each reference run also writes `metadata.json` in its work directory before the engine starts. Dimer records land in `bench/pafi/raw/dimer/records` and vacancy records land in `bench/pafi/raw/vacancy/records`, with `manifest.json` beside each set.
+
+Published `results.json` reports 2016 planned executions. Summing each published cell's median wall time multiplied by its successful-run count gives 626.5859146209943 seconds over 1655 successful runs. Rejected runs have no wall time in that aggregate. The figure does not include building rgflux, rgpot, LAMMPS, or the PAFI driver. This change does not rerun the campaign and does not alter `results.json` or `results.md`.
