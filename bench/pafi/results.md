@@ -360,9 +360,9 @@ LAMMPS values are derived integration-step counts: planes times configured therm
 
 Across accepted headline cells, the largest median static minimum and saddle differences are 0 and 2.76e-11. Measured rgflux calls per plane are [386.0]; derived reference integration steps per plane are [384.0].
 
-## Reproduction of the rgflux numerical rejection
+## Guard for the rgflux reactant partition rejection
 
-Seed 1036330 selects dividing plane index zero. The reactant integration loop therefore has no interval, leaving a finite partition of zero; no exponential is evaluated. The cargo test `reproduces_zero_width_reactant_partition` and `repro_zero_width_reactant_partition.py` check the retained `PAFI reactant partition must be finite and positive` rejection. No retained cell is classified as a genuine exponential overflow.
+The curved, 17 plane, kBT=0.05, 64 sample run with seed 1036330 is rejected with `PAFI reactant partition must be finite and positive`. The cargo test `reproduces_zero_width_reactant_partition` and `repro_zero_width_reactant_partition.py` are guard tests of that existing behaviour. They exercise unchanged rgflux library code and check only the rejection status and error string, not its cause. A dividing plane at index zero would leave the reactant integration without an interval and give a partition of zero, but the guards do not observe the dividing index. No retained cell is classified as a genuine exponential overflow.
 
 ## Reproduction
 

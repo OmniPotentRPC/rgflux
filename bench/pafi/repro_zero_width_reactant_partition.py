@@ -43,8 +43,7 @@ def main():
     expected = "invalid configuration: PAFI reactant partition must be finite and positive"
     if record.get("status") != "rejected" or record.get("error") != expected:
         raise SystemExit(
-            "zero-width reactant partition at dividing plane index 0 "
-            f"was not reproduced: {record}"
+            f"the retained reactant partition rejection was not reproduced: {record}"
         )
     print(json.dumps(record, sort_keys=True))
 
