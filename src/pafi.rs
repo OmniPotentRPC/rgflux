@@ -233,8 +233,7 @@ const DEFAULT_ZERO_TEMPERATURE_TOL: f64 = default_zero_temperature_tol(DEFAULT_P
 
 fn effective_zero_temperature_tol(config: &PafiConfig) -> f64 {
     let tol = config.zero_temperature_tol;
-    let default_tol = DEFAULT_ZERO_TEMPERATURE_TOL;
-    if (tol - default_tol).abs() <= 64.0 * f64::EPSILON * default_tol.abs().max(1.0) {
+    if tol.to_bits() == DEFAULT_ZERO_TEMPERATURE_TOL.to_bits() {
         default_zero_temperature_tol(config.planes)
     } else {
         tol
@@ -1407,6 +1406,24 @@ mod tests {
             .with_sample_steps(2)
             .with_stats(StatsConfig::default().with_min_batches(2));
         assert!(pafi_profile(&mut legacy_engine, path.view(), &legacy_like).is_ok());
+    }
+
+    #[test]
+    fn only_the_exact_default_tolerance_scales_with_planes() {
+        let exact = PafiConfig::default().with_planes(33);
+        assert_eq!(
+            effective_zero_temperature_tol(&exact).to_bits(),
+            default_zero_temperature_tol(33).to_bits()
+        );
+
+        let next_up = f64::from_bits(DEFAULT_ZERO_TEMPERATURE_TOL.to_bits() + 1);
+        let near = PafiConfig::default()
+            .with_planes(33)
+            .with_zero_temperature_tol(next_up);
+        assert_eq!(
+            effective_zero_temperature_tol(&near).to_bits(),
+            next_up.to_bits()
+        );
     }
 
     #[test]
