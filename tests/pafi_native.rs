@@ -414,6 +414,47 @@ fn normalized_pafi_rate_matches_analytic_profile() {
 }
 
 #[test]
+fn widening_well_reports_the_reactant_curvature() {
+    let thermal = 0.2_f64;
+    let planes = 41usize;
+    let path = line_path(-1.0, 0.0, planes);
+    let config = PafiConfig::default()
+        .with_planes(planes)
+        .with_burn_in_steps(10_000)
+        .with_sample_steps(10_000)
+        .with_time_step(0.001)
+        .with_stats(StatsConfig::default().with_min_batches(2))
+        .with_seed(7);
+
+    let mut engine = NativeEngine::new(
+        WideningDoubleWell,
+        NativeConfig::default()
+            .with_masses(Array1::from_vec(vec![1.0, 4.0]))
+            .with_seed(7)
+            .with_thermostat(
+                ThermostatConfig::default()
+                    .with_gamma(1.3)
+                    .with_temperature(thermal)
+                    .with_boltzmann(1.0),
+            ),
+    )
+    .expect("native engine");
+    engine.shoot_velocities(7).expect("initial velocities");
+
+    let profile = pafi_profile(&mut engine, path.view(), &config).expect("profile");
+    // V_xx = 8 at x = -1 along the unit normal, and the mass on x is 1.
+    let omega_0 = 8.0_f64.sqrt();
+    assert!((profile.reactant_frequency - omega_0).abs() <= 1.0e-6 * omega_0);
+    let harmonic_rate = omega_0 / (2.0 * PI) * (-profile.barrier / thermal).exp();
+    let gap = (profile.normalized_rate - harmonic_rate).abs();
+    assert!(
+        gap > 2.0 * profile.normalized_rate_error,
+        "harmonic gap {gap:.4e} does not exceed two standard errors {:.4e}",
+        2.0 * profile.normalized_rate_error
+    );
+}
+
+#[test]
 fn sampling_refinement_restores_analytic_coverage() {
     let (coarse_barrier, coarse_se, coarse_z) =
         run_barrier_case(vec![1.0, 4.0], 91, 31, 20_000, 2_500, 0.001);

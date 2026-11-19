@@ -2120,6 +2120,59 @@ mod tests {
     }
 
     #[test]
+    fn log_fields_stay_finite_for_deep_wells_large_beta_and_soft_modes() {
+        // `(label, mean force, kT, reactant curvature)`.
+        // A deep well makes `exp(-ΔF / kT)` underflow. A large beta is a small
+        // `kT`. A soft mode is a tiny projected frequency. The log partition
+        // and the log rate stay finite in every combination.
+        let cases = [
+            ("deep well", 2_500.0, 1.0, 4.0),
+            ("large beta", 25.0, 1.0e-4, 4.0),
+            ("soft mode", 4.0, 1.0, 1.0e-16),
+            (
+                "deep well, large beta, and soft mode",
+                800.0,
+                1.0e-3,
+                1.0e-12,
+            ),
+        ];
+        let arcs = [0.0, 0.5, 1.25, 2.0];
+        for (label, slope, kbt, curvature) in cases {
+            let gradients = [slope, slope, slope, slope];
+            let profile = profile_from(&arcs, &gradients, &[0.0; 4], kbt, curvature)
+                .unwrap_or_else(|err| panic!("{label}: {err}"));
+            let frequency = curvature.sqrt();
+            assert_abs_diff_eq!(
+                profile.reactant_frequency,
+                frequency,
+                epsilon = 16.0 * f64::EPSILON * frequency.max(1.0)
+            );
+            assert!(
+                profile.barrier.is_finite() && profile.barrier > 0.0,
+                "{label}"
+            );
+            assert!(profile.reactant_log_partition.is_finite(), "{label}");
+            let log_rate =
+                0.5 * (kbt / TAU).ln() - profile.barrier / kbt - profile.reactant_log_partition;
+            assert!(log_rate.is_finite(), "{label}");
+            let rate_scale = log_rate.abs().max(1.0);
+            assert_abs_diff_eq!(
+                profile.normalized_log_rate,
+                log_rate,
+                epsilon = 16.0 * f64::EPSILON * rate_scale
+            );
+            assert!(
+                profile.normalized_rate.is_finite() && profile.normalized_rate >= 0.0,
+                "{label}"
+            );
+            assert!(
+                profile.reactant_partition.is_finite() && profile.reactant_partition > 0.0,
+                "{label}"
+            );
+        }
+    }
+
+    #[test]
     fn log_fields_match_the_line_integral_rate() {
         let arcs = [0.0, 0.5, 1.0, 1.5];
         let gradients = [0.3, 0.1, -0.4, -0.6];
@@ -2221,6 +2274,179 @@ mod tests {
                 .iter()
                 .all(|value| *value < profile.barrier)
         );
+    }
+
+    fn dense_profile_maximum(arcs: &[f64], gradients: &[f64], samples: usize) -> f64 {
+        let quadrature = Quadrature::new(arcs).expect("quadrature");
+        let free_energy = quadrature.integrate(gradients);
+        let slopes = quadrature.slopes(gradients);
+        let mut best = f64::NEG_INFINITY;
+        for k in 0..arcs.len() - 1 {
+            for j in 0..=samples {
+                let u = f64::from(u32::try_from(j).expect("sample index"))
+                    / f64::from(u32::try_from(samples).expect("sample count"));
+                let value = quadrature.interpolated_value(k, u, gradients, &slopes, &free_energy);
+                if value > best {
+                    best = value;
+                }
+            }
+        }
+        best
+    }
+
+    fn sampled_local_maxima(arcs: &[f64], gradients: &[f64]) -> usize {
+        let quadrature = Quadrature::new(arcs).expect("quadrature");
+        let free_energy = quadrature.integrate(gradients);
+        let slopes = quadrature.slopes(gradients);
+        let steps = 4_000usize;
+        let mut count = 0usize;
+        let mut previous = f64::NEG_INFINITY;
+        let mut current = quadrature.interpolated_value(0, 0.0, gradients, &slopes, &free_energy);
+        for k in 0..arcs.len() - 1 {
+            for j in 1..=steps {
+                let u = f64::from(u32::try_from(j).expect("step"))
+                    / f64::from(u32::try_from(steps).expect("steps"));
+                let next = quadrature.interpolated_value(k, u, gradients, &slopes, &free_energy);
+                if current > previous && current > next {
+                    count += 1;
+                }
+                previous = current;
+                current = next;
+            }
+        }
+        count
+    }
+
+    fn assert_exact_maximum_covers_dense_sample(arcs: &[f64], gradients: &[f64]) {
+        let quadrature = Quadrature::new(arcs).expect("quadrature");
+        let free_energy = quadrature.integrate(gradients);
+        let exact = quadrature
+            .dividing_plane(gradients, &free_energy)
+            .free_energy;
+        let samples = 1_000_000usize;
+        let brute = dense_profile_maximum(arcs, gradients, samples);
+        let scale = exact.abs().max(brute.abs()).max(1.0);
+        let rounding = 128.0 * f64::EPSILON * scale;
+        assert!(
+            exact + rounding >= brute,
+            "exact maximum {exact:.16e} is below the {samples}-point sample {brute:.16e}"
+        );
+        assert!(
+            exact - brute <= rounding.max(1.0e-9),
+            "exact maximum {exact:.16e} and the {samples}-point sample {brute:.16e} differ by more than rounding"
+        );
+    }
+
+    #[test]
+    fn derivative_roots_cover_quadratic_degeneracies_and_three_real_roots() {
+        let (count, roots) = quadratic_real_roots(0.0, 2.0, -0.5);
+        assert_eq!(count, 1);
+        assert_abs_diff_eq!(roots[0], 0.25, epsilon = 1.0e-15);
+
+        let (count, _) = quadratic_real_roots(0.0, 0.0, 3.0);
+        assert_eq!(count, 0);
+
+        let (count, _) = quadratic_real_roots(1.0, 0.0, 1.0);
+        assert_eq!(count, 0);
+
+        let (count, mut roots) = quadratic_real_roots(1.0, 0.0, -0.25);
+        assert_eq!(count, 2);
+        roots[..count].sort_by(f64::total_cmp);
+        assert_abs_diff_eq!(roots[0], -0.5, epsilon = 1.0e-15);
+        assert_abs_diff_eq!(roots[1], 0.5, epsilon = 1.0e-15);
+
+        let (count, mut roots) = quadratic_real_roots(1.0, -1.0, 0.16);
+        assert_eq!(count, 2);
+        roots[..count].sort_by(f64::total_cmp);
+        assert_abs_diff_eq!(roots[0], 0.2, epsilon = 1.0e-12);
+        assert_abs_diff_eq!(roots[1], 0.8, epsilon = 1.0e-12);
+
+        let (count, mut roots) = cubic_real_roots(0.0, 1.0, -1.0, 0.16);
+        assert_eq!(count, 2);
+        roots[..count].sort_by(f64::total_cmp);
+        assert_abs_diff_eq!(roots[0], 0.2, epsilon = 1.0e-12);
+        assert_abs_diff_eq!(roots[1], 0.8, epsilon = 1.0e-12);
+
+        let (count, roots) = cubic_real_roots(0.0, 0.0, 2.0, -0.5);
+        assert_eq!(count, 1);
+        assert_abs_diff_eq!(roots[0], 0.25, epsilon = 1.0e-15);
+
+        let (count, _) = cubic_real_roots(0.0, 0.0, 0.0, 4.0);
+        assert_eq!(count, 0);
+
+        let left = 0.2_f64;
+        let middle = 0.5_f64;
+        let right = 0.8_f64;
+        let (count, mut roots) = cubic_real_roots(
+            1.0,
+            -(left + middle + right),
+            left * middle + left * right + middle * right,
+            -left * middle * right,
+        );
+        assert_eq!(count, 3);
+        roots[..count].sort_by(f64::total_cmp);
+        assert_abs_diff_eq!(roots[0], left, epsilon = 1.0e-12);
+        assert_abs_diff_eq!(roots[1], middle, epsilon = 1.0e-12);
+        assert_abs_diff_eq!(roots[2], right, epsilon = 1.0e-12);
+    }
+
+    #[test]
+    fn segment_derivative_matches_the_cubic_hermite_force() {
+        let arcs = [0.0, 0.3, 1.1, 1.7];
+        let gradients = [0.4, -1.2, 0.7, 0.2];
+        let quadrature = Quadrature::new(&arcs).expect("quadrature");
+        let slopes = quadrature.slopes(&gradients);
+        for k in 0..arcs.len() - 1 {
+            let h = arcs[k + 1] - arcs[k];
+            let g0 = gradients[k];
+            let g1 = gradients[k + 1];
+            let s0 = slopes[k];
+            let s1 = slopes[k + 1];
+            let a = (g0 - g1).mul_add(2.0, h * (s0 + s1));
+            let b = (g1 - g0).mul_add(3.0, -h * s0.mul_add(2.0, s1));
+            let c = h * s0;
+            let d = g0;
+            for j in 0..=8 {
+                let u = f64::from(j) / 8.0;
+                let u2 = u * u;
+                let u3 = u2 * u;
+                let force = g0 * (2.0 * u3 - 3.0 * u2 + 1.0)
+                    + g1 * (-2.0 * u3 + 3.0 * u2)
+                    + h * (s0 * (u3 - 2.0 * u2 + u) + s1 * (u3 - u2));
+                let polynomial = a.mul_add(u, b).mul_add(u, c).mul_add(u, d);
+                assert_abs_diff_eq!(polynomial, force, epsilon = 1.0e-12);
+            }
+        }
+    }
+
+    #[test]
+    fn exact_segment_maximum_covers_a_million_point_sample() {
+        let oscillating_arcs = [0.0, 1.0, 2.0, 3.0, 4.0, 5.0];
+        let oscillating = [8.0, -6.0, 7.0, -9.0, 5.0, -4.0];
+        assert!(
+            sampled_local_maxima(&oscillating_arcs, &oscillating) >= 2,
+            "the oscillating profile should have several local maxima"
+        );
+        assert_exact_maximum_covers_dense_sample(&oscillating_arcs, &oscillating);
+
+        let descending_arcs = [0.0, 0.4, 1.1, 2.3];
+        let descending = [-1.0, -1.0, -1.0, -1.0];
+        let descending_quadrature = Quadrature::new(&descending_arcs).expect("quadrature");
+        let descending_energy = descending_quadrature.integrate(&descending);
+        let descending_plane =
+            descending_quadrature.dividing_plane(&descending, &descending_energy);
+        assert_eq!(descending_plane.arc, descending_arcs[0]);
+        assert_eq!(descending_plane.free_energy, 0.0);
+        assert_exact_maximum_covers_dense_sample(&descending_arcs, &descending);
+
+        let ascending_arcs = [0.0, 0.5, 1.25, 2.0, 3.5];
+        let ascending = [1.5, 1.5, 1.5, 1.5, 1.5];
+        let ascending_profile =
+            profile_from(&ascending_arcs, &ascending, &[0.0; 5], 1.0, 1.0).expect("profile");
+        let end = *ascending_arcs.last().expect("end");
+        assert_abs_diff_eq!(ascending_profile.dividing_arc, end, epsilon = 1.0e-12);
+        assert_abs_diff_eq!(ascending_profile.barrier, 1.5 * end, epsilon = 1.0e-12);
+        assert_exact_maximum_covers_dense_sample(&ascending_arcs, &ascending);
     }
 
     #[test]
