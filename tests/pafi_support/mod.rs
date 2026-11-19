@@ -54,7 +54,7 @@ use rgflux::stats::StatsConfig;
 pub const SUITE_ALPHA: f64 = 1.0 / 1_000.0;
 
 /// Number of statistical assertions `m` in the PAFI test suite.
-pub const FAMILY_SIZE: usize = 16;
+pub const FAMILY_SIZE: usize = 18;
 
 /// Per assertion level `alpha / m` under the Bonferroni bound.
 pub const ASSERTION_ALPHA: f64 = SUITE_ALPHA / (FAMILY_SIZE as f64);
@@ -67,18 +67,18 @@ pub const BLOCKS_PER_PLANE: usize = 40;
 pub const DEGREES_OF_FREEDOM: usize = BLOCKS_PER_PLANE - 1;
 
 /// Two sided Student `t` quantile `t_{39, 1 - alpha / (2 m)}` with
-/// `alpha = 1/1000` and `m = 16` (`1 - alpha / (2 m) = 1 - 1/32000`).
-pub const T_QUANTILE: f64 = 4.485_620;
+/// `alpha = 1/1000` and `m = 18` (`1 - alpha / (2 m) = 1 - 1/36000`).
+pub const T_QUANTILE: f64 = 4.523_716;
 
 /// Two sided critical value for `|estimate - target| / SE`.
 pub const Z_CRIT: f64 = T_QUANTILE;
 
 /// Upper chi-square quantile `chi^2_{39, 1 - alpha / m}` with `alpha = 1/1000`
-/// and `m = 16` (`1 - alpha / m = 1 - 1/16000`).
-pub const CHI2_QUANTILE: f64 = 82.313_741;
+/// and `m = 18` (`1 - alpha / m = 1 - 1/18000`).
+pub const CHI2_QUANTILE: f64 = 82.727_831;
 
 /// `sqrt(chi^2_{39, 1 - alpha / m} / 39)`.
-pub const CHI2_SE_FACTOR: f64 = 1.452_793;
+pub const CHI2_SE_FACTOR: f64 = 1.456_443;
 
 /// Share of the assertion level spent on the sampling-error Chernoff bound.
 const SAMPLING_TAIL_SHARE: f64 = 0.2;
@@ -272,7 +272,21 @@ const WIDENING_MASS_X: f64 = 1.0;
 /// larger than the sampling piece, so a chi-square factor times the sampling
 /// error alone sits below the reported standard error.
 pub fn widening_barrier_se_cap(samples: usize, mass_y: f64, gamma: f64) -> f64 {
-    reported_se_bound(&widening_se_model(samples, mass_y, gamma), ASSERTION_ALPHA).cap
+    widening_barrier_se_cap_at(samples, mass_y, gamma, WIDENING_THERMAL)
+}
+
+/// [`widening_barrier_se_cap`] at thermal energy `thermal`.
+///
+/// The transverse variance is `kT / k(x)` and the mean force carries
+/// `kT / (4 k(x))`, so a colder well has a smaller gap and a smaller
+/// sampling piece. The tail bound is otherwise the one documented on
+/// [`widening_barrier_se_cap`].
+pub fn widening_barrier_se_cap_at(samples: usize, mass_y: f64, gamma: f64, thermal: f64) -> f64 {
+    reported_se_bound(
+        &widening_se_model(samples, mass_y, gamma, thermal),
+        ASSERTION_ALPHA,
+    )
+    .cap
 }
 
 /// Upper cap on the widening well's normalized-rate standard error.
@@ -284,7 +298,7 @@ pub fn widening_barrier_se_cap(samples: usize, mass_y: f64, gamma: f64) -> f64 {
 /// on the remaining fifth: the estimator, not the reported standard error,
 /// is what enters the exponential.
 pub fn widening_rate_se_cap(samples: usize, mass_y: f64, gamma: f64) -> f64 {
-    let model = widening_se_model(samples, mass_y, gamma);
+    let model = widening_se_model(samples, mass_y, gamma, WIDENING_THERMAL);
     let rate_share = 0.2;
     let barrier_budget = (1.0 - rate_share) * ASSERTION_ALPHA;
     let barrier_cap = reported_se_bound(&model, barrier_budget).cap;
@@ -310,8 +324,8 @@ pub fn widening_se_ratio_cap(
     gamma: f64,
 ) -> f64 {
     let half = 0.5 * ASSERTION_ALPHA;
-    let coarse = widening_se_model(coarse_samples, mass_y, gamma);
-    let fine = widening_se_model(fine_samples, mass_y, gamma);
+    let coarse = widening_se_model(coarse_samples, mass_y, gamma, WIDENING_THERMAL);
+    let fine = widening_se_model(fine_samples, mass_y, gamma, WIDENING_THERMAL);
     let fine_cap = reported_se_bound(&fine, half).cap;
     let floor = largest_gap_floor(coarse.gap, coarse.gap_sigma, half);
     fine_cap / floor
@@ -414,7 +428,7 @@ fn assemble_se_model(arcs: &[f64], means: &[f64], mean_variances: &[f64]) -> SeM
     }
 }
 
-fn widening_se_model(samples: usize, mass_y: f64, gamma: f64) -> SeModel {
+fn widening_se_model(samples: usize, mass_y: f64, gamma: f64, thermal: f64) -> SeModel {
     let n = WIDENING_PLANES;
     let batches = BLOCKS_PER_PLANE;
     assert_eq!(
@@ -434,7 +448,7 @@ fn widening_se_model(samples: usize, mass_y: f64, gamma: f64) -> SeModel {
         let x = -1.0 + arc;
         let stiffness = 1.5 + 0.5 * x;
         let deterministic = -4.0 * x * (1.0 - x * x);
-        let variance_y = WIDENING_THERMAL / stiffness;
+        let variance_y = thermal / stiffness;
         let omega_squared = stiffness / mass_y;
         let batch_variance = batch_mean_variance(
             0.0,
@@ -976,7 +990,7 @@ fn curved_standard_error_model_matches_the_langevin_gap() {
 #[test]
 fn widening_gap_matches_the_hermite_trapezoid_difference() {
     let samples = 10_000;
-    let model = widening_se_model(samples, 1.0, 1.5);
+    let model = widening_se_model(samples, 1.0, 1.5, WIDENING_THERMAL);
     let n = WIDENING_PLANES;
     let arcs: Vec<f64> = (0..n).map(|i| (i as f64) / ((n - 1) as f64)).collect();
     let gradients: Vec<f64> = arcs
