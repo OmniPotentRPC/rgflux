@@ -580,6 +580,13 @@ fn adaptive_driver_uses_the_selected_monitor() {
         "PathCurvature must not be replaced by ForceGradient in the adaptive driver"
     );
     let variance_monitor = uniform.equidistribution.monitor_values();
+    assert!(
+        uniform
+            .final_tau_weighted_variances
+            .iter()
+            .all(|value| value.is_finite() && *value > 0.0),
+        "sampled autocorrelation-weighted variances must be finite and positive at the source"
+    );
     // The fixed-seed force samples are intentionally private, so the profile
     // exposes their final pre-selection variance channel. Re-evaluating that
     // channel here checks monitor selection and normalization independently.
