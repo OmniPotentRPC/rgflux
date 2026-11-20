@@ -4251,6 +4251,27 @@ mod tests {
     }
 
     #[test]
+    fn richardson_roundoff_floor_uses_both_step_sizes() {
+        let origin = Array1::zeros(6);
+        let root_mass = Array1::ones(6);
+        let direction = Array1::from_vec(vec![1.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
+        let step = f64::EPSILON.cbrt();
+        let mut engine = NativeEngine::new(
+            CoordinateLinear { index: 0 },
+            NativeConfig::default().with_masses(Array1::ones(6)),
+        )
+        .expect("linear surface");
+        let (_, _, roundoff_floor) =
+            estimate_hessian_product(&mut engine, &origin, &root_mass, &direction, step, 0.0)
+                .expect("Richardson floor");
+        assert_abs_diff_eq!(
+            roundoff_floor,
+            3.0 * f64::EPSILON / step,
+            epsilon = f64::EPSILON
+        );
+    }
+
+    #[test]
     fn richardson_correction_recovers_anharmonic_hessian() {
         let harmonic = 2.75;
         let quartic = 8.0;
