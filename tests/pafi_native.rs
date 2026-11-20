@@ -525,7 +525,12 @@ fn widening_rate_se_cap_offset_sweep() {
             seed_with_offset(RATE_SEED, offset),
             RATE_SAMPLES,
         );
-        vec![(profile.normalized_rate_error, cap)]
+        vec![(
+            profile
+                .normalized_rate_error
+                .expect("representable rate error"),
+            cap,
+        )]
     });
     assert_sweep_within_budget("widening rate SE", &["rate SE"], &report);
 }
