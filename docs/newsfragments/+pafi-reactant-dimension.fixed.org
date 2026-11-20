@@ -1,0 +1,1 @@
+Allow PAFI sampling above 128 coordinates by skipping dense reactant-Hessian certification while retaining finite-force and positive projected-curvature checks.
