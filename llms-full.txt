@@ -313,7 +313,7 @@ fn main() -> Result<(), rgflux::FluxError> {
 
 ## Place a fixed-normal OH-TST dividing hyperplane and evaluate the rate
 
-Pass a seed `HyperplaneConstraint` and `OhtstConfig` to `ohtst::optimize_hyperplane` cite:`goswamiAdaptivePruning2026,johannessonOptimizationHyperplanar2001,bligaardOptimizationHyperplanar2005,vineyardFrequencyFactors1957`. Even when the seed offset is displaced from the saddle (here \(c_0 = -0.4\) while the barrier sits at \(c^\ddagger = 0\)), `optimize_hyperplane` relaxes into the reactant minimum, brackets and bisects the stationary dividing hyperplane along the seed normal, samples the curvature probe plane, and returns \(k_{\mathrm{OHTST}} = \frac{1}{2\pi}\sqrt{\kappa / \mu}\exp(-\Delta V / k_{\mathrm{B}}T)\) (with \(\mu\) from `rgsaddle::flux_mass`) alongside its delta-method standard error:
+Pass a seed `HyperplaneConstraint` and `OhtstConfig` to `ohtst::optimize_hyperplane` cite:`goswamiAdaptivePruning2026,johannessonOptimizationHyperplanar2001,bligaardOptimizationHyperplanar2005,vineyardFrequencyFactors1957`. Even when the seed offset is displaced from the saddle (here \(c_0 = -0.4\) while the barrier sits at \(c^\ddagger = 0\)), `optimize_hyperplane` relaxes into the reactant minimum, brackets and bisects the stationary dividing hyperplane along the seed normal, samples the curvature probe plane, and returns \(k_{\mathrm{OHTST}} = \frac{1}{2\pi}\sqrt{\kappa / \mu}\exp(-\Delta V / k_{\mathrm{B}}T)\) (with \(\mu\) from `rgsaddle::flux_mass`) alongside its delta-method standard error. The probe average is canonical, so the engine needs Langevin friction \(\gamma > 0\). \(\gamma = 0\) is NVE and `optimize_hyperplane` returns `FluxError::InvalidConfig` before the search:
 
 ```rust
 use ndarray::{Array1, ArrayView1};
@@ -873,7 +873,7 @@ Here \(I_T\) is the trapezoid integral of \(dV/ds\) over the plane anchors and \
 | `stats::effective_sample_size` | Sample slice | Geyer \(n_{\mathrm{eff}}\); equations and runnable example in `howto.org` |
 | `stats::check_stationarity` | Sample slice and `StatsConfig` | `StationarityReport`; Geweke equation and runnable example in `howto.org` |
 | `hyperplane::sample_hyperplane` | Mutable engine, plane, and `HyperplaneConfig` | `HyperplaneSample`; constrained mean-force guide in `howto.org` |
-| `ohtst::optimize_hyperplane` | Mutable engine, seed plane, and `OhtstConfig` | `OhtstEstimate`; harmonic rate guide in `howto.org` |
+| `ohtst::optimize_hyperplane` | Mutable engine, seed plane, and `OhtstConfig` | `OhtstEstimate`; `gamma = 0` returns `FluxError::InvalidConfig` before the search; harmonic rate guide in `howto.org` |
 | `ffs::forward_flux_rate` | Mutable engine, order parameter, and `FfsConfig` | `FfsEstimate`; direct FFS guide in `howto.org` |
 | `pafi::pafi_profile` | Mutable engine, path image matrix, and `PafiConfig` | `FreeEnergyProfile`; PAFI guide in `howto.org` |
 | `pafi::pafi_profile_dyn` | Mutable `dyn DynamicsEngine`, path image matrix, and `PafiConfig` | Trait-object form of `pafi_profile` with identical estimator and restoration semantics |
@@ -1704,7 +1704,7 @@ where \(\mu\) is the effective directional flux mass along \(\mathbf{n}\), evalu
    \kappa = \frac{\langle \lambda \rangle_{c_{\mathrm{probe}}}}{c_{\mathrm{probe}} - s_{\min}} > 0.
    \]
 
-   Because \(\langle \lambda \rangle\) carries the sign of \(c_{\mathrm{probe}} - s_{\min}\), dividing by the signed separation yields \(\kappa > 0\) on either side of the reactant minimum. This probe is a canonical expectation, so `optimize_hyperplane` requires \(\gamma > 0\) and rejects NVE dynamics with `FluxError::InvalidConfig`.
+   Because \(\langle \lambda \rangle\) carries the sign of \(c_{\mathrm{probe}} - s_{\min}\), dividing by the signed separation yields \(\kappa > 0\) on either side of the reactant minimum. This probe is a canonical expectation from `sample_hyperplane`, so `optimize_hyperplane` requires Langevin friction \(\gamma > 0\) and returns `FluxError::InvalidConfig` when \(\gamma = 0\), before it snapshots the engine or starts the reactant search. NVE would sample an energy shell rather than \(\langle \lambda \rangle\).
 4. *Rate and delta-method uncertainty*: With flux mass \(\mu = (\sum_i n_i^2 / m_i)^{-1}\) from `rgsaddle::flux_mass` (mapping a normal/mass length mismatch to `FluxError::Shape` and a non-finite or non-positive metric to `FluxError::InvalidConfig`) and angular frequency \(\omega = \sqrt{\kappa / \mu}\), the fixed-normal OH-TST rate and its first-order delta-method standard error are
 
    \[
@@ -1714,7 +1714,7 @@ where \(\mu\) is the effective directional flux mass along \(\mathbf{n}\), evalu
 ### Assumptions and scope
 
 - Single dominant reaction channel along the fixed unit normal \(\mathbf{n}\); positive barrier \(\Delta V > 0\) and locally harmonic reactant well (\(\kappa > 0\)) at the probe offset \(c_{\mathrm{probe}}\).
-- Positive thermal energy \(k_{\mathrm{B}} T > 0\) and strictly positive masses \(m_i > 0\).
+- Positive thermal energy \(k_{\mathrm{B}} T > 0\), Langevin friction \(\gamma > 0\), and strictly positive masses \(m_i > 0\). Zero friction is NVE, and `optimize_hyperplane` returns `FluxError::InvalidConfig` before the search.
 - `hyperplane::sample_hyperplane` and fixed-normal `ohtst::optimize_hyperplane` are implemented; the in-plane virial, rotational torque \(\partial A / \partial \mathbf{n}\), Assaraf-Caffarel / Stein zero-variance control variates cite:`assarafZeroVariance1999`, two-state BAR / multi-state MBAR reversible work cite:`bennettEfficientEstimation1976,shirtsStatisticallyOptimal2008`, and Riemannian trust-region normal optimization (`patience`, `min_overlap`, `use_mbar`) are not yet implemented.
 
 ### Engine wiring

@@ -161,3 +161,20 @@ fn zero_thermal_energy_is_rejected() {
         invalid("OH-TST requires a positive thermal energy k_B * T")
     );
 }
+
+#[test]
+fn zero_friction_is_rejected() {
+    let mut engine = well_engine(-HALF_WIDTH);
+    engine.thermostat = engine.thermostat.with_gamma(0.0);
+    let start = engine.positions.clone();
+    assert_eq!(
+        error(&mut engine, &plane(&[1.0], 0.0), &quiet()),
+        invalid(
+            "canonical sampling requires ThermostatConfig::gamma > 0; gamma == 0 is NVE dynamics",
+        )
+    );
+    assert_eq!(engine.positions, start);
+    assert!(engine.constraint.is_none());
+    assert!(engine.log.step_sizes.is_empty());
+    assert!(engine.log.reseeds.is_empty());
+}

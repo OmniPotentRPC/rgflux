@@ -267,7 +267,7 @@ Here \(I_T\) is the trapezoid integral of \(dV/ds\) over the plane anchors and \
 | =stats::effective_sample_size= | Sample slice | Geyer \(n_{\mathrm{eff}}\); equations and runnable example in =howto.org= |
 | =stats::check_stationarity= | Sample slice and =StatsConfig= | =StationarityReport=; Geweke equation and runnable example in =howto.org= |
 | =hyperplane::sample_hyperplane= | Mutable engine, plane, and =HyperplaneConfig= | =HyperplaneSample=; constrained mean-force guide in =howto.org= |
-| =ohtst::optimize_hyperplane= | Mutable engine, seed plane, and =OhtstConfig= | =OhtstEstimate=; harmonic rate guide in =howto.org= |
+| =ohtst::optimize_hyperplane= | Mutable engine, seed plane, and =OhtstConfig= | =OhtstEstimate=; =gamma = 0= returns =FluxError::InvalidConfig= before the search; harmonic rate guide in =howto.org= |
 | =ffs::forward_flux_rate= | Mutable engine, order parameter, and =FfsConfig= | =FfsEstimate=; direct FFS guide in =howto.org= |
 | =pafi::pafi_profile= | Mutable engine, path image matrix, and =PafiConfig= | =FreeEnergyProfile=; PAFI guide in =howto.org= |
 | =pafi::pafi_profile_dyn= | Mutable =dyn DynamicsEngine=, path image matrix, and =PafiConfig= | Trait-object form of =pafi_profile= with identical estimator and restoration semantics |
