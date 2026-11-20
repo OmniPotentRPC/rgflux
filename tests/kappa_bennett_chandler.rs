@@ -18,6 +18,13 @@ use rgflux::kappa::kramers_transmission_coefficient;
 use rgflux::stats::StatsConfig;
 
 /// Algebraic rounding tolerance `32 * f64::EPSILON` (`2^-47`) for closed-form checks.
+/// Kappa configuration with early basin commitment switched on.
+fn early(commit_checkpoints: usize) -> KappaConfig {
+    KappaConfig::default()
+        .with_early_commitment(true)
+        .with_commit_checkpoints(commit_checkpoints)
+}
+
 const ALGEBRAIC_TOL: f64 = 32.0 * f64::EPSILON;
 
 /// Canonical statistical confidence multiplier (`3 sigma`) for the 2D double-well Kramers test.
@@ -299,15 +306,17 @@ fn double_well_2d_native_shooting_matches_high_friction_kramers_within_se() {
     // 2. Shoot antithetic reactive-flux trajectories through `shoot_bennett_chandler`
     // (total flight time 300 * 0.05 = 15.0 >> 1 / lambda_+ ~ 1.65; plateau window [7.5, 15.0]).
     // At gamma = 6.0 and dt = 0.05, the barrier lingering time 1 / lambda_+ ~ 1.65 is 33 steps,
-    // so both unconstrained shooting (commit_checkpoints = 0) and a commitment window that
+    // so both the default unconstrained shooting and an opt-in commitment window that
     // outlasts the barrier lingering time (commit_checkpoints = 64, t = 3.2) reproduce Kramers.
-    for commit in [0_usize, 64] {
-        let shoot_cfg = ShootingConfig::default()
+    for commit in [None, Some(64_usize)] {
+        let mut shoot_cfg = ShootingConfig::default()
             .with_steps(300)
             .with_time_step(0.05)
             .with_antithetic(true)
-            .with_seed(918273)
-            .with_commit_checkpoints(commit);
+            .with_seed(918273);
+        if let Some(window) = commit {
+            shoot_cfg = shoot_cfg.with_kappa(early(window));
+        }
 
         let est = shoot_bennett_chandler(
             &mut engine,
@@ -323,7 +332,7 @@ fn double_well_2d_native_shooting_matches_high_friction_kramers_within_se() {
         assert!(est.standard_error > 0.0 && est.standard_error < 0.05);
         assert!(
             (est.plateau - kramers_exact).abs() <= KRAMERS_SIGMA_BOUND * est.standard_error,
-            "commit = {commit}: estimated kappa = {:.5} +/- {:.5} differs from Kramers {:.5} by {:.2} SE",
+            "commit = {commit:?}: estimated kappa = {:.5} +/- {:.5} differs from Kramers {:.5} by {:.2} SE",
             est.plateau,
             est.standard_error,
             kramers_exact,
@@ -333,7 +342,7 @@ fn double_well_2d_native_shooting_matches_high_friction_kramers_within_se() {
 }
 
 #[test]
-fn double_well_1d_late_return_stays_at_committed_kappa() {
+fn double_well_1d_late_return_stays_at_committed_kappa_when_opted_in() {
     // 1D asymmetric double well with saddle at x = 0 (V(0) = 0, V'(0) = 0):
     // - Product basin (x >= 0): V(x) = 16 x^4 - 8 x^2 (minimum at x = 0.5, outer wall at x = 1 / sqrt(2)).
     //   A forward shot (v_x(0) > 0) enters x > 0 and stays on Side::Product for >= 35 steps,
@@ -386,12 +395,12 @@ fn double_well_1d_late_return_stays_at_committed_kappa() {
         .with_seed(23);
 
     for cfg in [
-        base_cfg.clone(),
-        base_cfg.clone().with_commit_checkpoints(1),
-        base_cfg.clone().with_commit_checkpoints(8),
+        base_cfg.clone().with_kappa(early(1)),
+        base_cfg.clone().with_kappa(early(8)),
         base_cfg
             .clone()
-            .with_kappa(KappaConfig::default().with_commit_checkpoints(16)),
+            .with_kappa(early(DEFAULT_COMMIT_CHECKPOINTS)),
+        base_cfg.clone().with_kappa(early(16)),
     ] {
         let est = shoot_bennett_chandler(&mut engine, &plane, starts.view(), &cfg)
             .expect("1d committed estimate");
@@ -402,20 +411,22 @@ fn double_well_1d_late_return_stays_at_committed_kappa() {
         }
     }
 
-    // With commit_checkpoints = 0, every half runs to step 280 and records the late return.
-    let uncommitted = shoot_bennett_chandler(
-        &mut engine,
-        &plane,
-        starts.view(),
-        &base_cfg.with_commit_checkpoints(0),
-    )
-    .expect("1d uncommitted estimate");
-    assert_abs_diff_eq!(uncommitted.kappa_t[0], 1.0, epsilon = ALGEBRAIC_TOL);
-    assert_abs_diff_eq!(uncommitted.plateau, 0.0, epsilon = ALGEBRAIC_TOL);
+    // By default, and with the window set but early commitment off, every half runs to
+    // step 280 and records the late return. So does an opted-in window of 0.
+    for cfg in [
+        base_cfg.clone(),
+        base_cfg.clone().with_commit_checkpoints(1),
+        base_cfg.clone().with_kappa(early(0)),
+    ] {
+        let uncommitted = shoot_bennett_chandler(&mut engine, &plane, starts.view(), &cfg)
+            .expect("1d uncommitted estimate");
+        assert_abs_diff_eq!(uncommitted.kappa_t[0], 1.0, epsilon = ALGEBRAIC_TOL);
+        assert_abs_diff_eq!(uncommitted.plateau, 0.0, epsilon = ALGEBRAIC_TOL);
+    }
 }
 
 #[test]
-fn double_well_2d_late_return_stays_at_committed_kappa() {
+fn double_well_2d_late_return_stays_at_committed_kappa_when_opted_in() {
     struct AsymmetricDoubleWell2D;
 
     impl rgsaddle::PointSurface for AsymmetricDoubleWell2D {
@@ -460,11 +471,8 @@ fn double_well_2d_late_return_stays_at_committed_kappa() {
         .with_seed(23);
 
     for cfg in [
-        base_cfg.clone(),
-        base_cfg.clone().with_commit_checkpoints(12),
-        base_cfg
-            .clone()
-            .with_kappa(KappaConfig::default().with_commit_checkpoints(24)),
+        base_cfg.clone().with_kappa(early(12)),
+        base_cfg.clone().with_kappa(early(24)),
     ] {
         let est = shoot_bennett_chandler(&mut engine, &plane, starts.view(), &cfg)
             .expect("2d committed estimate");
@@ -475,15 +483,16 @@ fn double_well_2d_late_return_stays_at_committed_kappa() {
         }
     }
 
-    let uncommitted = shoot_bennett_chandler(
-        &mut engine,
-        &plane,
-        starts.view(),
-        &base_cfg.with_commit_checkpoints(0),
-    )
-    .expect("2d uncommitted estimate");
-    assert_abs_diff_eq!(uncommitted.kappa_t[0], 1.0, epsilon = ALGEBRAIC_TOL);
-    assert_abs_diff_eq!(uncommitted.plateau, 0.0, epsilon = ALGEBRAIC_TOL);
+    for cfg in [
+        base_cfg.clone(),
+        base_cfg.clone().with_commit_checkpoints(12),
+        base_cfg.clone().with_kappa(early(0)),
+    ] {
+        let uncommitted = shoot_bennett_chandler(&mut engine, &plane, starts.view(), &cfg)
+            .expect("2d uncommitted estimate");
+        assert_abs_diff_eq!(uncommitted.kappa_t[0], 1.0, epsilon = ALGEBRAIC_TOL);
+        assert_abs_diff_eq!(uncommitted.plateau, 0.0, epsilon = ALGEBRAIC_TOL);
+    }
 }
 
 struct ScriptedCommitEngine {
@@ -638,7 +647,7 @@ fn shooter_half_commitment_stops_early_and_resets_on_surface_or_transient_flip()
         .with_steps(12)
         .with_time_step(0.01)
         .with_antithetic(true)
-        .with_commit_checkpoints(3);
+        .with_kappa(early(3));
 
     let trajs =
         shoot_reactive_trajectories(&mut engine, &plane, starts.view(), &cfg).expect("scripted");
@@ -667,10 +676,17 @@ fn shooter_half_commitment_stops_early_and_resets_on_surface_or_transient_flip()
 
 #[test]
 fn validate_commit_checkpoints_and_config_setters() {
+    let defaults = KappaConfig::default();
+    assert!(!defaults.early_commitment);
+    assert_eq!(defaults.commit_checkpoints, DEFAULT_COMMIT_CHECKPOINTS);
+    assert_eq!(ShootingConfig::default().kappa, defaults);
+
     let kcfg = KappaConfig::default()
+        .with_early_commitment(true)
         .with_commit_checkpoints(7)
         .with_quench_force_tol(1e-4)
         .with_quench_max_steps(500);
+    assert!(kcfg.early_commitment);
     assert_eq!(kcfg.commit_checkpoints, 7);
     assert_eq!(kcfg.quench_force_tol, 1e-4);
     assert_eq!(kcfg.quench_max_steps, 500);
@@ -703,7 +719,7 @@ fn validate_commit_checkpoints_and_config_setters() {
     for bad_commit in [9_usize, 17, usize::MAX] {
         let bad_cfg = ShootingConfig::default()
             .with_steps(8)
-            .with_commit_checkpoints(bad_commit);
+            .with_kappa(early(bad_commit));
         assert_eq!(
             shoot_reactive_trajectories(&mut engine, &plane, starts.view(), &bad_cfg),
             Err(FluxError::InvalidConfig(
@@ -719,13 +735,23 @@ fn validate_commit_checkpoints_and_config_setters() {
         // Validation rejects before touching the engine's constraint or stepping.
         assert_eq!(engine.total_steps, 0);
         assert!(engine.constraint().is_some());
+
+        // The same window is ignored, and not validated, while early commitment is off.
+        let off_cfg = ShootingConfig::default()
+            .with_steps(8)
+            .with_commit_checkpoints(bad_commit);
+        let trajs = shoot_reactive_trajectories(&mut engine, &plane, starts.view(), &off_cfg)
+            .expect("window ignored while early commitment is off");
+        assert_eq!(trajs.len(), 2);
+        assert_eq!(trajs[0].sides.len(), 8);
+        engine.total_steps = 0;
     }
 
     // Boundary values 0, 1, and steps are accepted.
     for valid_commit in [0_usize, 1, 8] {
         let ok_cfg = ShootingConfig::default()
             .with_steps(8)
-            .with_commit_checkpoints(valid_commit);
+            .with_kappa(early(valid_commit));
         let trajs = shoot_reactive_trajectories(&mut engine, &plane, starts.view(), &ok_cfg)
             .expect("valid commit_checkpoints");
         assert_eq!(trajs.len(), 2);
@@ -789,13 +815,15 @@ proptest! {
     }
 
     #[test]
-    fn zero_commit_checkpoints_reproduces_fixed_step_shooting_bit_for_bit(
+    fn default_shooting_reproduces_fixed_step_shooting_bit_for_bit(
         steps in 8_usize..36,
         time_step in 0.005_f64..0.05_f64,
         gamma in 0.0_f64..4.0_f64,
         temperature in 0.05_f64..0.5_f64,
         antithetic in any::<bool>(),
         seed in any::<u64>(),
+        window in 0_usize..64,
+        mode in 0_u8..3,
         y_offsets in prop::collection::vec(-1.0_f64..1.0_f64, 4..8),
     ) {
         struct DoubleWell2D;
@@ -819,7 +847,7 @@ proptest! {
             .with_constraint(plane.clone())
             .with_seed(seed);
 
-        let mut engine_zero = NativeEngine::new(DoubleWell2D, native_cfg.clone()).expect("engine_zero");
+        let mut engine_new = NativeEngine::new(DoubleWell2D, native_cfg.clone()).expect("engine_new");
         let mut engine_old = NativeEngine::new(DoubleWell2D, native_cfg).expect("engine_old");
 
         let mut initial_positions = Array2::zeros((y_offsets.len(), 2));
@@ -835,16 +863,22 @@ proptest! {
             .with_time_step(time_step)
             .with_antithetic(antithetic)
             .with_seed(seed)
-            .with_commit_checkpoints(0)
             .with_estimator(estimator_cfg.clone());
+        // Mode 0 is the plain default, mode 1 sets a window without opting in, and
+        // mode 2 opts in with a window of 0. None of them may change a single bit.
+        let shoot_cfg = match mode {
+            0 => shoot_cfg,
+            1 => shoot_cfg.with_commit_checkpoints(window),
+            _ => shoot_cfg.with_kappa(early(0)),
+        };
 
-        let trajs_zero = shoot_reactive_trajectories(
-            &mut engine_zero,
+        let trajs_new = shoot_reactive_trajectories(
+            &mut engine_new,
             &plane,
             initial_positions.view(),
             &shoot_cfg,
         )
-        .expect("trajs_zero");
+        .expect("trajs_new");
 
         // Reference fixed-step loop matching the pre-commit_checkpoints implementation.
         let saved_constraint = engine_old.constraint().cloned();
@@ -882,24 +916,24 @@ proptest! {
         }
         engine_old.set_constraint(saved_constraint).expect("restore constraint");
 
-        prop_assert_eq!(trajs_zero.len(), trajs_old.len());
-        for (tz, to) in trajs_zero.iter().zip(&trajs_old) {
+        prop_assert_eq!(trajs_new.len(), trajs_old.len());
+        for (tn, to) in trajs_new.iter().zip(&trajs_old) {
             prop_assert_eq!(
-                tz.initial_normal_velocity.to_bits(),
+                tn.initial_normal_velocity.to_bits(),
                 to.initial_normal_velocity.to_bits()
             );
-            prop_assert_eq!(&tz.sides, &to.sides);
+            prop_assert_eq!(&tn.sides, &to.sides);
         }
-        for (pz, po) in engine_zero.positions().iter().zip(engine_old.positions().iter()) {
+        for (pz, po) in engine_new.positions().iter().zip(engine_old.positions().iter()) {
             prop_assert_eq!(pz.to_bits(), po.to_bits());
         }
-        for (vz, vo) in engine_zero.velocities().iter().zip(engine_old.velocities().iter()) {
+        for (vz, vo) in engine_new.velocities().iter().zip(engine_old.velocities().iter()) {
             prop_assert_eq!(vz.to_bits(), vo.to_bits());
         }
 
-        let est_zero = estimate_bennett_chandler(&trajs_zero, &estimator_cfg);
+        let est_new = estimate_bennett_chandler(&trajs_new, &estimator_cfg);
         let est_old = estimate_bennett_chandler(&trajs_old, &estimator_cfg);
-        match (est_zero, est_old) {
+        match (est_new, est_old) {
             (Ok(ez), Ok(eo)) => {
                 prop_assert_eq!(ez.kappa_t.len(), eo.kappa_t.len());
                 for (kz, ko) in ez.kappa_t.iter().zip(&eo.kappa_t) {

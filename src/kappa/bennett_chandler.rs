@@ -16,11 +16,12 @@
 //! [`shoot_bennett_chandler`] generates reactive-flux trajectories generically
 //! over any [`crate::engine::DynamicsEngine`] from configurations on a
 //! [`crate::engine::HyperplaneConstraint`] and passes them to
-//! [`estimate_bennett_chandler`]. Each half-trajectory stops once
-//! [`KappaConfig::commit_checkpoints`] consecutive checkpoints agree on a
-//! committed side (`s < 0` or `s > 0`), copying that side into every remaining
-//! checkpoint of `kappa(t)` so slow returns from a shallow well do not flip a
-//! committed shot (`0` runs every half to [`ShootingConfig::steps`]).
+//! [`estimate_bennett_chandler`]. By default every half-trajectory runs to
+//! [`ShootingConfig::steps`]. With [`KappaConfig::early_commitment`] enabled, a
+//! half stops once [`KappaConfig::commit_checkpoints`] consecutive checkpoints
+//! agree on a committed side (`s < 0` or `s > 0`), copying that side into every
+//! remaining checkpoint of `kappa(t)` so slow returns from a shallow well do not
+//! flip a committed shot.
 //!
 //! ## Example
 //!
@@ -220,7 +221,8 @@ pub struct ShootingConfig {
     ///
     /// Default: [`BennettChandlerConfig::default()`].
     pub estimator: BennettChandlerConfig,
-    /// Basin-commitment configuration (`commit_checkpoints <= steps`; `0` runs every half to `steps`).
+    /// Basin-commitment configuration. Early commitment is off by default; see
+    /// [`KappaConfig::early_commitment`].
     ///
     /// Default: [`KappaConfig::default()`].
     pub kappa: KappaConfig,
@@ -250,6 +252,9 @@ with_setters!(ShootingConfig {
 
 impl ShootingConfig {
     /// Set [`KappaConfig::commit_checkpoints`] on [`Self::kappa`].
+    ///
+    /// This does not enable early commitment; set
+    /// [`KappaConfig::early_commitment`] through [`Self::with_kappa`] as well.
     #[must_use]
     pub fn with_commit_checkpoints(mut self, commit_checkpoints: usize) -> Self {
         self.kappa.commit_checkpoints = commit_checkpoints;
@@ -529,10 +534,12 @@ fn shoot_half<E: DynamicsEngine + ?Sized>(
 /// Shoot reactive-flux trajectories from `initial_positions` on `dividing_surface`
 /// using any [`DynamicsEngine`].
 ///
-/// Each half-trajectory ends once [`KappaConfig::commit_checkpoints`] consecutive
-/// checkpoints agree on a committed side (`s < 0` or `s > 0`), copying that side
-/// into every remaining checkpoint up to [`ShootingConfig::steps`]. Setting
-/// `commit_checkpoints` to `0` runs every half to `steps`.
+/// Every half-trajectory runs to [`ShootingConfig::steps`] unless
+/// [`KappaConfig::early_commitment`] is enabled. With it enabled, a half ends
+/// once [`KappaConfig::commit_checkpoints`] consecutive checkpoints agree on a
+/// committed side (`s < 0` or `s > 0`), copying that side into every remaining
+/// checkpoint up to `steps`. Setting `commit_checkpoints` to `0` runs every half
+/// to `steps`.
 ///
 /// Clears any active hyperplane constraint on `engine` for the free-flight shots
 /// and restores it before returning.
@@ -544,6 +551,7 @@ fn shoot_half<E: DynamicsEngine + ?Sized>(
 ///   differs from `engine.dof()`.
 /// - [`FluxError::InvalidConfig`] when `dividing_surface` is not a unit plane,
 ///   `config.steps < 4`, `config.time_step <= 0` or non-finite, or
+///   `config.kappa.early_commitment` is set and
 ///   `config.kappa.commit_checkpoints > config.steps`.
 /// - [`FluxError::NonFinite`] when `initial_positions` contains non-finite values.
 /// - Any [`FluxError`] propagated by `engine`.
@@ -584,12 +592,16 @@ pub fn shoot_reactive_trajectories<E: DynamicsEngine + ?Sized>(
             "ShootingConfig::time_step must be finite and positive",
         ));
     }
-    let commit_checkpoints = config.kappa.commit_checkpoints;
-    if commit_checkpoints > config.steps {
-        return Err(FluxError::InvalidConfig(
-            "KappaConfig::commit_checkpoints must not exceed ShootingConfig::steps",
-        ));
-    }
+    let commit_checkpoints = if config.kappa.early_commitment {
+        if config.kappa.commit_checkpoints > config.steps {
+            return Err(FluxError::InvalidConfig(
+                "KappaConfig::commit_checkpoints must not exceed ShootingConfig::steps",
+            ));
+        }
+        config.kappa.commit_checkpoints
+    } else {
+        0
+    };
     for row in initial_positions.rows() {
         validate_finite_slice(row, "shoot_reactive_trajectories initial_positions")?;
     }

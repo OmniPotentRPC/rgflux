@@ -60,17 +60,31 @@ pub const DEFAULT_COMMIT_CHECKPOINTS: usize = 4;
 /// Configuration for basin-commitment stopping and surface-quench / first-crossing
 /// transmission workflows.
 ///
-/// [`shoot_reactive_trajectories`] and [`shoot_bennett_chandler`] read
+/// Early basin commitment is off by default, so a default configuration
+/// integrates every half-trajectory to [`ShootingConfig::steps`] exactly as
+/// before. [`shoot_reactive_trajectories`] and [`shoot_bennett_chandler`] read
 /// [`Self::commit_checkpoints`] through [`ShootingConfig::kappa`] (or
-/// [`ShootingConfig::with_commit_checkpoints`]). Steepest-descent endpoint
-/// quenching is not yet implemented, so [`Self::quench_force_tol`] and
+/// [`ShootingConfig::with_commit_checkpoints`]) only when
+/// [`Self::early_commitment`] is `true`. Steepest-descent endpoint quenching is
+/// not yet implemented, so [`Self::quench_force_tol`] and
 /// [`Self::quench_max_steps`] are not read yet.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct KappaConfig {
+    /// Stop each half-trajectory early once [`Self::commit_checkpoints`]
+    /// consecutive checkpoints agree on a committed side, and copy that side
+    /// into every later checkpoint of `kappa(t)`.
+    ///
+    /// When `false`, [`Self::commit_checkpoints`] is ignored and is not
+    /// validated, and every half runs to [`ShootingConfig::steps`].
+    ///
+    /// Default: `false`.
+    pub early_commitment: bool,
     /// Consecutive basin-commitment checkpoints on a committed side (`s < 0` or `s > 0`)
     /// required to stop a half-trajectory and copy that side into every later
-    /// checkpoint of `kappa(t)` (`<= steps`; `0` runs every half to `steps`).
+    /// checkpoint of `kappa(t)`. Read only when [`Self::early_commitment`] is
+    /// `true`, in which case it must not exceed `steps` (`0` runs every half to
+    /// `steps`).
     ///
     /// The window must outlast the time a trajectory lingers at the barrier top:
     /// a shorter window commits trajectories that recross later and raises `kappa`.
@@ -91,6 +105,7 @@ pub struct KappaConfig {
 impl Default for KappaConfig {
     fn default() -> Self {
         Self {
+            early_commitment: false,
             commit_checkpoints: DEFAULT_COMMIT_CHECKPOINTS,
             quench_force_tol: 0.001,
             quench_max_steps: 2_000,
@@ -99,6 +114,7 @@ impl Default for KappaConfig {
 }
 
 with_setters!(KappaConfig {
+    with_early_commitment => early_commitment: val bool,
     with_commit_checkpoints => commit_checkpoints: val usize,
     with_quench_force_tol => quench_force_tol: val f64,
     with_quench_max_steps => quench_max_steps: val usize,
