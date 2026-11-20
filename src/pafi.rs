@@ -84,7 +84,10 @@
 //!    mean force and its standard error on each plane.
 //! 6. The profile, barrier and rate follow from the plane means. The
 //!    standard errors of the planes are independent and propagate through the
-//!    Hermite weights of the barrier and, for the rate, through `Z_R`.
+//!    Hermite weights of the barrier and, for the rate, through `Z_R`. Each
+//!    profile and barrier error combines that sampling contribution, by
+//!    hypot, with the Hermite-minus-trapezoid truncation error, taken on the
+//!    plane nodes for the profile and at `s*` for the barrier.
 //! 7. With `target_error` set, steps 5 and 6 repeat for up to `max_rounds`
 //!    rounds, each adding `sample_steps` fresh samples to every plane, until
 //!    the standard error of the barrier is at most `target_error`. Without
@@ -378,14 +381,22 @@ pub struct FreeEnergyProfile {
     /// Integrated free energy `F(s_k) - F(s_0)` at each plane, so the first
     /// entry is `0`.
     pub free_energy: Vec<f64>,
-    /// Standard error of `free_energy` at each plane, propagated from the
-    /// batch-means errors of the plane forces through the Hermite weights.
-    /// The first entry is `0`.
+    /// Standard error of `free_energy` at each plane. It combines, by hypot,
+    /// the batch-means errors of the plane forces propagated through the
+    /// Hermite weights with the truncation error: the absolute difference
+    /// between the Hermite and trapezoid integrals of the plane means from
+    /// the first plane to this plane, on the plane nodes. The first entry is
+    /// `0`.
     pub standard_error: Vec<f64>,
     /// Free-energy barrier `Delta F = F(s*) - F(s_0)` at the dividing plane,
     /// the global maximum of the interpolated profile.
     pub barrier: f64,
-    /// Standard error of [`Self::barrier`].
+    /// Standard error of [`Self::barrier`]. It combines, by hypot, the
+    /// batch-means errors of the plane forces propagated through the Hermite
+    /// weights of the barrier with the truncation error: the absolute
+    /// difference between the Hermite integral at [`Self::dividing_arc`] and
+    /// the trapezoid integral of the plane means up to that point, a partial
+    /// trapezoid when the point lies between plane nodes.
     pub barrier_error: f64,
     /// Index of the first sampled plane whose free energy is the largest.
     /// [`Self::dividing_arc`] can lie in an interval that does not touch this
