@@ -203,6 +203,7 @@ A reactant located to =reactant_fmax= lies about \(\varepsilon = \text{reactant\
 | =target_error= | =Option<f64>= | =None= | Optional target standard error on \(\Delta F\) (finite, \(\ge 0\)); =None= runs one round |
 | =max_rounds= | =usize= | =4= | Maximum sampling rounds (\(\ge 1\)); later rounds run only while =target_error= is set and not reached, and missing it is not an error |
 | =zero_temperature_tol= | =Option<f64>= | =None= | Dimensionless tolerance for \(\lvert I_T - \Delta E_0\rvert / \max(E_{\mathrm{unit}}, \lvert\Delta E_0\rvert)\), where both energies use engine energy units and \(E_{\mathrm{unit}}\) is one such unit. =None= uses \(2 (\pi^2 / 12) / (\text{planes} - 1)^2\) (\(\approx 0.0257\) at 9 planes). =Some(value)= uses that finite value (\(\ge 0\)) at every plane count, including the 9-plane value; see the scaling note below |
+| =translation_invariance= | =Option<[bool; 3]>= | =None= | Optional declarations for rigid translation invariance along Cartesian \(x,y,z\). =None= probes each axis numerically; =Some= uses the supplied declarations |
 | =seed= | =u64= | =1= | Base of the per-plane seeds =seed + 4099 * plane + 1000003 * round= (wrapping) |
 | =stats= | =StatsConfig= | =StatsConfig::default()= | Batch-means settings for the per-plane force series |
 
