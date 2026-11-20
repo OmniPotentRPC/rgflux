@@ -10,7 +10,7 @@
 | =kappa::bennett_chandler= | Engine-free reactive-flux estimator and =DynamicsEngine= trajectory shooter | Implemented |
 | =kappa= | Kramers analytical barrier-recrossing factor; surface-shooting quench classifiers and first-crossing estimators | =kramers_transmission_coefficient= and =KappaConfig= implemented; the quench and first-crossing drivers are not yet implemented |
 | =hyperplane= | Constrained hyperplane sampling (=sample_hyperplane=) and zero-variance control variates | Mean constraint force and configuration retention implemented; the in-plane virial, torque, and control variates are not yet implemented |
-| =pafi= | Projected Average Force Integration along reaction paths (=PafiConfig=, =FreeEnergyProfile=, =pafi_profile=, =pafi_profile_dyn=) | Implemented: mass-metric spline planes with not-a-knot ends, zero-temperature trapezoid path-force check, burn-in and batch-means sampling per plane, adaptive rounds to a target error, cubic Hermite free-energy profile, global interpolant maximum, projected-frequency reactant partition, barrier, and normalized rate with propagated errors; the engine is restored on return |
+| =pafi= | Projected Average Force Integration along reaction paths (=PafiConfig=, =FreeEnergyProfile=, =IntegralEstimate=, =MeanForceIntegral=, =HermiteIntegral=, =SimpsonIntegral=, =pafi_profile=, =pafi_profile_dyn=) | Implemented: mass-metric spline planes with not-a-knot ends, zero-temperature trapezoid path-force check, burn-in and batch-means sampling per plane, adaptive rounds to a target error, cubic Hermite free-energy profile, global interpolant maximum, doubled-trapezoid reactant partition, projected reactant frequency, barrier, and normalized rate with log-space propagated errors; the engine is restored on return |
 | =ohtst= | OH-TST with a fixed hyperplane normal (=optimize_hyperplane=) | Implemented for a fixed normal with =rgsaddle::flux_mass=; normal optimization is not yet implemented |
 | =ffs= | Forward Flux Sampling across ordered interfaces (=forward_flux_rate=) | Implemented: flux collection, staged trials, and uncertainty propagation. Exit restores positions, velocities, the periodic cell, the thermostat, and the constraint; the stochastic stream is left where the run put it |
 | =network= | Symmetry-resolved rate networks and kinetic Monte Carlo rate tables (=NetworkConfig=, =RateTableConfig=, =RateEdge=, =build_rate_table=) | =RateEdge::new= and configuration types implemented; =build_rate_table= is not yet implemented |
@@ -203,7 +203,7 @@ Constructors and methods: =HyperplaneConstraint::new(normal, offset)=, =from_dir
 
 Here \(I_T\) is the trapezoid integral of \(dV/ds\) over the plane anchors and \(\Delta E_0\) is the endpoint energy change. The ratio is relative to \(\lvert\Delta E_0\rvert\) at or above one engine energy unit and bounds the absolute discrepancy below that scale.
 
-The value stored by =PafiConfig::default()= is the 9-plane value shown in the table. While the field retains that value, the effective tolerance is \(2 (\pi^2 / 12) / (\text{planes} - 1)^2\), so changing =planes= scales the tolerance with the trapezoid error. An explicitly different value is used unchanged. The scaling follows a quarter-turn circular arc through a harmonic well. A path that turns further can need a larger explicit tolerance.
+=PafiConfig::default()= leaves =zero_temperature_tol= set to =None=. While it is =None=, the effective tolerance is \(2 (\pi^2 / 12) / (\text{planes} - 1)^2\), so changing =planes= scales the tolerance with the trapezoid error (\(\approx 0.0257\) at the default 9 planes). Setting an explicit value via =with_zero_temperature_tol(tol)= (or =Some(tol)=) fixes that tolerance unchanged across plane counts; passing =None= restores the automatic scaling. The scaling follows a quarter-turn circular arc through a harmonic well. A path that turns further can need a larger explicit tolerance.
 
 ** =pafi::FreeEnergyProfile=
 
@@ -216,12 +216,12 @@ The value stored by =PafiConfig::default()= is the 9-plane value shown in the ta
 | =barrier_error= | =f64= | Standard error of =barrier=: the same combination at =s*= |
 | =dividing_index= | =usize= | First plane with the highest sampled free energy. The interpolant maximum recorded in =dividing_arc= can lie on a different interval |
 | =dividing_arc= | =f64= | Arc length \(s^*\) of the global maximum of the Hermite interpolant |
-| =reactant_frequency= | =f64= | \(\omega_0 = ( \mathbf{n}^\top \mathbf{H}^{-1} \mathbf{n} )^{-1/2}\) from the mass-weighted Hessian at the first image, in inverse engine time |
-| =reactant_partition= | =f64= | \(Z_R = \sqrt{2\pi k_{\mathrm{B}}T} / \omega_0\), in units of \(s\) |
-| =reactant_log_partition= | =f64= | \(\ln Z_R = \tfrac{1}{2}\ln(2\pi k_{\mathrm{B}}T) - \ln \omega_0\) |
-| =normalized_rate= | =f64= | \(k = (\omega_0 / 2\pi) \exp(-\Delta F / k_{\mathrm{B}}T)\) in inverse engine time |
-| =normalized_log_rate= | =f64= | \(\ln k = \ln \omega_0 - \ln(2\pi) - \Delta F / k_{\mathrm{B}}T\), finite when the exponential in =normalized_rate= underflows |
-| =normalized_rate_error= | =f64= | Delta-method standard error \(k\,\sigma_{\Delta F} / k_{\mathrm{B}}T\). \(Z_R\) is a property of the reactant Hessian, so its sampling sensitivity is zero |
+| =reactant_frequency= | =f64= | \(\omega_0 = ( \mathbf{n}^\top \mathbf{H}^{-1} \mathbf{n} )^{-1/2}\) from the mass-weighted Hessian at the first image, in inverse engine time (positive definiteness off the zero modes is certified by a dense eigensolver when \(\text{dof} \le 128\)) |
+| =reactant_partition= | =Option<f64>= | Linear reactant partition function \(Z_R = \exp(\ln Z_R)\) in units of \(s\), or =None= if \(\exp(\ln Z_R)\) overflows =f64= (=Some(0.0)= on underflow) |
+| =reactant_log_partition= | =f64= | \(\ln Z_R\) from the doubled-trapezoid integral \(Z_R = 2\int_0^{s_{\mathrm{end}}} \exp(-(F(s) - F(s_0)) / k_{\mathrm{B}}T)\,ds\) in log space, where \(s_{\mathrm{end}} = s_k\) when \(s^* = s_k\) and \(s_{\mathrm{end}} = s_{k+1}\) when \(s^*\) is interior to \([s_k, s_{k+1}]\) |
+| =normalized_rate= | =Option<f64>= | Linear transition rate \(k = \exp(\ln k)\) in inverse engine time, or =None= if \(\exp(\ln k)\) overflows =f64= (=Some(0.0)= on underflow) |
+| =normalized_log_rate= | =f64= | \(\ln k = \tfrac{1}{2}\ln(k_{\mathrm{B}}T / 2\pi) - \Delta F / k_{\mathrm{B}}T - \ln Z_R\), finite even when =normalized_rate= underflows or overflows =f64= |
+| =normalized_rate_error= | =Option<f64>= | Delta-method standard error \(\exp(\ln k + \ln \sigma_{\ln k})\) propagating the plane-mean errors through both \(\Delta F / k_{\mathrm{B}}T\) and \(\ln Z_R\) in log space, or =None= if the linear error overflows =f64= (=Some(0.0)= when \(\sigma_{\ln k} = 0\) or the product underflows) |
 | =quadrature_residual= | =f64= | Largest absolute gap between the Hermite integral of \(dV/ds\) and the endpoint energy change. The acceptance check remains the trapezoid comparison in =PafiConfig::zero_temperature_tol= |
 
 ** =network::NetworkConfig= and =RateTableConfig=
@@ -333,7 +333,7 @@ field set is listed above.
 | =NoPositiveFlux= | unit | No reactive-flux trajectory has =initial_normal_velocity > 0= |
 | =NonStationaryPlateau= | =z_score=, =max_z_score=, =drift_slope= | Candidate Bennett-Chandler plateau window exceeds =max_z_score= |
 | =Shape= | =expected=, =got=, =context= | Coordinate, velocity, normal, mass, or trajectory length mismatch |
-| =NonFinite= | =&'static str= | =NaN= or infinite input, energy, force, rate, or intermediate value |
+| =NonFinite= | =&'static str= | =NaN= or infinite input, energy, force, log partition exponent, or intermediate value (whereas finite PAFI log-space partitions and rates whose linear =exp= overflows =f64= succeed with =None= in the linear =Option<f64>= fields) |
 | =InvalidConfig= | =&'static str= | Configuration parameter or physical invariant out of domain |
 | =ConstraintViolation= | =residual=, =tolerance= | Relative hyperplane residual after SHAKE projection exceeds =HYPERPLANE_PROJECTION_TOL= |
 | =SurfaceRejection= | =max_attempts= | =SurfaceVelocityPolicy::RejectRedraw= exhausted =max_attempts= |
