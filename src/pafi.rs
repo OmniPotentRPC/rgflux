@@ -3739,7 +3739,7 @@ mod tests {
 
     use super::*;
     use crate::engine::native::{NativeConfig, NativeEngine};
-    use crate::engine::{DynamicsEngine, ThermostatConfig};
+    use crate::engine::{DynamicsEngine, StepReport, SurfaceVelocityPolicy, ThermostatConfig};
 
     struct Quartic;
 
@@ -5964,5 +5964,258 @@ mod tests {
         let curvature = reactant_curvature(&mut engine, &geometry, None).expect("soft tether");
         assert_abs_diff_eq!(curvature, 16.0 / 13.0, epsilon = 1.0e-6);
         assert!((curvature - 2.0).abs() > 0.4);
+    }
+
+    const RIGID_SHIFT: [f64; 3] = [4.0, -2.5, 0.0];
+
+    struct CurvedPairSampler {
+        positions: Array1<f64>,
+        base: Array1<f64>,
+        velocities: Array1<f64>,
+        masses: Array1<f64>,
+        thermostat: ThermostatConfig,
+        constraint: Option<HyperplaneConstraint>,
+        stiffness: f64,
+        step_calls: usize,
+    }
+
+    impl CurvedPairSampler {
+        fn new(stiffness: f64) -> Self {
+            Self {
+                positions: Array1::zeros(6),
+                base: Array1::zeros(6),
+                velocities: Array1::zeros(6),
+                masses: Array1::ones(6),
+                thermostat: ThermostatConfig::default().with_temperature(1.0),
+                constraint: None,
+                stiffness,
+                step_calls: 0,
+            }
+        }
+    }
+
+    impl DynamicsEngine for CurvedPairSampler {
+        fn dof(&self) -> usize {
+            6
+        }
+
+        fn masses(&self) -> ArrayView1<'_, f64> {
+            self.masses.view()
+        }
+
+        fn positions(&self) -> ArrayView1<'_, f64> {
+            self.positions.view()
+        }
+
+        fn set_positions(&mut self, positions: ArrayView1<'_, f64>) -> Result<(), FluxError> {
+            if positions.len() != 6 {
+                return Err(FluxError::Shape {
+                    expected: 6,
+                    got: positions.len(),
+                    context: "curved pair positions",
+                });
+            }
+            self.base.assign(&positions);
+            self.positions.assign(&positions);
+            Ok(())
+        }
+
+        fn velocities(&self) -> ArrayView1<'_, f64> {
+            self.velocities.view()
+        }
+
+        fn set_velocities(&mut self, velocities: ArrayView1<'_, f64>) -> Result<(), FluxError> {
+            if velocities.len() != 6 {
+                return Err(FluxError::Shape {
+                    expected: 6,
+                    got: velocities.len(),
+                    context: "curved pair velocities",
+                });
+            }
+            self.velocities.assign(&velocities);
+            Ok(())
+        }
+
+        fn cell(&self) -> Option<&[f64; 9]> {
+            None
+        }
+
+        fn set_cell(&mut self, _cell: Option<[f64; 9]>) -> Result<(), FluxError> {
+            Ok(())
+        }
+
+        fn thermostat(&self) -> &ThermostatConfig {
+            &self.thermostat
+        }
+
+        fn set_thermostat(&mut self, thermostat: ThermostatConfig) -> Result<(), FluxError> {
+            self.thermostat = thermostat;
+            Ok(())
+        }
+
+        fn constraint(&self) -> Option<&HyperplaneConstraint> {
+            self.constraint.as_ref()
+        }
+
+        fn set_constraint(
+            &mut self,
+            constraint: Option<HyperplaneConstraint>,
+        ) -> Result<(), FluxError> {
+            self.constraint = constraint;
+            Ok(())
+        }
+
+        fn energy_and_forces(&mut self) -> Result<(f64, Array1<f64>), FluxError> {
+            let mut energy = 0.0;
+            let mut force = Array1::zeros(6);
+            for axis in 0..3 {
+                let extension = self.positions[3 + axis] - self.positions[axis];
+                energy += 0.5 * self.stiffness * extension * extension;
+                force[axis] = self.stiffness * extension;
+                force[3 + axis] = -self.stiffness * extension;
+            }
+            Ok((energy, force))
+        }
+
+        fn step(&mut self, _dt: f64) -> Result<StepReport, FluxError> {
+            self.step_calls += 1;
+            for atom in 0..2 {
+                for (axis, shift) in RIGID_SHIFT.iter().enumerate() {
+                    self.positions[3 * atom + axis] = self.base[3 * atom + axis] + shift;
+                }
+            }
+            Ok(StepReport::new(0.0, 0.0, Some(1.0)))
+        }
+
+        fn reseed(&mut self, _seed: u64) -> Result<(), FluxError> {
+            Ok(())
+        }
+
+        fn shoot_velocities(&mut self, _seed: u64) -> Result<(), FluxError> {
+            Ok(())
+        }
+
+        fn reflect_velocity(&mut self, _normal: ArrayView1<'_, f64>) -> Result<f64, FluxError> {
+            Ok(0.0)
+        }
+
+        fn apply_dividing_surface(
+            &mut self,
+            _normal: ArrayView1<'_, f64>,
+            _policy: SurfaceVelocityPolicy,
+        ) -> Result<f64, FluxError> {
+            Ok(0.0)
+        }
+    }
+
+    fn curved_six_dof_path() -> Array2<f64> {
+        Array2::from_shape_vec(
+            (3, 6),
+            vec![
+                -0.5, 0.0, 0.0, 0.5, 0.0, 0.0, -1.0, 0.15, 0.0, 1.0, 0.15, 0.0, -1.6, 0.0, 0.0,
+                1.6, 0.5, 0.0,
+            ],
+        )
+        .expect("path shape")
+    }
+
+    fn profile_config() -> PafiConfig {
+        PafiConfig::default()
+            .with_planes(3)
+            .with_burn_in_steps(1)
+            .with_sample_steps(2)
+            .with_zero_temperature_tol(100.0)
+            .with_stats(StatsConfig::default().with_min_batches(2))
+    }
+
+    fn assert_sampled_gradients_drop_the_rigid_shift(
+        engine: &mut CurvedPairSampler,
+        path: &Array2<f64>,
+        arcs: &[f64],
+        gradients: &[f64],
+    ) {
+        assert_eq!(engine.dof(), 6);
+        let origin = path.row(0).to_owned();
+        let root_mass = engine.masses().to_owned().mapv(f64::sqrt);
+        let modes = classified_translation_modes(
+            engine,
+            &origin,
+            &root_mass,
+            translation_probe_step(&origin),
+            None,
+        )
+        .expect("translation modes");
+        assert_eq!(modes.len(), 3, "a free pair has three translation modes");
+        let masses = engine.masses().to_owned();
+        let spline =
+            validate_path_and_build_spline(path.view(), masses.view(), arcs.len()).expect("spline");
+        let geometries =
+            build_plane_geometries_at(&spline, masses.view(), arcs).expect("geometries");
+        assert!(
+            geometries
+                .iter()
+                .any(|geometry| nrm2(geometry.dn_ds.view()) > 1.0e-3),
+            "the path has to bend so the Jacobian sees a rigid shift"
+        );
+        let mut saw_gap = false;
+        for (geometry, gradient) in geometries.iter().zip(gradients) {
+            let mut shifted = geometry.anchor.clone();
+            for atom in 0..2 {
+                for (axis, shift) in RIGID_SHIFT.iter().enumerate() {
+                    shifted[3 * atom + axis] += shift;
+                }
+            }
+            engine.set_positions(shifted.view()).expect("shift");
+            let kept = projected_force_sample(engine, geometry, 1.0, &modes).expect("kept");
+            let dropped = projected_force_sample(engine, geometry, 1.0, &[]).expect("dropped");
+            if (kept - dropped).abs() > 0.05 {
+                saw_gap = true;
+            }
+            assert!(
+                (gradient - kept).abs() <= 1.0e-12,
+                "plane gradient {gradient} left the translation in the Jacobian; projected {kept}, raw {dropped}"
+            );
+        }
+        assert!(
+            saw_gap,
+            "dropping the translation modes did not move any plane"
+        );
+    }
+
+    #[test]
+    fn pafi_profile_wires_translation_modes_on_a_curved_pair() {
+        let path = curved_six_dof_path();
+        let mut engine = CurvedPairSampler::new(3.25);
+        let profile = pafi_profile(&mut engine, path.view(), &profile_config()).expect("profile");
+        assert_sampled_gradients_drop_the_rigid_shift(
+            &mut engine,
+            &path,
+            &profile.arc_lengths,
+            profile.gradients(),
+        );
+    }
+
+    #[test]
+    fn pafi_profile_adaptive_wires_translation_modes_on_a_curved_pair() {
+        let path = curved_six_dof_path();
+        let mut engine = CurvedPairSampler::new(3.25);
+        let base = profile_config().with_target_error(0.0).with_max_rounds(2);
+        let config = AdaptivePafiConfig::default()
+            .with_base(base)
+            .with_max_planes(3)
+            .with_max_refinements(1)
+            .with_monitor(MonitorKind::ForceGradient);
+        let adaptive =
+            pafi_profile_adaptive(&mut engine, path.view(), &config).expect("adaptive profile");
+        assert_eq!(
+            engine.step_calls, 18,
+            "three planes must each complete burn-in plus sampling in two statistics rounds"
+        );
+        assert_sampled_gradients_drop_the_rigid_shift(
+            &mut engine,
+            &path,
+            &adaptive.profile.arc_lengths,
+            adaptive.profile.gradients(),
+        );
     }
 }
