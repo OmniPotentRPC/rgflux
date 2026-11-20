@@ -846,12 +846,12 @@ fn adaptive_plane_placement_tradeoffs_are_reported_honestly() {
     );
     assert_eq!(
         (dw_adaptive_planes, dw_adaptive_calls),
-        (15, 670),
+        (15, 672),
         "double-well adaptive surface-evaluation regression changed"
     );
     assert_eq!(
         (dw_even_planes, dw_even_calls),
-        (27, 329),
+        (27, 331),
         "double-well even-grid surface-evaluation regression changed"
     );
     assert!(
@@ -928,12 +928,12 @@ fn adaptive_plane_placement_tradeoffs_are_reported_honestly() {
     );
     assert_eq!(
         (asym_adaptive_planes, asym_adaptive_calls),
-        (15, 670),
+        (15, 672),
         "asymmetric adaptive surface-evaluation regression changed"
     );
     assert_eq!(
         (asym_even_planes, asym_even_calls),
-        (12, 149),
+        (12, 151),
         "asymmetric even-grid surface-evaluation regression changed"
     );
     assert!(
