@@ -41,13 +41,14 @@
 //! curved increment differences.
 //!
 //! Seeds: `PAFI_SEED_OFFSET` shifts every seed by a multiple of a large odd
-//! constant, so a sweep over offsets draws independent suites.
+//! constant, so a sweep over offsets draws distinct reproducible suites.
 //!
 //! Sweeps: [`offset_sweep`] draws a capped quantity at a fixed list of
 //! offsets and [`assert_sweep_within_budget`] requires the empirical failure
 //! rate of each cap to stay within [`ASSERTION_ALPHA`]. The curved, widening,
-//! rate, refinement, end-plane and rgpot caps each have an ignored sweep test
-//! that runs with `cargo test -- --ignored sweep`.
+//! rate, refinement and end-plane caps each have an ignored sweep test that
+//! runs with `cargo test -- --ignored sweep`. The rgpot cap sweep also needs
+//! the `rgpot` feature: `cargo test --features rgpot -- --ignored sweep`.
 
 #![allow(dead_code)]
 
