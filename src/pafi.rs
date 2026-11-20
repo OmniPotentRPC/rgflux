@@ -1221,7 +1221,7 @@ fn integrate_profile(
             "PAFI reactant frequency must be finite and positive",
         ));
     }
-    let reactant_log_partition = 0.5 * (TAU * kbt).ln() - reactant_frequency.ln();
+    let reactant_log_partition = 0.5 * (TAU.ln() + kbt.ln()) - reactant_frequency.ln();
     if !reactant_log_partition.is_finite() {
         return Err(FluxError::NonFinite("PAFI reactant log partition"));
     }
@@ -2104,6 +2104,26 @@ mod tests {
     }
 
     #[test]
+    fn linear_rate_error_handles_extreme_ratios_in_log_space() {
+        let overflowed_ratio = f64::MAX / f64::MIN_POSITIVE;
+        assert!(overflowed_ratio.is_infinite());
+        let overflow_result = linear_rate_error(-740.0, f64::MAX, f64::MIN_POSITIVE)
+            .expect("log-space ratio remains representable");
+        assert!(overflow_result.is_finite() && overflow_result > 0.0);
+
+        let underflowed_ratio = f64::MIN_POSITIVE / f64::MAX;
+        assert_eq!(underflowed_ratio, 0.0);
+        let underflow_result = linear_rate_error(740.0, f64::MIN_POSITIVE, f64::MAX)
+            .expect("log-space ratio remains representable");
+        assert!(underflow_result.is_finite() && underflow_result > 0.0);
+
+        assert_eq!(
+            linear_rate_error(-1000.0, 0.0, f64::MIN_POSITIVE),
+            Some(0.0)
+        );
+    }
+
+    #[test]
     fn linear_rate_error_matches_linear_ratio_in_normal_range() {
         let log_rate = -3.25_f64;
         let barrier_error = 0.75_f64;
@@ -2137,7 +2157,7 @@ mod tests {
         let arcs = [0.0, 1.0, 2.0];
         let gradients = [-1.0, -1.0, -1.0];
         let errors = [0.0, 0.0, 0.0];
-        let curvature = 2.0;
+        let curvature = 2.0_f64;
         let profile = profile_from(&arcs, &gradients, &errors, 1.0, curvature).expect("profile");
         assert_eq!(profile.dividing_index, 0);
         assert_eq!(profile.barrier, 0.0);
@@ -2148,6 +2168,50 @@ mod tests {
             epsilon = f64::EPSILON * partition
         );
         assert!(profile.normalized_log_rate.is_finite());
+    }
+
+    #[test]
+    fn reactant_normalization_accepts_maximum_thermal_energy() {
+        let curvature = 2.0_f64;
+        let profile = profile_from(
+            &[0.0, 1.0, 2.0],
+            &[-1.0, -1.0, -1.0],
+            &[0.0, 0.0, 0.0],
+            f64::MAX,
+            curvature,
+        )
+        .expect("profile at maximum thermal energy");
+        let expected_log_partition = 0.5 * (TAU.ln() + f64::MAX.ln()) - curvature.sqrt().ln();
+        assert_abs_diff_eq!(
+            profile.reactant_log_partition,
+            expected_log_partition,
+            epsilon = f64::EPSILON * expected_log_partition.abs()
+        );
+        assert!(
+            profile
+                .reactant_partition
+                .is_some_and(|partition| partition.is_finite() && partition > 0.0)
+        );
+    }
+
+    #[test]
+    fn reactant_normalization_accepts_subnormal_thermal_energy() {
+        let kbt = f64::from_bits(1);
+        assert!(kbt.is_subnormal());
+        let profile = profile_from(
+            &[0.0, 1.0, 2.0],
+            &[-1.0, -1.0, -1.0],
+            &[0.0, 0.0, 0.0],
+            kbt,
+            2.0,
+        )
+        .expect("profile at subnormal thermal energy");
+        assert!(profile.reactant_log_partition.is_finite());
+        assert!(
+            profile
+                .reactant_partition
+                .is_some_and(|partition| partition.is_finite() && partition > 0.0)
+        );
     }
 
     #[test]
