@@ -29,9 +29,13 @@
 //! - Sprik, M., and Ciccotti, G. (1998). *Free energy from constrained
 //!   molecular dynamics*. The Journal of Chemical Physics, 109, 7737-7744.
 //!   <https://doi.org/10.1063/1.477419>
+//! - Ceriotti, M., Bussi, G., and Parrinello, M. (2010). *Colored-noise
+//!   thermostats à la carte*. Journal of Chemical Theory and Computation, 6,
+//!   1170-1180. <https://doi.org/10.1021/ct900563s>
 //! - Higham, N. J. (2002). *Accuracy and Stability of Numerical Algorithms*
 //!   (2nd ed.). SIAM. <https://doi.org/10.1137/1.9780898718027>
 
+pub mod gle;
 #[cfg(feature = "lammpc")]
 pub mod lammpc;
 pub mod native;
@@ -183,6 +187,11 @@ pub struct ThermostatConfig {
     ///
     /// Default: `1.0`.
     pub boltzmann: f64,
+    /// White-noise Langevin, or the published smart-sampling GLE.
+    ///
+    /// The GLE step ignores `gamma`. On a holonomic constraint it thermostats
+    /// only the tangent momenta. Default: [`gle::ColoredNoise::White`].
+    pub noise: gle::ColoredNoise,
 }
 
 impl Default for ThermostatConfig {
@@ -191,6 +200,7 @@ impl Default for ThermostatConfig {
             gamma: 1.0,
             temperature: 1.0,
             boltzmann: 1.0,
+            noise: gle::ColoredNoise::White,
         }
     }
 }
@@ -199,6 +209,7 @@ with_setters!(ThermostatConfig {
     with_gamma => gamma: val f64,
     with_temperature => temperature: val f64,
     with_boltzmann => boltzmann: val f64,
+    with_noise => noise: val gle::ColoredNoise,
 });
 
 impl ThermostatConfig {
