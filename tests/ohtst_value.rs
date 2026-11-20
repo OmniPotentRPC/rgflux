@@ -116,17 +116,53 @@ fn engine<S: PointSurface + Send + Sync>(
     surface: S,
     temperature: f64,
 ) -> Result<NativeEngine<S>, FluxError> {
+    engine_with_gamma(surface, temperature, 1.0)
+}
+
+fn engine_with_gamma<S: PointSurface + Send + Sync>(
+    surface: S,
+    temperature: f64,
+    gamma: f64,
+) -> Result<NativeEngine<S>, FluxError> {
     NativeEngine::new(
         surface,
         NativeConfig::default()
             .with_masses(Array1::from_vec(vec![1.0]))
             .with_thermostat(
                 ThermostatConfig::default()
-                    .with_gamma(1.0)
+                    .with_gamma(gamma)
                     .with_temperature(temperature),
             )
             .with_seed(SEED),
     )
+}
+
+#[test]
+fn ohtst_refuses_nve_curvature_sampling_on_double_well() -> Result<(), FluxError> {
+    let mut sampler = engine_with_gamma(HarmonicBarrier, THERMAL, 0.0)?;
+    sampler.set_positions(Array1::from_vec(vec![-1.0]).view())?;
+    let positions = sampler.positions().to_owned();
+    let velocities = sampler.velocities().to_owned();
+    let constraint = sampler.constraint().cloned();
+    let thermostat = *sampler.thermostat();
+    let seed = HyperplaneConstraint::from_direction(Array1::from_vec(vec![1.0]).view(), 0.0)?;
+
+    match optimize_hyperplane(&mut sampler, &seed, &OhtstConfig::default()) {
+        Err(FluxError::InvalidConfig(message)) => assert!(
+            message.contains("gamma"),
+            "expected the canonical-sampling error, got {message}"
+        ),
+        Err(other) => panic!("expected InvalidConfig, got {other}"),
+        Ok(estimate) => panic!(
+            "gamma == 0 accepted the OH-TST curvature probe and returned rate {}",
+            estimate.rate
+        ),
+    }
+    assert_eq!(sampler.positions(), positions.view());
+    assert_eq!(sampler.velocities(), velocities.view());
+    assert_eq!(sampler.constraint(), constraint.as_ref());
+    assert_eq!(sampler.thermostat(), &thermostat);
+    Ok(())
 }
 
 #[test]
