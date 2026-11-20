@@ -972,6 +972,8 @@ The generated block is authoritative. Run
 - =rgflux::pafi=
 - =rgflux::pafi::AdaptiveFreeEnergyProfile=
 - =rgflux::pafi::AdaptiveFreeEnergyProfile::equidistribution=
+- =rgflux::pafi::AdaptiveFreeEnergyProfile::final_path_curvatures=
+- =rgflux::pafi::AdaptiveFreeEnergyProfile::final_tau_weighted_variances=
 - =rgflux::pafi::AdaptiveFreeEnergyProfile::force_calls=
 - =rgflux::pafi::AdaptiveFreeEnergyProfile::profile=
 - =rgflux::pafi::AdaptiveFreeEnergyProfile::refinement_rounds=
