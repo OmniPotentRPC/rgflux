@@ -977,8 +977,16 @@ proptest! {
                 prop_assert_eq!(ez.plateau_window, eo.plateau_window);
                 prop_assert_eq!(ez.positive_flux_count, eo.positive_flux_count);
                 prop_assert_eq!(
+                    ez.stationarity.is_stationary,
+                    eo.stationarity.is_stationary
+                );
+                prop_assert_eq!(
                     ez.stationarity.z_score.to_bits(),
                     eo.stationarity.z_score.to_bits()
+                );
+                prop_assert_eq!(
+                    ez.stationarity.max_z_score.to_bits(),
+                    eo.stationarity.max_z_score.to_bits()
                 );
                 prop_assert_eq!(
                     ez.stationarity.drift_slope.to_bits(),
