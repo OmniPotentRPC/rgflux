@@ -1,1 +1,7 @@
-The PAFI rate standard-error cap now bounds only the lower tail of the Hermite barrier estimate, with a one sided normal quantile in place of the two sided one, so the cap meets its stated failure budget. The widening, rate, refinement, end-plane and rgpot standard-error caps each have an opt-in seed sweep with fixed seeds, run with =cargo test -- --ignored sweep=, that requires the observed failure rate to stay within the per-assertion budget.
+The PAFI rate standard-error cap now bounds only the lower tail of the
+Hermite barrier estimate, with a one sided normal quantile in place of the
+two sided one, so the cap meets its stated failure budget. The standard-error
+caps have opt-in fixed-seed sweeps that require the observed failure rate to
+stay within the per-assertion budget. Run
+=cargo test --features rgpot -- --ignored sweep= to execute all six: five
+native sweep tests and one rgpot sweep test.

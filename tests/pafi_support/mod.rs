@@ -47,7 +47,8 @@
 //! offsets and [`assert_sweep_within_budget`] requires the empirical failure
 //! rate of each cap to stay within [`ASSERTION_ALPHA`]. The curved, widening,
 //! rate, refinement, end-plane and rgpot caps each have an ignored sweep test
-//! that runs with `cargo test -- --ignored sweep`.
+//! that runs with `cargo test --features rgpot -- --ignored sweep`. That
+//! command runs all six tests: five native sweeps and one rgpot sweep.
 
 #![allow(dead_code)]
 
