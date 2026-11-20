@@ -205,6 +205,15 @@ Here \(I_T\) is the trapezoid integral of \(dV/ds\) over the plane anchors and \
 
 =None=, the value stored by =PafiConfig::default()=, sets the effective tolerance to \(2 (\pi^2 / 12) / (\text{planes} - 1)^2\). At the default 9 planes that is the \(\approx 0.0257\) in the table, and changing =planes= scales the tolerance with the trapezoid error. =Some(value)= uses =value= at every plane count, including a value equal to the 9-plane tolerance. The scaling follows a quarter-turn circular arc through a harmonic well. A path that turns further can need a larger explicit tolerance.
 
+** =pafi::AdaptivePafiConfig=
+
+| Field | Type | Default | Constraint / Meaning |
+|---+---+---+---|
+| =base= | =PafiConfig= | =PafiConfig::default().with_planes(5)= | Sampling, statistical-error, zero-temperature, and translation-mode settings used on every adaptive plane |
+| =monitor= | =MonitorKind= | =MonitorKind::Combined= | Channel used for monitor equidistribution |
+| =max_planes= | =usize= | =33= | Maximum number of retained planes; must be at least =base.planes= |
+| =max_refinements= | =usize= | =6= | Maximum plane-insertion rounds (\(\ge 1\)) |
+
 ** =pafi::FreeEnergyProfile=
 
 | Field | Type | Meaning |
@@ -216,13 +225,15 @@ Here \(I_T\) is the trapezoid integral of \(dV/ds\) over the plane anchors and \
 | =barrier_error= | =f64= | Standard error of =barrier=: the same combination at =s*= |
 | =dividing_index= | =usize= | First plane with the highest sampled free energy. The interpolant maximum recorded in =dividing_arc= can lie on a different interval |
 | =dividing_arc= | =f64= | Arc length \(s^*\) of the global maximum of the Hermite interpolant |
-| =reactant_frequency= | =f64= | Projected reactant frequency \(\omega_0 = ( \mathbf{n}^\top \mathbf{H}^{-1} \mathbf{n} )^{-1/2}\) from the mass-weighted Hessian \(\mathbf{H}\) and the unit mass-weighted path normal \(\mathbf{n}\) at the first image, in inverse engine time |
-| =reactant_partition= | =Option<f64>= | \(Z_R = \sqrt{2\pi k_{\mathrm{B}}T} / \omega_0\), in units of \(s\). =Some= when its exponential is finite and positive; otherwise =None= |
+| =reactant_frequency= | =f64= | \(\omega_0 = ( \mathbf{n}^\top \mathbf{H}^{-1} \mathbf{n} )^{-1/2}\) from the mass-weighted Hessian at the first image, in inverse engine time (positive definiteness off the zero modes is certified by a dense eigensolver when \(\text{dof} \le 128\)) |
+| =reactant_hessian_certified= | =bool= | =true= when the full reactant Hessian was certified positive definite off the zero modes by the dense eigensolver; =false= above 128 coordinates, where dense certification is skipped while finite forces and positive projected curvature remain required |
+| =reactant_frequency_error= | =f64= | Standard error of \(\omega_0\): zero for a single deterministic reactant Hessian and estimated between replicates by =pool_pafi_replicates= |
+| =reactant_partition= | =Option<f64>= | Gaussian reactant normalization \(Z_R = \sqrt{2\pi k_{\mathrm{B}}T} / \omega_0\), in units of \(s\). =Some= when its exponential is finite and positive; otherwise =None= |
 | =reactant_log_partition= | =f64= | \(\ln Z_R = \tfrac{1}{2}\ln(2\pi k_{\mathrm{B}}T) - \ln \omega_0\) |
 | =normalized_rate= | =Option<f64>= | \(k = (\omega_0 / 2\pi) \exp(-\Delta F / k_{\mathrm{B}}T)\) in inverse engine time. =Some= when its exponential is finite and positive; otherwise =None= |
 | =normalized_log_rate= | =f64= | \(\ln k = \ln \omega_0 - \ln(2\pi) - \Delta F / k_{\mathrm{B}}T\), including when the linear rate underflows |
-| =normalized_rate_error= | =Option<f64>= | Delta-method standard error \(k\,\sigma_{\Delta F} / k_{\mathrm{B}}T\), i.e. =exp(normalized_log_rate + ln(sigma))= with \(\sigma =\) =barrier_error= \(/ k_{\mathrm{B}}T\). =Some(0.0)= when \(\sigma = 0\). Otherwise =Some= when that exponential is finite and positive. =None= when \(\sigma \neq 0\) and it overflows, underflows, or is not finite. \(Z_R\) is a property of the reactant Hessian, so its sampling sensitivity is zero |
-| =quadrature_residual= | =f64= | Largest absolute gap, over the sampled planes, between the Hermite integral of \(dV/ds\) and the energy change from the first plane, in engine energy units. The acceptance check remains the trapezoid comparison in =PafiConfig::zero_temperature_tol= |
+| =normalized_rate_error= | =Option<f64>= | Delta-method standard error \(k\,\sigma_{\Delta F} / k_{\mathrm{B}}T\), propagating the pooled plane-mean uncertainty through the barrier. The separately reported =reactant_frequency_error= is not included. =Some(0.0)= when \(\sigma_{\Delta F}=0\); otherwise =Some= when the exponential is finite and positive and =None= when it overflows, underflows, or is not finite |
+| =quadrature_residual= | =f64= | Largest absolute gap between the Hermite integral of \(dV/ds\) and the endpoint energy change. The acceptance check remains the trapezoid comparison in =PafiConfig::zero_temperature_tol= |
 
 ** =network::NetworkConfig= and =RateTableConfig=
 
@@ -256,11 +267,14 @@ Here \(I_T\) is the trapezoid integral of \(dV/ds\) over the plane anchors and \
 | =hyperplane::HyperplaneSample= | =plane=, =mean_force=, =standard_error=, =configurations= | Output of =hyperplane::sample_hyperplane(engine, plane, config)= |
 | =ohtst::OhtstEstimate= | =plane=, =rate=, =standard_error= | Output of =ohtst::optimize_hyperplane(engine, seed_plane, config)= |
 | =ffs::FfsEstimate= | =initial_flux=, =interface_probabilities=, =rate=, =standard_error= | Output of =ffs::forward_flux_rate(engine, order_param, config)= |
-| =pafi::FreeEnergyProfile= | =arc_lengths=, =free_energy=, =standard_error=, =barrier=, =barrier_error=, =dividing_index=, =dividing_arc=, =reactant_frequency=, =reactant_partition=, =reactant_log_partition=, =normalized_rate=, =normalized_log_rate=, =normalized_rate_error=, =quadrature_residual= | Output of =pafi::pafi_profile(engine, path_images, config)= and =pafi::pafi_profile_dyn(engine, path_images, config)=; see the field table in the configuration section |
+| =pafi::FreeEnergyProfile= | =arc_lengths=, =free_energy=, =standard_error=, =barrier=, =barrier_error=, =dividing_index=, =dividing_arc=, =reactant_frequency=, =reactant_hessian_certified=, =reactant_frequency_error=, =reactant_partition=, =reactant_log_partition=, =normalized_rate=, =normalized_log_rate=, =normalized_rate_error=, =quadrature_residual= | Output of =pafi::pafi_profile(engine, path_images, config)= and =pafi::pafi_profile_dyn(engine, path_images, config)=; see the field table in the configuration section |
 | =pafi::IntegralEstimate= | =values=, =error= | Cumulative mean-force integral from the first node, with the per-node truncation taken from the integration rule; the first entry of each is 0 |
 | =pafi::MeanForceIntegral= | =cumulative(&self, arcs, gradients) -> Result<IntegralEstimate, FluxError>= | Trait for rules that integrate plane mean forces along strictly increasing arc lengths and report their own truncation |
 | =pafi::HermiteIntegral= | Unit struct implementing =MeanForceIntegral= | Cubic Hermite integral of the mean force, the quadrature used by the profile, with truncation taken as the absolute difference from the trapezoid rule |
 | =pafi::SimpsonIntegral= | Unit struct implementing =MeanForceIntegral= | Composite Simpson integral of the mean force on unequally spaced planes, with truncation taken as the absolute difference from the trapezoid rule |
+| =pafi::EquidistributionMap= | =new(arc_lengths, raw_monitor)=, =from_inputs(inputs, kind)=, =sigma(s)=, =inverse(sigma)=, =place_planes(planes)=, =floor()=, =min_spacing_bound(planes)= | Monotone reparametrization \(s \mapsto \sigma(s) \in [0, 1]\) with path-average floor \(\bar{w}\) preventing plane collapse |
+| =pafi::SpectralTailReport= | =force_coefficients=, =profile_coefficients=, =tail_indicator=, =interval_errors=, =flagged_intervals= | Output of =pafi::estimate_spectral_tail(arc_lengths, gradients, target_se)= |
+| =pafi::AdaptiveFreeEnergyProfile= | =profile=, =tail=, =equidistribution=, =final_path_curvatures=, =final_tau_weighted_variances=, =refinement_rounds=, =force_calls= | Output of =pafi::pafi_profile_adaptive(engine, path_images, config)= and =pafi::pafi_profile_adaptive_dyn(engine, path_images, config)= |
 | =network::RateEdge= | =from=, =to=, =rate= (=RateEdge::new(from, to, rate)=) | Directed elementary transition edge in =network::build_rate_table= |
 
 ** Estimator and sampling entry points
@@ -277,6 +291,7 @@ Here \(I_T\) is the trapezoid integral of \(dV/ds\) over the plane anchors and \
 | =pafi::pafi_profile_dyn= | Mutable =dyn DynamicsEngine=, path image matrix, and =PafiConfig= | Trait-object form of =pafi_profile= with identical estimator and restoration semantics |
 | =pafi::HermiteIntegral::cumulative= | Plane arc lengths and plane mean forces of equal length | =IntegralEstimate= from the cubic Hermite rule; errors on mismatched lengths, fewer than 2 planes, non-finite forces, or arc lengths that do not strictly increase |
 | =pafi::SimpsonIntegral::cumulative= | Plane arc lengths and plane mean forces of equal length | =IntegralEstimate= from the composite Simpson rule; errors on mismatched lengths, unless the plane count is odd and at least 3, and on non-finite forces or arc lengths that do not strictly increase |
+| =pafi::size_window_from_tau_int= | =tau_int=, minimum burn-in and sample lengths, and =StatsConfig= | Sizes per-plane burn-in and sample steps from measured \(\tau_{\mathrm{int}}\) and =StatsConfig::min_batches= |
 | =kappa::estimate_bennett_chandler= | Recorded =ReactiveTrajectory= slice and =BennettChandlerConfig= | =BennettChandlerEstimate=; reactive-flux equation in =howto.org= |
 | =kappa::shoot_reactive_trajectories= | Mutable engine, dividing surface, initial positions, and =ShootingConfig= | Validated trajectory records used by the Bennett-Chandler estimator |
 | =kappa::shoot_bennett_chandler= | Mutable engine, dividing surface, initial positions, and =ShootingConfig= | Shoots trajectories and returns =BennettChandlerEstimate=; runnable guide in =howto.org= |
@@ -942,6 +957,33 @@ The generated block is authoritative. Run
 *** =pafi=
 
 - =rgflux::pafi=
+- =rgflux::pafi::AdaptiveFreeEnergyProfile=
+- =rgflux::pafi::AdaptiveFreeEnergyProfile::equidistribution=
+- =rgflux::pafi::AdaptiveFreeEnergyProfile::force_calls=
+- =rgflux::pafi::AdaptiveFreeEnergyProfile::profile=
+- =rgflux::pafi::AdaptiveFreeEnergyProfile::refinement_rounds=
+- =rgflux::pafi::AdaptiveFreeEnergyProfile::tail=
+- =rgflux::pafi::AdaptivePafiConfig=
+- =rgflux::pafi::AdaptivePafiConfig::base=
+- =rgflux::pafi::AdaptivePafiConfig::default=
+- =rgflux::pafi::AdaptivePafiConfig::max_planes=
+- =rgflux::pafi::AdaptivePafiConfig::max_refinements=
+- =rgflux::pafi::AdaptivePafiConfig::monitor=
+- =rgflux::pafi::AdaptivePafiConfig::with_base=
+- =rgflux::pafi::AdaptivePafiConfig::with_max_planes=
+- =rgflux::pafi::AdaptivePafiConfig::with_max_refinements=
+- =rgflux::pafi::AdaptivePafiConfig::with_monitor=
+- =rgflux::pafi::EquidistributionMap=
+- =rgflux::pafi::EquidistributionMap::floor=
+- =rgflux::pafi::EquidistributionMap::from_inputs=
+- =rgflux::pafi::EquidistributionMap::inverse=
+- =rgflux::pafi::EquidistributionMap::knot_sigmas=
+- =rgflux::pafi::EquidistributionMap::knots=
+- =rgflux::pafi::EquidistributionMap::min_spacing_bound=
+- =rgflux::pafi::EquidistributionMap::monitor_values=
+- =rgflux::pafi::EquidistributionMap::new=
+- =rgflux::pafi::EquidistributionMap::place_planes=
+- =rgflux::pafi::EquidistributionMap::sigma=
 - =rgflux::pafi::FreeEnergyProfile=
 - =rgflux::pafi::FreeEnergyProfile::arc_lengths=
 - =rgflux::pafi::FreeEnergyProfile::barrier=
@@ -949,11 +991,15 @@ The generated block is authoritative. Run
 - =rgflux::pafi::FreeEnergyProfile::dividing_arc=
 - =rgflux::pafi::FreeEnergyProfile::dividing_index=
 - =rgflux::pafi::FreeEnergyProfile::free_energy=
+- =rgflux::pafi::FreeEnergyProfile::gradient_errors=
+- =rgflux::pafi::FreeEnergyProfile::gradients=
 - =rgflux::pafi::FreeEnergyProfile::normalized_log_rate=
 - =rgflux::pafi::FreeEnergyProfile::normalized_rate=
 - =rgflux::pafi::FreeEnergyProfile::normalized_rate_error=
 - =rgflux::pafi::FreeEnergyProfile::quadrature_residual=
 - =rgflux::pafi::FreeEnergyProfile::reactant_frequency=
+- =rgflux::pafi::FreeEnergyProfile::reactant_frequency_error=
+- =rgflux::pafi::FreeEnergyProfile::reactant_hessian_certified=
 - =rgflux::pafi::FreeEnergyProfile::reactant_log_partition=
 - =rgflux::pafi::FreeEnergyProfile::reactant_partition=
 - =rgflux::pafi::FreeEnergyProfile::standard_error=
@@ -964,6 +1010,21 @@ The generated block is authoritative. Run
 - =rgflux::pafi::IntegralEstimate::values=
 - =rgflux::pafi::MeanForceIntegral=
 - =rgflux::pafi::MeanForceIntegral::cumulative=
+- =rgflux::pafi::MonitorInputs=
+- =rgflux::pafi::MonitorInputs::arc_lengths=
+- =rgflux::pafi::MonitorInputs::evaluate=
+- =rgflux::pafi::MonitorInputs::force_gradients=
+- =rgflux::pafi::MonitorInputs::new=
+- =rgflux::pafi::MonitorInputs::path_curvatures=
+- =rgflux::pafi::MonitorInputs::tau_weighted_variances=
+- =rgflux::pafi::MonitorInputs::with_force_gradients=
+- =rgflux::pafi::MonitorInputs::with_path_curvatures=
+- =rgflux::pafi::MonitorInputs::with_tau_weighted_variances=
+- =rgflux::pafi::MonitorKind=
+- =rgflux::pafi::MonitorKind::AutocorrelatedVariance=
+- =rgflux::pafi::MonitorKind::Combined=
+- =rgflux::pafi::MonitorKind::ForceGradient=
+- =rgflux::pafi::MonitorKind::PathCurvature=
 - =rgflux::pafi::PafiConfig=
 - =rgflux::pafi::PafiConfig::burn_in_steps=
 - =rgflux::pafi::PafiConfig::default=
@@ -986,8 +1047,20 @@ The generated block is authoritative. Run
 - =rgflux::pafi::PafiConfig::zero_temperature_tol=
 - =rgflux::pafi::SimpsonIntegral=
 - =rgflux::pafi::SimpsonIntegral::cumulative=
+- =rgflux::pafi::SpectralTailReport=
+- =rgflux::pafi::SpectralTailReport::flagged_intervals=
+- =rgflux::pafi::SpectralTailReport::force_coefficients=
+- =rgflux::pafi::SpectralTailReport::interval_errors=
+- =rgflux::pafi::SpectralTailReport::profile_coefficients=
+- =rgflux::pafi::SpectralTailReport::tail_indicator=
+- =rgflux::pafi::estimate_spectral_tail=
+- =rgflux::pafi::estimate_spectral_tail_with_errors=
 - =rgflux::pafi::pafi_profile=
+- =rgflux::pafi::pafi_profile_adaptive=
+- =rgflux::pafi::pafi_profile_adaptive_dyn=
 - =rgflux::pafi::pafi_profile_dyn=
+- =rgflux::pafi::pool_pafi_replicates=
+- =rgflux::pafi::size_window_from_tau_int=
 
 *** =stats=
 
