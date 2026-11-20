@@ -161,7 +161,11 @@ With two planes the derivative correction cancels and the rule is the trapezoid 
 k = \frac{\omega_0}{2\pi}\exp\!\left(-\frac{\Delta F}{k_{\mathrm{B}}T}\right), \qquad Z_R = \frac{\sqrt{2\pi k_{\mathrm{B}}T}}{\omega_0},
 \]
 
-which is Vineyard harmonic transition-state theory when the path is the unstable mode and the transverse entropy is already in \(\Delta F\). \(\ln Z_R\) and \(\ln k\) are stored as well, so a large barrier does not underflow the reported log rate.
+\(\ln Z_R\) and \(\ln k\) are stored as well, so a large barrier does not underflow the reported log rate.
+
+What \(k\) is: the transition-state rate of the one-dimensional reduction along the path, with the dividing plane at the maximum of the profile and the reactant partition function replaced by its Gaussian value \(Z_R\). It assumes a canonical reactant population, no recrossing (transmission coefficient 1), and a reactant well that is harmonic along the path normal over the thermal range. In the harmonic limit it is Vineyard harmonic transition-state theory, with the transverse entropy already in \(\Delta F\).
+
+What \(k\) is not: it is not the exact transition-state rate, because the Gaussian \(Z_R\) differs from the integral over an anharmonic reactant well, and it is not a dynamical rate, because recrossing is not estimated. On the widening double well, \(k\) is about 4% above the rate with the integrated \(Z_R\) at \(k_{\mathrm{B}}T = 0.2\) and about 8% above it at \(k_{\mathrm{B}}T = 0.35\); the integration tests check that gap. \(\Delta F\) does not rest on the Gaussian assumption: it is the Hermite integral of the sampled plane means and approaches \(F(s^\ddagger) - F(s_0)\) of the plane foliation as sampling and plane spacing are refined.
 
 ** What =pafi_profile= does
 

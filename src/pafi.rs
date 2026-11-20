@@ -48,9 +48,27 @@
 //!
 //! `Z_R` and `k` are also returned as [`FreeEnergyProfile::reactant_log_partition`]
 //! and [`FreeEnergyProfile::normalized_log_rate`], so a large barrier does not
-//! underflow the reported logarithm. In the harmonic limit this is the
-//! Vineyard rate: the transverse entropy sits in `Delta F`, and `omega_0` is
-//! the curvature of the potential along the path.
+//! underflow the reported logarithm.
+//!
+//! What `k` is. It is the transition-state rate of the one-dimensional
+//! reduction along the path, `sqrt(k_B T / 2 pi) exp(-Delta F / k_B T)` over
+//! the reactant partition function, with the dividing plane at the maximum
+//! of the profile and `Z_R` replaced by its Gaussian value. It assumes a
+//! canonical reactant population, no recrossing (transmission coefficient
+//! `1`), and a reactant well that is harmonic along the path normal over the
+//! thermal range. In the harmonic limit it is the Vineyard rate: the
+//! transverse entropy sits in `Delta F`, and `omega_0` is the curvature of
+//! the potential along the path normal.
+//!
+//! What `k` is not. It is not the exact transition-state rate, because the
+//! Gaussian `Z_R` differs from the integral over an anharmonic reactant
+//! well. On the widening well of the example below, `k` lies about 4% above
+//! the rate with the integrated `Z_R` at `k_B T = 0.2` and about 8% above it
+//! at `k_B T = 0.35`. It is not a dynamical rate either: recrossing, which
+//! lowers the rate, is not estimated here. `Delta F` is not subject to the
+//! Gaussian assumption; it is the Hermite integral of the sampled plane
+//! means and approaches `F(s*) - F(s_0)` of the path foliation as the
+//! sampling and the plane spacing are refined.
 //!
 //! ## What the code does
 //!
@@ -399,6 +417,11 @@ pub struct FreeEnergyProfile {
     /// Normalized PAFI rate
     /// `k = sqrt(k_B T / (2 pi)) * exp(-Delta F / k_B T) / Z_R
     ///    = (omega_0 / 2 pi) * exp(-Delta F / k_B T)`.
+    ///
+    /// This is a one-dimensional transition-state rate with a Gaussian
+    /// reactant partition function and no recrossing correction. It is not
+    /// the exact transition-state rate when the reactant well is
+    /// anharmonic, and it is not a dynamical rate.
     ///
     /// `Some` when [`Self::normalized_log_rate`] has a finite positive
     /// exponential. `None` when that finite log overflows or underflows.
