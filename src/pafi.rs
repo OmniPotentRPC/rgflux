@@ -778,6 +778,10 @@ fn reactant_zero_mode_floor() -> f64 {
 /// `faer` feature is off. Dense certification is skipped above this limit.
 const REACTANT_HESSIAN_EIGEN_LIMIT: usize = 128;
 
+/// Halvings that bring a bracket in `[0, 1]` below `f64` resolution at any
+/// root that matters, and the cap when the root sits near zero.
+const BISECTION_LIMIT: usize = 200;
+
 /// Cubic Hermite quadrature of the plane mean forces.
 ///
 /// Each interval uses the cubic Hermite interpolant of `g = dF/ds`. The
@@ -1006,9 +1010,11 @@ impl Quadrature {
     /// Each segment is the integral of a cubic Hermite interpolant of the mean
     /// force, so its derivative is the cubic `a u^3 + b u^2 + c u + d`. The
     /// maximum on that segment is the larger of the endpoint values and the
-    /// values at the real roots inside the segment. A vanishing leading
-    /// coefficient leaves a quadratic, including the `a == 0` and `b == 0`
-    /// degeneracies. The highest sampled plane is recorded separately,
+    /// values at the real roots inside the segment. Those roots come from
+    /// [`cubic_unit_interval_roots`], which brackets them between the
+    /// critical points of the cubic, so a leading coefficient of any
+    /// magnitude, including `a == 0`, is handled by the same path. The highest
+    /// sampled plane is recorded separately,
     /// because an overshoot can put `s*` on an interval that does not touch
     /// that plane.
     fn dividing_plane(&self, gradients: &[f64], free_energy: &[f64]) -> DividingPlane {
@@ -1067,13 +1073,10 @@ impl Quadrature {
         let b = (g1 - g0).mul_add(3.0, -h * s0.mul_add(2.0, s1));
         let c = h * s0;
         let d = g0;
-        let (nroots, roots) = cubic_real_roots(a, b, c, d);
+        let (nroots, roots) = cubic_unit_interval_roots(a, b, c, d);
         let mut best_u = 0.0_f64;
         let mut best_value = self.interpolated_value(k, 0.0, gradients, slopes, free_energy);
         let mut consider = |u: f64| {
-            let Some(u) = root_in_unit_interval(u) else {
-                return;
-            };
             let value = self.interpolated_value(k, u, gradients, slopes, free_energy);
             if !value.is_finite() {
                 return;
@@ -1089,18 +1092,6 @@ impl Quadrature {
         consider(1.0);
         (best_u, best_value)
     }
-}
-
-/// Clamp a root that landed just outside `[0, 1]` from rounding.
-fn root_in_unit_interval(u: f64) -> Option<f64> {
-    if !u.is_finite() {
-        return None;
-    }
-    let pad = 64.0 * f64::EPSILON;
-    if !(-pad..=1.0 + pad).contains(&u) {
-        return None;
-    }
-    Some(u.clamp(0.0, 1.0))
 }
 
 /// Real roots of `a x^2 + b x + c = 0`.
@@ -1164,106 +1155,111 @@ fn quadratic_real_roots(a: f64, b: f64, c: f64) -> (usize, [f64; 2]) {
     (count, roots)
 }
 
-/// Real roots of `a x^3 + b x^2 + c x + d = 0`.
+/// Real roots in `[0, 1]` of `a x^3 + b x^2 + c x + d = 0`, in ascending order.
 ///
-/// A leading coefficient that is zero, or too small to change the polynomial
-/// on `[0, 1]` by more than a rounding of the remaining terms, is solved by
-/// [`quadratic_real_roots`]. Three real roots use the trigonometric form.
-/// One real root uses Cardano's formula with the product identity
-/// `u v = -p / 3`, which avoids cancellation in the sum of the two cube
-/// roots. Each accepted root is polished by two Newton steps.
-fn cubic_real_roots(a: f64, b: f64, c: f64, d: f64) -> (usize, [f64; 3]) {
+/// The critical points of the cubic are the roots of its derivative, a
+/// quadratic that [`quadratic_real_roots`] solves without cancellation. The
+/// critical points inside `(0, 1)` cut the interval into at most three pieces
+/// on which the cubic is monotone, so each piece holds at most one root and a
+/// change of sign locates it by bisection. Nothing is divided by the leading
+/// coefficient and no cube root is taken, so a leading coefficient that is
+/// zero, tiny, or comparable to the others needs no separate case. The
+/// coefficients are first divided by the largest magnitude, which leaves the
+/// roots unchanged and keeps the derivative quadratic in range. A root that
+/// is an endpoint, or a critical point where the cubic is exactly zero, is
+/// reported once. A double root is a critical point where the cubic does not
+/// change sign and is not a maximum of its antiderivative, so a touch without
+/// a crossing is not reported.
+fn cubic_unit_interval_roots(a: f64, b: f64, c: f64, d: f64) -> (usize, [f64; 3]) {
     let mut roots = [0.0; 3];
     if !a.is_finite() || !b.is_finite() || !c.is_finite() || !d.is_finite() {
         return (0, roots);
     }
-    let rest = b.abs() + c.abs() + d.abs();
-    if a == 0.0 || a.abs() <= rest * f64::EPSILON {
-        let (count, quadratic) = quadratic_real_roots(b, c, d);
-        roots[..count].copy_from_slice(&quadratic[..count]);
-        return (count, roots);
-    }
-    let monic_b = b / a;
-    let monic_c = c / a;
-    let monic_d = d / a;
-    if !monic_b.is_finite() || !monic_c.is_finite() || !monic_d.is_finite() {
-        let (count, quadratic) = quadratic_real_roots(b, c, d);
-        roots[..count].copy_from_slice(&quadratic[..count]);
-        return (count, roots);
-    }
-    let shift = monic_b / 3.0;
-    let p = monic_c - monic_b * shift;
-    let q = monic_d + shift * (2.0 * shift * shift - monic_c);
-    let p_over_3 = p / 3.0;
-    let half_q = 0.5 * q;
-    let discriminant = half_q * half_q + p_over_3 * p_over_3 * p_over_3;
-    if !p.is_finite() || !q.is_finite() || !discriminant.is_finite() {
+    let scale = a.abs().max(b.abs()).max(c.abs()).max(d.abs());
+    if scale == 0.0 {
         return (0, roots);
     }
+    let (a, b, c, d) = (a / scale, b / scale, c / scale, d / scale);
+    let value = |x: f64| a.mul_add(x, b).mul_add(x, c).mul_add(x, d);
+
+    let (turning_count, turning) = quadratic_real_roots(3.0 * a, 2.0 * b, c);
+    let mut breaks = [0.0_f64; 4];
+    let mut break_count = 1usize;
+    let mut inner = [0.0_f64; 2];
+    let mut inner_count = 0usize;
+    for &point in turning.iter().take(turning_count) {
+        if point > 0.0 && point < 1.0 {
+            inner[inner_count] = point;
+            inner_count += 1;
+        }
+    }
+    inner[..inner_count].sort_by(f64::total_cmp);
+    for &point in inner.iter().take(inner_count) {
+        breaks[break_count] = point;
+        break_count += 1;
+    }
+    breaks[break_count] = 1.0;
+    break_count += 1;
+
     let mut count = 0usize;
-    let mut push = |y: f64| {
-        let x = polish_cubic_root(a, b, c, d, y - shift);
-        if x.is_finite() {
+    let mut push = |x: f64| {
+        if count < roots.len() && (count == 0 || roots[count - 1] != x) {
             roots[count] = x;
             count += 1;
         }
     };
-    if discriminant > 0.0 {
-        let sqrt_discriminant = discriminant.sqrt();
-        let mut u = (-half_q + sqrt_discriminant).cbrt();
-        let mut v = (-half_q - sqrt_discriminant).cbrt();
-        let product = -p_over_3;
-        if u.abs() >= v.abs() {
-            if u != 0.0 {
-                v = product / u;
-            }
-        } else if v != 0.0 {
-            u = product / v;
+    let mut previous_value = value(breaks[0]);
+    if previous_value == 0.0 {
+        push(breaks[0]);
+    }
+    for piece in breaks[..break_count].windows(2) {
+        let (low, high) = (piece[0], piece[1]);
+        let high_value = value(high);
+        if high_value == 0.0 {
+            push(high);
+        } else if previous_value != 0.0
+            && !previous_value.is_nan()
+            && !high_value.is_nan()
+            && (previous_value < 0.0) != (high_value < 0.0)
+        {
+            push(bisect_sign_change(&value, low, high, previous_value < 0.0));
         }
-        push(u + v);
-    } else if discriminant == 0.0 {
-        let u = (-half_q).cbrt();
-        push(2.0 * u);
-        push(-u);
-    } else {
-        let radius = (-p_over_3).sqrt();
-        if !radius.is_finite() || radius == 0.0 {
-            push(0.0);
-        } else {
-            let cosine = (-half_q / (radius * radius * radius)).clamp(-1.0, 1.0);
-            let angle = cosine.acos();
-            let diameter = 2.0 * radius;
-            for k in 0..3 {
-                let y = diameter * (angle / 3.0 - TAU * f64::from(k) / 3.0).cos();
-                push(y);
-            }
-        }
+        previous_value = high_value;
     }
     (count, roots)
 }
 
-/// Two Newton steps from a closed-form seed. A step that leaves the
-/// neighbourhood of the seed is rejected, so a poor seed stays put.
-fn polish_cubic_root(a: f64, b: f64, c: f64, d: f64, mut x: f64) -> f64 {
-    if !x.is_finite() {
-        return x;
+/// Root of `value` in `[low, high]` where it is negative at `low` exactly when
+/// `low_negative`, and has the opposite sign at `high`.
+///
+/// The bracket halves until its ends are adjacent floats. The end with the
+/// smaller residual is returned.
+fn bisect_sign_change(
+    value: &impl Fn(f64) -> f64,
+    mut low: f64,
+    mut high: f64,
+    low_negative: bool,
+) -> f64 {
+    for _ in 0..BISECTION_LIMIT {
+        let middle = low + 0.5 * (high - low);
+        if middle <= low || middle >= high {
+            break;
+        }
+        let at_middle = value(middle);
+        if at_middle == 0.0 {
+            return middle;
+        }
+        if (at_middle < 0.0) == low_negative {
+            low = middle;
+        } else {
+            high = middle;
+        }
     }
-    for _ in 0..2 {
-        let slope = (3.0 * a).mul_add(x, 2.0 * b).mul_add(x, c);
-        if !slope.is_finite() || slope == 0.0 {
-            break;
-        }
-        let value = a.mul_add(x, b).mul_add(x, c).mul_add(x, d);
-        if !value.is_finite() {
-            break;
-        }
-        let step = value / slope;
-        if !step.is_finite() || step.abs() > 1.0 {
-            break;
-        }
-        x -= step;
+    if value(low).abs() <= value(high).abs() {
+        low
+    } else {
+        high
     }
-    x
 }
 
 /// Cumulative integral of a mean force, with the truncation the rule itself
@@ -2730,23 +2726,23 @@ mod tests {
         assert_abs_diff_eq!(roots[0], 0.2, epsilon = 1.0e-12);
         assert_abs_diff_eq!(roots[1], 0.8, epsilon = 1.0e-12);
 
-        let (count, mut roots) = cubic_real_roots(0.0, 1.0, -1.0, 0.16);
+        let (count, mut roots) = cubic_unit_interval_roots(0.0, 1.0, -1.0, 0.16);
         assert_eq!(count, 2);
         roots[..count].sort_by(f64::total_cmp);
         assert_abs_diff_eq!(roots[0], 0.2, epsilon = 1.0e-12);
         assert_abs_diff_eq!(roots[1], 0.8, epsilon = 1.0e-12);
 
-        let (count, roots) = cubic_real_roots(0.0, 0.0, 2.0, -0.5);
+        let (count, roots) = cubic_unit_interval_roots(0.0, 0.0, 2.0, -0.5);
         assert_eq!(count, 1);
         assert_abs_diff_eq!(roots[0], 0.25, epsilon = 1.0e-15);
 
-        let (count, _) = cubic_real_roots(0.0, 0.0, 0.0, 4.0);
+        let (count, _) = cubic_unit_interval_roots(0.0, 0.0, 0.0, 4.0);
         assert_eq!(count, 0);
 
         let left = 0.2_f64;
         let middle = 0.5_f64;
         let right = 0.8_f64;
-        let (count, mut roots) = cubic_real_roots(
+        let (count, mut roots) = cubic_unit_interval_roots(
             1.0,
             -(left + middle + right),
             left * middle + left * right + middle * right,
@@ -2757,6 +2753,87 @@ mod tests {
         assert_abs_diff_eq!(roots[0], left, epsilon = 1.0e-12);
         assert_abs_diff_eq!(roots[1], middle, epsilon = 1.0e-12);
         assert_abs_diff_eq!(roots[2], right, epsilon = 1.0e-12);
+    }
+
+    /// Roots near `0.8` and `0.2` of `a s^3 - s^2 + s - 0.16`, and the value
+    /// of its antiderivative `a s^4 / 4 - s^3 / 3 + s^2 / 2 - 0.16 s` at the
+    /// larger root, for each leading coefficient `a`. They come from Newton's
+    /// method in 80-digit decimal arithmetic.
+    const NEAR_QUADRATIC_REFERENCE: [(f64, f64, f64, f64); 8] = [
+        (0.0, 8e-1, 2e-1, 2.133_333_333_333_333_3e-2),
+        (1e-16, 8e-1, 2e-1, 2.133_333_333_333_334_3e-2),
+        (
+            1e-15,
+            8.000_000_000_000_008e-1,
+            1.999_999_999_999_999_8e-1,
+            2.133_333_333_333_343_7e-2,
+        ),
+        (
+            1e-12,
+            8.000_000_000_008_534e-1,
+            1.999_999_999_999_866_6e-1,
+            2.133_333_333_343_573_3e-2,
+        ),
+        (
+            1e-10,
+            8.000_000_000_853_333e-1,
+            1.999_999_999_986_666_6e-1,
+            2.133_333_334_357_333_2e-2,
+        ),
+        (
+            1e-8,
+            8.000_000_085_333_335e-1,
+            1.999_999_998_666_666_7e-1,
+            2.133_333_435_733_335_6e-2,
+        ),
+        (
+            1e-6,
+            8.000_008_533_348_504e-1,
+            1.999_999_866_666_696_3e-1,
+            2.133_343_573_355_178_7e-2,
+        ),
+        (
+            1e-3,
+            8.008_548_538_312_802e-1,
+            1.999_866_696_287_278_8e-1,
+            2.143_595_227_978_177_2e-2,
+        ),
+    ];
+
+    #[test]
+    fn cubic_roots_match_a_high_precision_reference_for_a_vanishing_cubic_term() {
+        let root_tolerance = 64.0 * f64::EPSILON;
+        for (a, upper, lower, _) in NEAR_QUADRATIC_REFERENCE {
+            let (count, roots) = cubic_unit_interval_roots(a, -1.0, 1.0, -0.16);
+            let mut inside: Vec<f64> = roots[..count]
+                .iter()
+                .copied()
+                .filter(|root| (0.0..=1.0).contains(root))
+                .collect();
+            inside.sort_by(f64::total_cmp);
+            assert_eq!(inside.len(), 2, "a = {a:e}: roots {inside:?}");
+            assert_abs_diff_eq!(inside[0], lower, epsilon = root_tolerance);
+            assert_abs_diff_eq!(inside[1], upper, epsilon = root_tolerance);
+        }
+    }
+
+    #[test]
+    fn dividing_plane_matches_a_high_precision_reference_for_a_vanishing_cubic_term() {
+        // The mean force `a s^3 - s^2 + s - 0.16` on four planes is a cubic that
+        // the Hermite rule integrates exactly, so the barrier is its
+        // antiderivative at the larger root.
+        let arcs = [0.0, 1.0, 2.0, 3.0];
+        for (a, upper, _, barrier) in NEAR_QUADRATIC_REFERENCE {
+            let gradients: Vec<f64> = arcs
+                .iter()
+                .map(|s| a * s * s * s - s * s + s - 0.16)
+                .collect();
+            let quadrature = Quadrature::new(&arcs).expect("quadrature");
+            let free_energy = quadrature.integrate(&gradients);
+            let plane = quadrature.dividing_plane(&gradients, &free_energy);
+            assert_abs_diff_eq!(plane.arc, upper, epsilon = 1.0e-12);
+            assert_abs_diff_eq!(plane.free_energy, barrier, epsilon = 1.0e-12);
+        }
     }
 
     #[test]
