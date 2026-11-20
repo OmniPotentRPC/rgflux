@@ -16,7 +16,12 @@
 //! [`shoot_bennett_chandler`] generates reactive-flux trajectories generically
 //! over any [`crate::engine::DynamicsEngine`] from configurations on a
 //! [`crate::engine::HyperplaneConstraint`] and passes them to
-//! [`estimate_bennett_chandler`].
+//! [`estimate_bennett_chandler`]. Each half-trajectory stops once
+//! [`KappaConfig::commit_checkpoints`] consecutive checkpoints lie at least
+//! [`KappaConfig::commitment_distance`] into the same side, copying that side
+//! into every remaining checkpoint of `kappa(t)`. This optimization is disabled
+//! by default because a dividing-surface distance alone cannot prove that a
+//! trajectory will not return.
 //!
 //! ## Example
 //!
@@ -60,6 +65,7 @@ use rgmin::vecops::dot;
 
 use crate::engine::{DynamicsEngine, HyperplaneConstraint, validate_finite_slice};
 use crate::error::FluxError;
+pub use crate::kappa::{DEFAULT_COMMIT_CHECKPOINTS, KappaConfig};
 use crate::stats::{
     MIN_STATIONARITY_SAMPLES, SERIES_FLAT_TOL, StationarityReport, StatsConfig, batch_means,
     check_stationarity,
@@ -100,6 +106,20 @@ impl Side {
             Self::Product
         } else {
             Self::Reactant
+        }
+    }
+
+    /// Classify a signed reaction coordinate `s = n · x - c` into a committed side
+    /// (`s < 0` is `Some(Self::Reactant)`, `s > 0` is `Some(Self::Product)`, and
+    /// `s == 0` on the dividing surface is `None`).
+    #[must_use]
+    pub fn committed_from_signed_distance(signed_distance: f64) -> Option<Self> {
+        if signed_distance < 0.0 {
+            Some(Self::Reactant)
+        } else if signed_distance > 0.0 {
+            Some(Self::Product)
+        } else {
+            None
         }
     }
 
@@ -201,6 +221,11 @@ pub struct ShootingConfig {
     ///
     /// Default: [`BennettChandlerConfig::default()`].
     pub estimator: BennettChandlerConfig,
+    /// Basin-commitment configuration (`commit_checkpoints <= steps`; `0`
+    /// disables early commitment).
+    ///
+    /// Default: [`KappaConfig::default()`].
+    pub kappa: KappaConfig,
 }
 
 impl Default for ShootingConfig {
@@ -211,6 +236,7 @@ impl Default for ShootingConfig {
             antithetic: true,
             seed: 1,
             estimator: BennettChandlerConfig::default(),
+            kappa: KappaConfig::default(),
         }
     }
 }
@@ -221,7 +247,20 @@ with_setters!(ShootingConfig {
     with_antithetic => antithetic: val bool,
     with_seed => seed: val u64,
     with_estimator => estimator: val BennettChandlerConfig,
+    with_kappa => kappa: val KappaConfig,
 });
+
+impl ShootingConfig {
+    /// Set [`KappaConfig::commit_checkpoints`] on [`Self::kappa`].
+    ///
+    /// A nonzero value opts into early commitment and also requires a finite,
+    /// positive [`KappaConfig::commitment_distance`].
+    #[must_use]
+    pub fn with_commit_checkpoints(mut self, commit_checkpoints: usize) -> Self {
+        self.kappa.commit_checkpoints = commit_checkpoints;
+        self
+    }
+}
 
 /// Output of [`estimate_bennett_chandler`] and [`shoot_bennett_chandler`].
 #[derive(Clone, Debug, PartialEq)]
@@ -464,11 +503,68 @@ fn restore_constraint_and_fail<E: DynamicsEngine + ?Sized>(
     err
 }
 
+fn shoot_half<E: DynamicsEngine + ?Sized>(
+    engine: &mut E,
+    dividing_surface: &HyperplaneConstraint,
+    steps: usize,
+    time_step: f64,
+    commit_checkpoints: usize,
+    commitment_distance: f64,
+) -> Result<Vec<Side>, FluxError> {
+    let mut sides = Vec::with_capacity(steps);
+    let mut run: (Option<Side>, usize) = (None, 0);
+    for _ in 0..steps {
+        engine.step(time_step)?;
+        let s = dividing_surface.signed_distance(engine.positions())?;
+        let side = Side::from_signed_distance(s);
+        sides.push(side);
+        let state = if s <= -commitment_distance {
+            Some(Side::Reactant)
+        } else if s >= commitment_distance {
+            Some(Side::Product)
+        } else {
+            None
+        };
+        run = match (state, run.0) {
+            (Some(curr), Some(prev)) if curr == prev => (state, run.1 + 1),
+            (Some(_), _) => (state, 1),
+            (None, _) => (None, 0),
+        };
+        if commit_checkpoints > 0 && run.1 >= commit_checkpoints {
+            sides.resize(steps, side);
+            break;
+        }
+    }
+    Ok(sides)
+}
+
 /// Shoot reactive-flux trajectories from `initial_positions` on `dividing_surface`
 /// using any [`DynamicsEngine`].
 ///
+/// Early commitment is disabled by default. When explicitly enabled, each
+/// half-trajectory ends once [`KappaConfig::commit_checkpoints`] consecutive
+/// checkpoints are at least [`KappaConfig::commitment_distance`] into the same
+/// side, copying that side into every remaining checkpoint up to
+/// [`ShootingConfig::steps`].
+///
+/// This optimization is safe only when the distance identifies a thermalized
+/// basin and the checkpoint window exceeds its relevant recrossing time. It can
+/// otherwise hide a later return and bias the transmission coefficient.
+///
 /// Clears any active hyperplane constraint on `engine` for the free-flight shots
 /// and restores it before returning.
+///
+/// # Errors
+///
+/// - [`FluxError::EmptyInput`] when `initial_positions` has zero rows.
+/// - [`FluxError::Shape`] when `initial_positions.ncols()` or `dividing_surface.normal.len()`
+///   differs from `engine.dof()`.
+/// - [`FluxError::InvalidConfig`] when `dividing_surface` is not a unit plane,
+///   `config.steps < 4`, `config.time_step <= 0` or non-finite, or
+///   `config.kappa.commit_checkpoints > config.steps`, or early commitment is
+///   enabled without a finite, positive `config.kappa.commitment_distance`.
+/// - [`FluxError::NonFinite`] when `initial_positions` contains non-finite values.
+/// - Any [`FluxError`] propagated by `engine`.
 pub fn shoot_reactive_trajectories<E: DynamicsEngine + ?Sized>(
     engine: &mut E,
     dividing_surface: &HyperplaneConstraint,
@@ -506,6 +602,26 @@ pub fn shoot_reactive_trajectories<E: DynamicsEngine + ?Sized>(
             "ShootingConfig::time_step must be finite and positive",
         ));
     }
+    let commit_checkpoints = config.kappa.commit_checkpoints;
+    if commit_checkpoints > config.steps {
+        return Err(FluxError::InvalidConfig(
+            "KappaConfig::commit_checkpoints must not exceed ShootingConfig::steps",
+        ));
+    }
+    let commitment_distance = config.kappa.commitment_distance;
+    if !commitment_distance.is_finite() {
+        return Err(FluxError::NonFinite("KappaConfig::commitment_distance"));
+    }
+    if commit_checkpoints > 0 && commitment_distance <= 0.0 {
+        return Err(FluxError::InvalidConfig(
+            "KappaConfig::commitment_distance must be strictly positive when early commitment is enabled",
+        ));
+    }
+    if commit_checkpoints == 0 && commitment_distance < 0.0 {
+        return Err(FluxError::InvalidConfig(
+            "KappaConfig::commitment_distance must be non-negative",
+        ));
+    }
     for row in initial_positions.rows() {
         validate_finite_slice(row, "shoot_reactive_trajectories initial_positions")?;
     }
@@ -534,17 +650,17 @@ pub fn shoot_reactive_trajectories<E: DynamicsEngine + ?Sized>(
         let v_plus = engine.velocities().to_owned();
         let v0_normal = dot(dividing_surface.normal.view(), v_plus.view());
 
-        let mut sides_plus = Vec::with_capacity(config.steps);
-        for _ in 0..config.steps {
-            if let Err(e) = engine.step(config.time_step) {
-                return Err(restore_constraint_and_fail(engine, saved_constraint, e));
-            }
-            let s = match dividing_surface.signed_distance(engine.positions()) {
-                Ok(val) => val,
-                Err(e) => return Err(restore_constraint_and_fail(engine, saved_constraint, e)),
-            };
-            sides_plus.push(Side::from_signed_distance(s));
-        }
+        let sides_plus = match shoot_half(
+            engine,
+            dividing_surface,
+            config.steps,
+            config.time_step,
+            commit_checkpoints,
+            commitment_distance,
+        ) {
+            Ok(sides) => sides,
+            Err(e) => return Err(restore_constraint_and_fail(engine, saved_constraint, e)),
+        };
         match ReactiveTrajectory::new(v0_normal, sides_plus) {
             Ok(t) => trajectories.push(t),
             Err(e) => return Err(restore_constraint_and_fail(engine, saved_constraint, e)),
@@ -563,17 +679,17 @@ pub fn shoot_reactive_trajectories<E: DynamicsEngine + ?Sized>(
                 return Err(restore_constraint_and_fail(engine, saved_constraint, e));
             }
 
-            let mut sides_minus = Vec::with_capacity(config.steps);
-            for _ in 0..config.steps {
-                if let Err(e) = engine.step(config.time_step) {
-                    return Err(restore_constraint_and_fail(engine, saved_constraint, e));
-                }
-                let s = match dividing_surface.signed_distance(engine.positions()) {
-                    Ok(val) => val,
-                    Err(e) => return Err(restore_constraint_and_fail(engine, saved_constraint, e)),
-                };
-                sides_minus.push(Side::from_signed_distance(s));
-            }
+            let sides_minus = match shoot_half(
+                engine,
+                dividing_surface,
+                config.steps,
+                config.time_step,
+                commit_checkpoints,
+                commitment_distance,
+            ) {
+                Ok(sides) => sides,
+                Err(e) => return Err(restore_constraint_and_fail(engine, saved_constraint, e)),
+            };
             match ReactiveTrajectory::new(-v0_normal, sides_minus) {
                 Ok(t) => trajectories.push(t),
                 Err(e) => return Err(restore_constraint_and_fail(engine, saved_constraint, e)),

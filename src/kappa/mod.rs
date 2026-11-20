@@ -54,22 +54,51 @@ pub use bennett_chandler::{
 
 use crate::error::FluxError;
 
-/// Configuration for surface-quench and first-crossing transmission workflows.
+/// Default consecutive basin-commitment checkpoints in [`KappaConfig`].
 ///
-/// Those workflows are not yet implemented, so no estimator reads this
-/// configuration yet.
+/// A value of zero disables early commitment so default shooting always runs
+/// every half-trajectory for the configured number of steps.
+pub const DEFAULT_COMMIT_CHECKPOINTS: usize = 0;
+
+/// Configuration for basin-commitment stopping and surface-quench / first-crossing
+/// transmission workflows.
+///
+/// [`shoot_reactive_trajectories`] and [`shoot_bennett_chandler`] read
+/// [`Self::commit_checkpoints`] through [`ShootingConfig::kappa`] (or
+/// [`ShootingConfig::with_commit_checkpoints`]). Steepest-descent endpoint
+/// quenching is not yet implemented, so [`Self::quench_force_tol`] and
+/// [`Self::quench_max_steps`] are not read yet.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct KappaConfig {
-    /// Consecutive basin-commitment checkpoints required to stop a half-trajectory.
+    /// Consecutive basin-commitment checkpoints required to stop a
+    /// half-trajectory and copy that side into every later checkpoint of
+    /// `kappa(t)` (`<= steps`; `0` disables early commitment).
     ///
-    /// Default: `4`.
+    /// When enabled, the window must outlast the longest relevant basin
+    /// recrossing time. A shorter window can commit a trajectory that returns
+    /// later and bias `kappa`.
+    ///
+    /// Default: [`DEFAULT_COMMIT_CHECKPOINTS`] (`0`).
     pub commit_checkpoints: usize,
-    /// Steepest-descent force tolerance when assigning end states by quenching.
+    /// Minimum absolute signed distance from the dividing surface at which a
+    /// checkpoint counts as committed.
+    ///
+    /// With early commitment enabled, product commitment requires
+    /// `s >= commitment_distance` and reactant commitment requires
+    /// `s <= -commitment_distance`. Checkpoints inside that interval reset the
+    /// consecutive run. The value must be finite and strictly positive when
+    /// [`Self::commit_checkpoints`] is nonzero.
+    ///
+    /// No universal distance is physically safe, so the disabled default is
+    /// `0.0`; callers must select a basin-specific value to opt in.
+    pub commitment_distance: f64,
+    /// Steepest-descent force tolerance when assigning end states by quenching
+    /// (not yet implemented).
     ///
     /// Default: `0.001`.
     pub quench_force_tol: f64,
-    /// Maximum quench steps per trajectory endpoint.
+    /// Maximum quench steps per trajectory endpoint (not yet implemented).
     ///
     /// Default: `2_000`.
     pub quench_max_steps: usize,
@@ -78,7 +107,8 @@ pub struct KappaConfig {
 impl Default for KappaConfig {
     fn default() -> Self {
         Self {
-            commit_checkpoints: 4,
+            commit_checkpoints: DEFAULT_COMMIT_CHECKPOINTS,
+            commitment_distance: 0.0,
             quench_force_tol: 0.001,
             quench_max_steps: 2_000,
         }
@@ -87,6 +117,7 @@ impl Default for KappaConfig {
 
 with_setters!(KappaConfig {
     with_commit_checkpoints => commit_checkpoints: val usize,
+    with_commitment_distance => commitment_distance: val f64,
     with_quench_force_tol => quench_force_tol: val f64,
     with_quench_max_steps => quench_max_steps: val usize,
 });
