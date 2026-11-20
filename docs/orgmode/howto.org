@@ -371,7 +371,9 @@ use ndarray::{Array1, ArrayView1};
 use rgflux::engine::native::{NativeConfig, NativeEngine};
 use rgflux::engine::{HyperplaneConstraint, ThermostatConfig};
 use rgflux::hyperplane::{HyperplaneConfig, sample_hyperplane};
-use rgflux::kappa::bennett_chandler::{ShootingConfig, shoot_bennett_chandler};
+use rgflux::kappa::bennett_chandler::{
+    KappaConfig, ShootingConfig, shoot_bennett_chandler,
+};
 use rgflux::kappa::kramers_transmission_coefficient;
 
 struct SeparableDoubleWell2D;
@@ -418,6 +420,11 @@ fn main() -> Result<(), rgflux::FluxError> {
         .with_steps(120)
         .with_time_step(0.05)
         .with_antithetic(true)
+        .with_kappa(
+            KappaConfig::default()
+                .with_commit_checkpoints(64)
+                .with_commitment_distance(0.25),
+        )
         .with_seed(99);
     let bc = shoot_bennett_chandler(
         &mut engine,
@@ -431,6 +438,8 @@ fn main() -> Result<(), rgflux::FluxError> {
     Ok(())
 }
 #+end_src
+
+The default integrates every half to =steps=. This example opts into early commitment only after specifying both parts of the criterion: =commit_checkpoints = 64= requires 64 consecutive steps (\(64 \times 0.05 = 3.2 > 1 / \lambda_+ \approx 1.65\)), while =commitment_distance = 0.25= requires every counted point to lie at least 0.25 length units from the dividing surface on the same side. Choose the distance inside a physically characterized basin and the window beyond its recrossing time. If either condition is uncertain, keep the default fixed-length shooting: even a long, deep excursion can return, and early commitment would hide that return.
 
 * Wrap an =rgmin= objective with =EindirSurface=
 

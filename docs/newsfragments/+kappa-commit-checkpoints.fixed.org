@@ -1,0 +1,1 @@
+=kappa::bennett_chandler::shoot_reactive_trajectories= and =shoot_bennett_chandler= support opt-in early commitment through =ShootingConfig::kappa=. Fixed-length shooting remains the default. Enabling the optimization requires an explicit positive checkpoint count and signed-distance threshold; invalid criteria return a typed configuration error.

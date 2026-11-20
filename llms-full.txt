@@ -514,7 +514,9 @@ use ndarray::{Array1, ArrayView1};
 use rgflux::engine::native::{NativeConfig, NativeEngine};
 use rgflux::engine::{HyperplaneConstraint, ThermostatConfig};
 use rgflux::hyperplane::{HyperplaneConfig, sample_hyperplane};
-use rgflux::kappa::bennett_chandler::{ShootingConfig, shoot_bennett_chandler};
+use rgflux::kappa::bennett_chandler::{
+    KappaConfig, ShootingConfig, shoot_bennett_chandler,
+};
 use rgflux::kappa::kramers_transmission_coefficient;
 
 struct SeparableDoubleWell2D;
@@ -561,6 +563,11 @@ fn main() -> Result<(), rgflux::FluxError> {
         .with_steps(120)
         .with_time_step(0.05)
         .with_antithetic(true)
+        .with_kappa(
+            KappaConfig::default()
+                .with_commit_checkpoints(64)
+                .with_commitment_distance(0.25),
+        )
         .with_seed(99);
     let bc = shoot_bennett_chandler(
         &mut engine,
@@ -574,6 +581,8 @@ fn main() -> Result<(), rgflux::FluxError> {
     Ok(())
 }
 ```
+
+The default integrates every half to `steps`. This example opts into early commitment only after specifying both parts of the criterion: `commit_checkpoints = 64` requires 64 consecutive steps (\(64 \times 0.05 = 3.2 > 1 / \lambda_+ \approx 1.65\)), while `commitment_distance = 0.25` requires every counted point to lie at least 0.25 length units from the dividing surface on the same side. Choose the distance inside a physically characterized basin and the window beyond its recrossing time. If either condition is uncertain, keep the default fixed-length shooting: even a long, deep excursion can return, and early commitment would hide that return.
 
 ## Wrap an `rgmin` objective with `EindirSurface`
 
@@ -612,8 +621,8 @@ fn main() -> Result<(), rgflux::FluxError> {
 |---+---+---|
 | `engine` | `DynamicsEngine` trait, `ForceSurface`, `EindirSurface`, `HyperplaneConstraint`, `ThermostatConfig`, `SurfaceVelocityPolicy`, `StepReport`, `native` BAOAB/RATTLE backend, optional direct `lammpc` backend, `rgpot` static PES wrapper, and `rgpot-session` MD session skeleton (`openmm`, `nblib`, `lammps`) | Implemented (`native`, `lammpc`, `rgpot`) and `rgpot-session` skeleton |
 | `stats` | Batch means, effective sample size `n_eff`, and stationarity diagnostics | Implemented; spline-propagated profile covariance helpers are not yet implemented |
-| `kappa::bennett_chandler` | Engine-free reactive-flux estimator and `DynamicsEngine` trajectory shooter | Implemented |
-| `kappa` | Kramers analytical barrier-recrossing factor; surface-shooting quench classifiers and first-crossing estimators | `kramers_transmission_coefficient` and `KappaConfig` implemented; the quench and first-crossing drivers are not yet implemented |
+| `kappa::bennett_chandler` | Engine-free reactive-flux estimator and `DynamicsEngine` trajectory shooter | Implemented (including opt-in `KappaConfig::commit_checkpoints` early-commitment stopping) |
+| `kappa` | Kramers analytical barrier-recrossing factor and Bennett-Chandler surface shooting | `kramers_transmission_coefficient` and the trajectory shooter are implemented; fixed-length shooting is the default, while opt-in early commitment requires consecutive samples beyond an explicit signed-distance threshold |
 | `hyperplane` | Constrained hyperplane sampling (`sample_hyperplane`) and zero-variance control variates | Mean constraint force and configuration retention implemented; the in-plane virial, torque, and control variates are not yet implemented |
 | `pafi` | Projected Average Force Integration along reaction paths (`PafiConfig`, `FreeEnergyProfile`, `pafi_profile`, `pafi_profile_dyn`) | Implemented: mass-metric spline planes with not-a-knot ends, zero-temperature trapezoid path-force check, burn-in and batch-means sampling per plane, adaptive rounds to a target error, cubic Hermite free-energy profile, global interpolant maximum, projected-frequency reactant partition, barrier, and normalized rate with propagated errors; the engine is restored on return |
 | `ohtst` | OH-TST with a fixed hyperplane normal (`optimize_hyperplane`) | Implemented for a fixed normal with `rgsaddle::flux_mass`; normal optimization is not yet implemented |
@@ -732,9 +741,10 @@ Constructors and methods: `HyperplaneConstraint::new(normal, offset)`, `from_dir
 
 | Field | Type | Default | Constraint / Meaning |
 |---+---+---+---|
-| `commit_checkpoints` | `usize` | `4` | Consecutive basin-commitment checkpoints required to stop a half-trajectory |
-| `quench_force_tol` | `f64` | `0.001` | Steepest-descent force tolerance when assigning end states by quenching |
-| `quench_max_steps` | `usize` | `2_000` | Maximum quench steps per trajectory endpoint |
+| `commit_checkpoints` | `usize` | `0` (`DEFAULT_COMMIT_CHECKPOINTS`) | Consecutive basin-commitment checkpoints required to stop a half-trajectory and copy that side into later checkpoints (\(\le \text{steps}\)); `0` disables early commitment |
+| `commitment_distance` | `f64` | `0.0` | Minimum \(\lvert s\rvert\) for a committed checkpoint; must be finite and \(> 0\) when `commit_checkpoints > 0` |
+| `quench_force_tol` | `f64` | `0.001` | Reserved force tolerance for endpoint-quench classifiers; the Bennett-Chandler shooter commits from consecutive signed-side checkpoints and does not read this field |
+| `quench_max_steps` | `usize` | `2_000` | Reserved step limit for endpoint-quench classifiers; the Bennett-Chandler shooter commits from consecutive signed-side checkpoints and does not read this field |
 
 ### `kappa::bennett_chandler::BennettChandlerConfig` and `ShootingConfig`
 
@@ -748,6 +758,7 @@ Constructors and methods: `HyperplaneConstraint::new(normal, offset)`, `from_dir
 | `ShootingConfig` | `antithetic` | `bool` | `true` | Shoot antithetic \((+\mathbf{v}, -\mathbf{v})\) pairs from each configuration |
 | `ShootingConfig` | `seed` | `u64` | `1` | Deterministic base PRNG seed |
 | `ShootingConfig` | `estimator` | `BennettChandlerConfig` | `BennettChandlerConfig::default()` | Plateau estimator configuration |
+| `ShootingConfig` | `kappa` | `KappaConfig` | `KappaConfig::default()` | Opt-in basin-commitment configuration; defaults to fixed-length shooting |
 
 ### `hyperplane::HyperplaneConfig`
 
@@ -856,7 +867,9 @@ Here \(I_T\) is the trapezoid integral of \(dV/ds\) over the plane anchors and \
 | `stats::BatchEstimate` | `mean`, `standard_error`, `variance`, `batch_count`, `batch_size`, `n_samples`, `n_eff`, `tau_int` | Output of `stats::batch_means(samples, config)` |
 | `stats::StationarityReport` | `is_stationary`, `z_score`, `max_z_score`, `drift_slope`, `first_mean`, `second_mean` | Output of `stats::check_stationarity(samples, config)` |
 | `stats::effective_sample_size` | `(samples) -> Result<f64, FluxError>` | Geyer initial-monotone-sequence effective sample size \(n_{\mathrm{eff}}\) |
+| `kappa::DEFAULT_COMMIT_CHECKPOINTS` | `0` | Default checkpoint count; zero disables early commitment |
 | `kappa::kramers_transmission_coefficient` | `(gamma, barrier_frequency) -> Result<f64, FluxError>` | Kramers spatial-diffusion factor \(\kappa_{\mathrm{K}} = \sqrt{1 + \alpha^2} - \alpha\) |
+| `kappa::bennett_chandler::Side::committed_from_signed_distance` | `(signed_distance) -> Option<Side>` | Classifies \(s < 0\) as `Some(Side::Reactant)`, \(s > 0\) as `Some(Side::Product)`, and \(s = 0\) on the dividing plane as `None` |
 | `kappa::bennett_chandler::BennettChandlerEstimate` | `kappa_t`, `plateau`, `standard_error`, `n_eff`, `plateau_window`, `stationarity`, `positive_flux_count` | Output of `estimate_bennett_chandler` and `shoot_bennett_chandler` |
 | `hyperplane::HyperplaneSample` | `plane`, `mean_force`, `standard_error`, `configurations` | Output of `hyperplane::sample_hyperplane(engine, plane, config)` |
 | `ohtst::OhtstEstimate` | `plane`, `rate`, `standard_error` | Output of `ohtst::optimize_hyperplane(engine, seed_plane, config)` |
@@ -1411,12 +1424,15 @@ The generated block is authoritative. Run
 - `rgflux::kappa::BennettChandlerEstimate::positive_flux_count`
 - `rgflux::kappa::BennettChandlerEstimate::standard_error`
 - `rgflux::kappa::BennettChandlerEstimate::stationarity`
+- `rgflux::kappa::DEFAULT_COMMIT_CHECKPOINTS`
 - `rgflux::kappa::KappaConfig`
 - `rgflux::kappa::KappaConfig::commit_checkpoints`
+- `rgflux::kappa::KappaConfig::commitment_distance`
 - `rgflux::kappa::KappaConfig::default`
 - `rgflux::kappa::KappaConfig::quench_force_tol`
 - `rgflux::kappa::KappaConfig::quench_max_steps`
 - `rgflux::kappa::KappaConfig::with_commit_checkpoints`
+- `rgflux::kappa::KappaConfig::with_commitment_distance`
 - `rgflux::kappa::KappaConfig::with_quench_force_tol`
 - `rgflux::kappa::KappaConfig::with_quench_max_steps`
 - `rgflux::kappa::ReactiveTrajectory`
@@ -1425,6 +1441,7 @@ The generated block is authoritative. Run
 - `rgflux::kappa::ShootingConfig`
 - `rgflux::kappa::ShootingConfig::antithetic`
 - `rgflux::kappa::ShootingConfig::estimator`
+- `rgflux::kappa::ShootingConfig::kappa`
 - `rgflux::kappa::ShootingConfig::seed`
 - `rgflux::kappa::ShootingConfig::steps`
 - `rgflux::kappa::ShootingConfig::time_step`
@@ -1448,10 +1465,16 @@ The generated block is authoritative. Run
 - `rgflux::kappa::bennett_chandler::BennettChandlerEstimate::positive_flux_count`
 - `rgflux::kappa::bennett_chandler::BennettChandlerEstimate::standard_error`
 - `rgflux::kappa::bennett_chandler::BennettChandlerEstimate::stationarity`
+- `rgflux::kappa::bennett_chandler::DEFAULT_COMMIT_CHECKPOINTS`
 - `rgflux::kappa::bennett_chandler::DEFAULT_PLATEAU_END_FRACTION`
 - `rgflux::kappa::bennett_chandler::DEFAULT_PLATEAU_START_FRACTION`
 - `rgflux::kappa::bennett_chandler::DEFAULT_SHOOTING_STEPS`
 - `rgflux::kappa::bennett_chandler::DEFAULT_SHOOTING_TIME_STEP`
+- `rgflux::kappa::bennett_chandler::KappaConfig`
+- `rgflux::kappa::bennett_chandler::KappaConfig::commit_checkpoints`
+- `rgflux::kappa::bennett_chandler::KappaConfig::commitment_distance`
+- `rgflux::kappa::bennett_chandler::KappaConfig::quench_force_tol`
+- `rgflux::kappa::bennett_chandler::KappaConfig::quench_max_steps`
 - `rgflux::kappa::bennett_chandler::ReactiveTrajectory`
 - `rgflux::kappa::bennett_chandler::ReactiveTrajectory::initial_normal_velocity`
 - `rgflux::kappa::bennett_chandler::ReactiveTrajectory::new`
@@ -1460,17 +1483,21 @@ The generated block is authoritative. Run
 - `rgflux::kappa::bennett_chandler::ShootingConfig::antithetic`
 - `rgflux::kappa::bennett_chandler::ShootingConfig::default`
 - `rgflux::kappa::bennett_chandler::ShootingConfig::estimator`
+- `rgflux::kappa::bennett_chandler::ShootingConfig::kappa`
 - `rgflux::kappa::bennett_chandler::ShootingConfig::seed`
 - `rgflux::kappa::bennett_chandler::ShootingConfig::steps`
 - `rgflux::kappa::bennett_chandler::ShootingConfig::time_step`
 - `rgflux::kappa::bennett_chandler::ShootingConfig::with_antithetic`
+- `rgflux::kappa::bennett_chandler::ShootingConfig::with_early_commitment`
 - `rgflux::kappa::bennett_chandler::ShootingConfig::with_estimator`
+- `rgflux::kappa::bennett_chandler::ShootingConfig::with_kappa`
 - `rgflux::kappa::bennett_chandler::ShootingConfig::with_seed`
 - `rgflux::kappa::bennett_chandler::ShootingConfig::with_steps`
 - `rgflux::kappa::bennett_chandler::ShootingConfig::with_time_step`
 - `rgflux::kappa::bennett_chandler::Side`
 - `rgflux::kappa::bennett_chandler::Side::Product`
 - `rgflux::kappa::bennett_chandler::Side::Reactant`
+- `rgflux::kappa::bennett_chandler::Side::committed_from_signed_distance`
 - `rgflux::kappa::bennett_chandler::Side::from_signed_distance`
 - `rgflux::kappa::bennett_chandler::Side::indicator`
 - `rgflux::kappa::bennett_chandler::estimate_bennett_chandler`
@@ -1832,7 +1859,7 @@ Transition state theory overcounts the true transition rate whenever trajectorie
 \]
 
 - `kappa::bennett_chandler::estimate_bennett_chandler` is completely engine-free: it evaluates \(\kappa(t)\) at every step over recorded `ReactiveTrajectory` slices, tests stationarity across the plateau window \([\lfloor f_{\mathrm{start}} T \rfloor, \lceil f_{\mathrm{end}} T \rceil)\) combining temporal batch-means variance with paired trajectory-ensemble early-minus-late shift variance, and computes the plateau standard error from linearized ratio influence values (automatically pairing antithetic \((+\mathbf{v}, -\mathbf{v})\) shots into even batch widths). Values of \(\kappa(t)\) and the plateau are never clamped into \([0, 1]\).
-- `kappa::bennett_chandler::shoot_bennett_chandler` clears any active hyperplane constraint on a `DynamicsEngine`, shoots trajectories (including antithetic pairs with independent Langevin noise streams when `ShootingConfig::antithetic` is `true`) from dividing-surface configurations retained by `sample_hyperplane`, restores the engine's constraint, and reduces the ensemble via `estimate_bennett_chandler`.
+- `kappa::bennett_chandler::shoot_reactive_trajectories` and `shoot_bennett_chandler` clear any active hyperplane constraint on a `DynamicsEngine`, shoot trajectories (including antithetic pairs with independent Langevin noise streams when `ShootingConfig::antithetic` is `true`) from dividing-surface configurations retained by `sample_hyperplane`, restore the engine's constraint, and reduce the ensemble via `estimate_bennett_chandler`. Fixed-length shooting is the default: `KappaConfig::commit_checkpoints = 0` integrates every half to `ShootingConfig::steps` and preserves the full side history. Early commitment is an opt-in optimization. Set a nonzero checkpoint count no greater than `steps` and a finite, positive `KappaConfig::commitment_distance`. A checkpoint counts toward product commitment only when \(s \ge \text{commitment\_distance}\), toward reactant commitment only when \(s \le -\text{commitment\_distance}\), and otherwise resets the streak. Once the configured number of consecutive checkpoints agrees, that side fills the remaining history. This is safe only when the distance lies inside a physically defined thermalized basin and the window exceeds every relevant recrossing time (for a parabolic Langevin barrier, a conservative scale is several \(1/\lambda_+\), \(\lambda_+ = \sqrt{\gamma^2/4 + \omega_b^2} - \gamma/2\)). A signed-distance threshold is not a proof of irreversible commitment: a trajectory can penetrate deeply and return later, so uncertain systems must retain fixed-length shooting. Steepest-descent endpoint quenching is not yet implemented, so `KappaConfig::quench_force_tol` and `quench_max_steps` remain reserved.
 - `kappa::kramers_transmission_coefficient` evaluates Kramers' analytical spatial-diffusion barrier-recrossing factor across a parabolic barrier of unstable frequency \(\omega_b > 0\) under Langevin friction \(\gamma \ge 0\) cite:`kramersBrownianMotion1940`:
 
   \[

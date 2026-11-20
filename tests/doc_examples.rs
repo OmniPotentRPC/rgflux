@@ -11,7 +11,7 @@ use rgflux::kappa::bennett_chandler::{
     BennettChandlerConfig, ReactiveTrajectory, ShootingConfig, Side, estimate_bennett_chandler,
     shoot_bennett_chandler,
 };
-use rgflux::kappa::kramers_transmission_coefficient;
+use rgflux::kappa::{KappaConfig, kramers_transmission_coefficient};
 use rgflux::ohtst::{OhtstConfig, optimize_hyperplane};
 use rgflux::pafi::{PafiConfig, pafi_profile};
 use rgflux::stats::StatsConfig;
@@ -188,18 +188,65 @@ fn reference_pafi_row_drop_is_detected() {
     assert_eq!(rows.len(), 8);
 }
 
+#[test]
+fn reference_kappa_and_shooting_defaults_match_the_code() {
+    let reference = include_str!("../docs/orgmode/reference.org");
+    let kappa_defaults = KappaConfig::default();
+    let shooting_defaults = ShootingConfig::default();
+    let kappa_rows = extract_section_rows(reference, "** =kappa::KappaConfig=");
+    assert_eq!(kappa_rows.len(), 4, "expected all KappaConfig rows");
+    assert_row_contains(
+        &kappa_rows,
+        "=commit_checkpoints=",
+        format!("=usize= | ={}=", kappa_defaults.commit_checkpoints).as_str(),
+    );
+    assert_row_contains(&kappa_rows, "=commitment_distance=", "=f64= | =0.0=");
+    assert_eq!(kappa_defaults.commitment_distance, 0.0);
+    assert_row_contains(
+        &kappa_rows,
+        "=quench_force_tol=",
+        format!("=f64= | ={}=", kappa_defaults.quench_force_tol).as_str(),
+    );
+    assert_row_contains(&kappa_rows, "=quench_max_steps=", "=usize= | =2_000=");
+
+    let bc_rows = extract_section_rows(
+        reference,
+        "** =kappa::bennett_chandler::BennettChandlerConfig= and =ShootingConfig=",
+    );
+    assert_eq!(
+        bc_rows.len(),
+        9,
+        "expected all BennettChandlerConfig and ShootingConfig rows"
+    );
+    assert_row_contains(
+        &bc_rows,
+        "| =ShootingConfig= | =steps= |",
+        format!("=usize= | ={}=", shooting_defaults.steps).as_str(),
+    );
+    assert_row_contains(
+        &bc_rows,
+        "| =ShootingConfig= | =kappa= |",
+        "=KappaConfig= | =KappaConfig::default()=",
+    );
+    assert_eq!(shooting_defaults.kappa, kappa_defaults);
+}
+
 fn extract_pafi_reference_rows(reference: &str) -> Vec<String> {
+    extract_section_rows(reference, "** =pafi::PafiConfig=")
+}
+
+fn extract_section_rows(reference: &str, heading: &str) -> Vec<String> {
     let mut rows = Vec::new();
-    let mut in_pafi_table = false;
+    let mut in_section = false;
     for line in reference.lines() {
-        if line.trim() == "** =pafi::PafiConfig=" {
-            in_pafi_table = true;
+        if line.trim() == heading {
+            in_section = true;
             continue;
         }
-        if in_pafi_table && line.starts_with("** ") {
+        if in_section && line.starts_with("** ") {
             break;
         }
-        if in_pafi_table && line.starts_with("| =") {
+        if in_section && line.starts_with("| =") {
             rows.push(line.to_string());
         }
     }
@@ -530,6 +577,11 @@ fn howto_bennett_chandler_shooting_example_runs() -> Result<(), FluxError> {
         .with_steps(120)
         .with_time_step(0.05)
         .with_antithetic(true)
+        .with_kappa(
+            KappaConfig::default()
+                .with_commit_checkpoints(64)
+                .with_commitment_distance(0.25),
+        )
         .with_seed(99);
     let bc = shoot_bennett_chandler(
         &mut engine,
