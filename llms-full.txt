@@ -825,7 +825,7 @@ Here \(I_T\) is the trapezoid integral of \(dV/ds\) over the plane anchors and \
 | `reactant_frequency` | `f64` | \(\omega_0 = ( \mathbf{n}^\top \mathbf{H}^{-1} \mathbf{n} )^{-1/2}\) from the mass-weighted Hessian at the first image, in inverse engine time |
 | `reactant_partition` | `Option<f64>` | \(Z_R = \sqrt{2\pi k_{\mathrm{B}}T} / \omega_0\), in units of \(s\). `Some` when its exponential is finite and positive; otherwise `None` |
 | `reactant_log_partition` | `f64` | \(\ln Z_R = \tfrac{1}{2}\ln(2\pi k_{\mathrm{B}}T) - \ln \omega_0\) |
-| `normalized_rate` | `Option<f64>` | \(k = (\omega_0 / 2\pi) \exp(-\Delta F / k_{\mathrm{B}}T)\) in inverse engine time. `Some` when its exponential is finite and positive; otherwise `None` |
+| `normalized_rate` | `Option<f64>` | \(k = (\omega_0 / 2\pi) \exp(-\Delta F / k_{\mathrm{B}}T)\) in inverse engine time: a one-dimensional transition-state rate with a Gaussian reactant partition function and no recrossing correction, not the exact transition-state rate for an anharmonic reactant well and not a dynamical rate. `Some` when its exponential is finite and positive; otherwise `None` |
 | `normalized_log_rate` | `f64` | \(\ln k = \ln \omega_0 - \ln(2\pi) - \Delta F / k_{\mathrm{B}}T\), including when the linear rate underflows |
 | `normalized_rate_error` | `Option<f64>` | Delta-method standard error \(k\,\sigma_{\Delta F} / k_{\mathrm{B}}T\), i.e. `exp(normalized_log_rate + ln(sigma))` with \(\sigma =\) `barrier_error` \(/ k_{\mathrm{B}}T\). `Some(0.0)` when \(\sigma = 0\). Otherwise `Some` when that exponential is finite and positive. `None` when \(\sigma \neq 0\) and it overflows, underflows, or is not finite. \(Z_R\) is a property of the reactant Hessian, so its sampling sensitivity is zero |
 | `quadrature_residual` | `f64` | Largest absolute gap between the Hermite integral of \(dV/ds\) and the endpoint energy change. The acceptance check remains the trapezoid comparison in `PafiConfig::zero_temperature_tol` |
@@ -1791,7 +1791,11 @@ With two planes the derivative correction cancels and the rule is the trapezoid 
 k = \frac{\omega_0}{2\pi}\exp\!\left(-\frac{\Delta F}{k_{\mathrm{B}}T}\right), \qquad Z_R = \frac{\sqrt{2\pi k_{\mathrm{B}}T}}{\omega_0},
 \]
 
-which is Vineyard harmonic transition-state theory when the path is the unstable mode and the transverse entropy is already in \(\Delta F\). \(\ln Z_R\) and \(\ln k\) are stored as well, so a large barrier does not underflow the reported log rate.
+\(\ln Z_R\) and \(\ln k\) are stored as well, so a large barrier does not underflow the reported log rate.
+
+What \(k\) is: the transition-state rate of the one-dimensional reduction along the path, with the dividing plane at the maximum of the profile and the reactant partition function replaced by its Gaussian value \(Z_R\). It assumes a canonical reactant population, no recrossing (transmission coefficient 1), and a reactant well that is harmonic along the path normal over the thermal range. In the harmonic limit it is Vineyard harmonic transition-state theory, with the transverse entropy already in \(\Delta F\).
+
+What \(k\) is not: it is not the exact transition-state rate, because the Gaussian \(Z_R\) differs from the integral over an anharmonic reactant well, and it is not a dynamical rate, because recrossing is not estimated. On the widening double well, \(k\) is about 4% above the rate with the integrated \(Z_R\) at \(k_{\mathrm{B}}T = 0.2\) and about 8% above it at \(k_{\mathrm{B}}T = 0.35\); the integration tests check that gap. \(\Delta F\) does not rest on the Gaussian assumption: it is the Hermite integral of the sampled plane means and approaches \(F(s^\ddagger) - F(s_0)\) of the plane foliation as sampling and plane spacing are refined.
 
 ### What `pafi_profile` does
 
