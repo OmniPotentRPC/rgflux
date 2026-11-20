@@ -13,9 +13,10 @@ use std::f64::consts::{PI, TAU};
 
 use ndarray::{Array1, Array2, ArrayView1};
 use pafi_support::{
-    ASSERTION_ALPHA, FAMILY_SIZE, Z_CRIT, assert_above, assert_below, assert_coverage,
-    assert_dividing_plane, block_stats, curved_barrier_se_cap, end_plane_disagreement_cap, seed,
-    seed_with_offset, widening_barrier_se_cap, widening_rate_se_cap, widening_se_ratio_cap,
+    FAMILY_SIZE, Z_CRIT, assert_above, assert_below, assert_coverage, assert_dividing_plane,
+    assert_sweep_within_budget, block_stats, curved_barrier_se_cap, end_plane_disagreement_cap,
+    offset_sweep, seed, seed_with_offset, widening_barrier_se_cap, widening_rate_se_cap,
+    widening_se_ratio_cap,
 };
 use rgflux::engine::native::{NativeConfig, NativeEngine};
 use rgflux::engine::{DynamicsEngine, ThermostatConfig};
@@ -29,8 +30,12 @@ const PLANES: usize = 21;
 const TIME_STEP: f64 = 0.05;
 const BURN_IN: usize = 200;
 
-/// Offsets of `PAFI_SEED_OFFSET` in the curved standard-error sweep.
+/// Offsets of `PAFI_SEED_OFFSET` in the curved standard-error and end-plane
+/// sweeps. A curved profile costs about a second, so these stay small.
 const CURVED_SE_SWEEP_OFFSETS: u64 = 64;
+
+/// Offsets in the widening-well sweeps, whose profiles are far cheaper.
+const WIDENING_SWEEP_OFFSETS: u64 = 128;
 
 struct WideningDoubleWell;
 struct AnisotropicHarmonic {
@@ -128,7 +133,15 @@ fn widening_profile(
     seed_base: u64,
     samples: usize,
 ) -> FreeEnergyProfile {
-    let seed_value = seed(seed_base);
+    widening_profile_seeded(masses, gamma, seed(seed_base), samples)
+}
+
+fn widening_profile_seeded(
+    masses: Vec<f64>,
+    gamma: f64,
+    seed_value: u64,
+    samples: usize,
+) -> FreeEnergyProfile {
     let path = line_path(-1.0, 0.0, PLANES);
     let config = PafiConfig::default()
         .with_planes(PLANES)
@@ -201,7 +214,7 @@ fn widening_mean_force_integrates_to_analytic_barrier() {
 
 #[test]
 fn pafi_widening_barrier_matches_analytic_within_reported_se() {
-    let profile = widening_profile(vec![1.0, 1.0], 1.5, 11, ISO_SAMPLES);
+    let profile = widening_profile(vec![1.0, 1.0], 1.5, ISO_SEED, ISO_SAMPLES);
     let (barrier, se) = end_point(&profile);
     let expected = widening_expected_barrier(PLANES);
     assert_below(
@@ -214,7 +227,7 @@ fn pafi_widening_barrier_matches_analytic_within_reported_se() {
 
 #[test]
 fn pafi_widening_barrier_mass_anisotropic_matches_analytic_within_reported_se() {
-    let profile = widening_profile(vec![1.0, 4.0], 1.5, 21, ANISO_SAMPLES);
+    let profile = widening_profile(vec![1.0, 4.0], 1.5, ANISO_SEED, ANISO_SAMPLES);
     let (barrier, se) = end_point(&profile);
     let expected = widening_expected_barrier(PLANES);
     assert_below(
@@ -223,6 +236,44 @@ fn pafi_widening_barrier_mass_anisotropic_matches_analytic_within_reported_se() 
         widening_barrier_se_cap(ANISO_SAMPLES, ANISO_MASS_Y, ANISO_GAMMA),
     );
     assert_coverage("anisotropic barrier", barrier, se, expected);
+}
+
+const ISO_SEED: u64 = 11;
+const ANISO_SEED: u64 = 21;
+
+/// Reported barrier standard error of a widening profile at its last plane.
+fn widening_barrier_se(profile: &FreeEnergyProfile) -> f64 {
+    profile.standard_error[PLANES - 1]
+}
+
+#[test]
+#[ignore = "opt-in sweep of PAFI_SEED_OFFSET for the widening barrier standard-error caps"]
+fn widening_barrier_se_cap_offset_sweep() {
+    let iso_cap = widening_barrier_se_cap(ISO_SAMPLES, ISO_MASS_Y, ISO_GAMMA);
+    let aniso_cap = widening_barrier_se_cap(ANISO_SAMPLES, ANISO_MASS_Y, ANISO_GAMMA);
+    let report = offset_sweep(WIDENING_SWEEP_OFFSETS, 2, |offset| {
+        let iso = widening_profile_seeded(
+            vec![1.0, ISO_MASS_Y],
+            ISO_GAMMA,
+            seed_with_offset(ISO_SEED, offset),
+            ISO_SAMPLES,
+        );
+        let aniso = widening_profile_seeded(
+            vec![1.0, ANISO_MASS_Y],
+            ANISO_GAMMA,
+            seed_with_offset(ANISO_SEED, offset),
+            ANISO_SAMPLES,
+        );
+        vec![
+            (widening_barrier_se(&iso), iso_cap),
+            (widening_barrier_se(&aniso), aniso_cap),
+        ]
+    });
+    assert_sweep_within_budget(
+        "widening barrier SE",
+        &["isotropic", "anisotropic"],
+        &report,
+    );
 }
 
 const CURVED_RADIUS: f64 = 1.2;
@@ -396,38 +447,24 @@ fn end_plane_cap_rejects_an_added_cap_of_bias() {
 #[ignore = "opt-in sweep of PAFI_SEED_OFFSET for the curved standard-error cap"]
 fn curved_se_cap_offset_sweep() {
     let cap = curved_barrier_se_cap();
-    let offsets = CURVED_SE_SWEEP_OFFSETS;
-    let workers = 8;
-    let failures = std::thread::scope(|scope| {
-        let mut handles = Vec::with_capacity(workers);
-        for worker in 0..workers {
-            handles.push(scope.spawn(move || {
-                let mut local = 0_u64;
-                let mut offset = worker as u64;
-                while offset < offsets {
-                    let profile = curved_profile(0, seed_with_offset(CURVED_SEED, offset));
-                    let se = profile.standard_error[CURVED_PLANES - 1];
-                    if !(se.is_finite() && se > 0.0 && se <= cap) {
-                        local += 1;
-                    }
-                    offset += workers as u64;
-                }
-                local
-            }));
-        }
-        handles
-            .into_iter()
-            .map(|handle| handle.join().expect("sweep thread"))
-            .sum::<u64>()
+    let report = offset_sweep(CURVED_SE_SWEEP_OFFSETS, 1, |offset| {
+        let profile = curved_profile(0, seed_with_offset(CURVED_SEED, offset));
+        vec![(profile.standard_error[CURVED_PLANES - 1], cap)]
     });
-    let rate = (failures as f64) / (offsets as f64);
-    eprintln!(
-        "curved SE cap sweep: failures={failures} seeds={offsets} rate={rate:.6e} budget={ASSERTION_ALPHA:.6e} cap={cap:.6e}"
-    );
-    assert!(
-        rate <= ASSERTION_ALPHA,
-        "empirical failure rate {rate:.6e} of the curved standard-error cap exceeds {ASSERTION_ALPHA:.6e}"
-    );
+    assert_sweep_within_budget("curved SE cap", &["barrier SE"], &report);
+}
+
+#[test]
+#[ignore = "opt-in sweep of PAFI_SEED_OFFSET for the end-plane disagreement cap"]
+fn end_plane_disagreement_cap_offset_sweep() {
+    let cap = end_plane_disagreement_cap();
+    let report = offset_sweep(CURVED_SE_SWEEP_OFFSETS, 1, |offset| {
+        let seed_value = seed_with_offset(CURVED_SEED, offset);
+        let profile = curved_profile(0, seed_value);
+        let longer = curved_profile(1, seed_value);
+        vec![(end_plane_disagreement(&profile, &longer), cap)]
+    });
+    assert_sweep_within_budget("end plane", &["disagreement"], &report);
 }
 
 const RATE_SAMPLES: usize = 20_000;
@@ -436,7 +473,7 @@ const RATE_GAMMA: f64 = 1.3;
 
 #[test]
 fn normalized_pafi_rate_matches_analytic_profile() {
-    let profile = widening_profile(vec![1.0, 4.0], 1.3, 7, RATE_SAMPLES);
+    let profile = widening_profile(vec![1.0, 4.0], 1.3, RATE_SEED, RATE_SAMPLES);
     let rate = profile.normalized_rate.expect("representable rate");
     let rate_error = profile
         .normalized_rate_error
@@ -475,15 +512,45 @@ fn normalized_pafi_rate_matches_analytic_profile() {
     assert_coverage("normalized rate", rate, rate_error, expected_rate);
 }
 
+const RATE_SEED: u64 = 7;
+
+#[test]
+#[ignore = "opt-in sweep of PAFI_SEED_OFFSET for the widening rate standard-error cap"]
+fn widening_rate_se_cap_offset_sweep() {
+    let cap = widening_rate_se_cap(RATE_SAMPLES, RATE_MASS_Y, RATE_GAMMA);
+    let report = offset_sweep(WIDENING_SWEEP_OFFSETS, 1, |offset| {
+        let profile = widening_profile_seeded(
+            vec![1.0, RATE_MASS_Y],
+            RATE_GAMMA,
+            seed_with_offset(RATE_SEED, offset),
+            RATE_SAMPLES,
+        );
+        vec![(
+            profile
+                .normalized_rate_error
+                .expect("representable rate error"),
+            cap,
+        )]
+    });
+    assert_sweep_within_budget("widening rate SE", &["rate SE"], &report);
+}
+
 const REFINE_COARSE_SAMPLES: usize = 5_000;
 const REFINE_FINE_SAMPLES: usize = 20_000;
 const REFINE_MASS_Y: f64 = 1.0;
 const REFINE_GAMMA: f64 = 1.5;
+const REFINE_COARSE_SEED: u64 = 91;
+const REFINE_FINE_SEED: u64 = 92;
 
 #[test]
 fn sampling_refinement_restores_analytic_coverage() {
-    let coarse = widening_profile(vec![1.0, 1.0], 1.5, 91, REFINE_COARSE_SAMPLES);
-    let fine = widening_profile(vec![1.0, 1.0], 1.5, 92, REFINE_FINE_SAMPLES);
+    let coarse = widening_profile(
+        vec![1.0, 1.0],
+        1.5,
+        REFINE_COARSE_SEED,
+        REFINE_COARSE_SAMPLES,
+    );
+    let fine = widening_profile(vec![1.0, 1.0], 1.5, REFINE_FINE_SEED, REFINE_FINE_SAMPLES);
     let (coarse_barrier, coarse_se) = end_point(&coarse);
     let (fine_barrier, fine_se) = end_point(&fine);
     let expected = widening_expected_barrier(PLANES);
@@ -509,6 +576,49 @@ fn sampling_refinement_restores_analytic_coverage() {
     );
     assert_coverage("coarse barrier", coarse_barrier, coarse_se, expected);
     assert_coverage("fine barrier", fine_barrier, fine_se, expected);
+}
+
+#[test]
+#[ignore = "opt-in sweep of PAFI_SEED_OFFSET for the refinement standard-error caps"]
+fn sampling_refinement_cap_offset_sweep() {
+    let coarse_cap = widening_barrier_se_cap(REFINE_COARSE_SAMPLES, REFINE_MASS_Y, REFINE_GAMMA);
+    let fine_cap = widening_barrier_se_cap(REFINE_FINE_SAMPLES, REFINE_MASS_Y, REFINE_GAMMA);
+    let ratio_cap = widening_se_ratio_cap(
+        REFINE_COARSE_SAMPLES,
+        REFINE_FINE_SAMPLES,
+        REFINE_MASS_Y,
+        REFINE_GAMMA,
+    );
+    let report = offset_sweep(WIDENING_SWEEP_OFFSETS, 3, |offset| {
+        let coarse = widening_profile_seeded(
+            vec![1.0, REFINE_MASS_Y],
+            REFINE_GAMMA,
+            seed_with_offset(REFINE_COARSE_SEED, offset),
+            REFINE_COARSE_SAMPLES,
+        );
+        let fine = widening_profile_seeded(
+            vec![1.0, REFINE_MASS_Y],
+            REFINE_GAMMA,
+            seed_with_offset(REFINE_FINE_SEED, offset),
+            REFINE_FINE_SAMPLES,
+        );
+        let coarse_se = widening_barrier_se(&coarse);
+        let fine_se = widening_barrier_se(&fine);
+        vec![
+            (coarse_se, coarse_cap),
+            (fine_se, fine_cap),
+            (fine_se / coarse_se, ratio_cap),
+        ]
+    });
+    assert_sweep_within_budget(
+        "refinement",
+        &[
+            "coarse barrier SE",
+            "fine barrier SE",
+            "fine over coarse SE",
+        ],
+        &report,
+    );
 }
 
 #[test]

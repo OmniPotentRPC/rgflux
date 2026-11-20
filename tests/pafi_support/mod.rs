@@ -42,6 +42,13 @@
 //!
 //! Seeds: `PAFI_SEED_OFFSET` shifts every seed by a multiple of a large odd
 //! constant, so a sweep over offsets draws independent suites.
+//!
+//! Sweeps: [`offset_sweep`] draws a capped quantity at a fixed list of
+//! offsets and [`assert_sweep_within_budget`] requires the empirical failure
+//! rate of each cap to stay within [`ASSERTION_ALPHA`]. The curved, widening,
+//! rate, refinement, end-plane and rgpot caps each have an ignored sweep test
+//! that runs with `cargo test --features rgpot -- --ignored sweep`. That
+//! command runs all six tests: five native sweeps and one rgpot sweep.
 
 #![allow(dead_code)]
 
@@ -103,6 +110,98 @@ pub const fn t_cap(reference: f64, cv: f64) -> f64 {
 /// [`seed`].
 pub fn seed_with_offset(base: u64, offset: u64) -> u64 {
     base.wrapping_add(offset.wrapping_mul(0x9E37_79B9_7F4A_7C15))
+}
+
+/// Result of an empirical offset sweep over several capped quantities.
+pub struct SweepReport {
+    /// Number of seed offsets that were drawn.
+    pub offsets: u64,
+    /// Failures of each check: a value that is not finite, not positive, or
+    /// above its cap.
+    pub failures: Vec<u64>,
+    /// Largest `value / cap` seen for each check.
+    pub worst_ratio: Vec<f64>,
+}
+
+/// Runs `trial` at offsets `0..offsets` and tallies each check against its
+/// cap.
+///
+/// `trial` maps one offset to `(value, cap)` pairs, one per check, in a fixed
+/// order of length `checks`. Offsets are spread over worker threads. Every
+/// trial is seeded from its offset alone, so the report does not depend on
+/// the worker count or the scheduling.
+pub fn offset_sweep<F>(offsets: u64, checks: usize, trial: F) -> SweepReport
+where
+    F: Fn(u64) -> Vec<(f64, f64)> + Sync,
+{
+    let workers = std::thread::available_parallelism()
+        .map_or(1, usize::from)
+        .clamp(1, 8);
+    let trial = &trial;
+    let partials = std::thread::scope(|scope| {
+        let mut handles = Vec::with_capacity(workers);
+        for worker in 0..workers {
+            handles.push(scope.spawn(move || {
+                let mut failures = vec![0_u64; checks];
+                let mut worst = vec![0.0_f64; checks];
+                let mut offset = worker as u64;
+                while offset < offsets {
+                    let outcomes = trial(offset);
+                    assert_eq!(
+                        outcomes.len(),
+                        checks,
+                        "sweep trial must return every check"
+                    );
+                    for (index, (value, cap)) in outcomes.into_iter().enumerate() {
+                        if !(value.is_finite() && value > 0.0 && value <= cap) {
+                            failures[index] += 1;
+                        }
+                        worst[index] = worst[index].max(value / cap);
+                    }
+                    offset += workers as u64;
+                }
+                (failures, worst)
+            }));
+        }
+        handles
+            .into_iter()
+            .map(|handle| handle.join().expect("sweep thread"))
+            .collect::<Vec<_>>()
+    });
+    let mut failures = vec![0_u64; checks];
+    let mut worst_ratio = vec![0.0_f64; checks];
+    for (local_failures, local_worst) in partials {
+        for index in 0..checks {
+            failures[index] += local_failures[index];
+            worst_ratio[index] = worst_ratio[index].max(local_worst[index]);
+        }
+    }
+    SweepReport {
+        offsets,
+        failures,
+        worst_ratio,
+    }
+}
+
+/// Asserts that every check of a sweep failed at a rate within
+/// [`ASSERTION_ALPHA`], the budget of one statistical assertion.
+///
+/// With fewer than `1 / ASSERTION_ALPHA` offsets a single failure already
+/// exceeds the budget, so the sweep accepts no failures.
+pub fn assert_sweep_within_budget(name: &str, labels: &[&str], report: &SweepReport) {
+    assert_eq!(labels.len(), report.failures.len(), "one label per check");
+    for (index, label) in labels.iter().enumerate() {
+        let failures = report.failures[index];
+        let rate = (failures as f64) / (report.offsets as f64);
+        eprintln!(
+            "{name} sweep {label}: failures={failures} seeds={} rate={rate:.6e} budget={ASSERTION_ALPHA:.6e} worst_ratio={:.6}",
+            report.offsets, report.worst_ratio[index]
+        );
+        assert!(
+            rate <= ASSERTION_ALPHA,
+            "{name} sweep {label}: empirical failure rate {rate:.6e} exceeds {ASSERTION_ALPHA:.6e}"
+        );
+    }
 }
 
 /// Deterministic seed for suite offset `PAFI_SEED_OFFSET` (default zero).
@@ -294,16 +393,17 @@ pub fn widening_barrier_se_cap_at(samples: usize, mass_y: f64, gamma: f64, therm
 /// The reported rate error is `rate * barrier_error / kT`. The barrier
 /// standard error is bounded as in [`widening_barrier_se_cap`], on four
 /// fifths of `alpha / m`. The rate prefactor is the closed Gaussian rate at
-/// the Hermite barrier, inflated by a normal tail of the Hermite estimator
-/// on the remaining fifth: the estimator, not the reported standard error,
-/// is what enters the exponential.
+/// the Hermite barrier, inflated by a one sided normal tail of the Hermite
+/// estimator on the remaining fifth: the estimator, not the reported standard
+/// error, is what enters the exponential, and only a low barrier raises the
+/// rate.
 pub fn widening_rate_se_cap(samples: usize, mass_y: f64, gamma: f64) -> f64 {
     let model = widening_se_model(samples, mass_y, gamma, WIDENING_THERMAL);
     let rate_share = 0.2;
     let barrier_budget = (1.0 - rate_share) * ASSERTION_ALPHA;
     let barrier_cap = reported_se_bound(&model, barrier_budget).cap;
     let sigma = model.coefficients.iter().sum::<f64>().sqrt();
-    let z = smallest_normal_quantile(rate_share * ASSERTION_ALPHA);
+    let z = smallest_one_sided_normal_quantile(rate_share * ASSERTION_ALPHA);
     let omega = 8.0_f64.sqrt();
     let rate = omega / TAU * (-model.mean_barrier / WIDENING_THERMAL).exp();
     let rate_high = rate * (z * sigma / WIDENING_THERMAL).exp();
@@ -816,19 +916,28 @@ fn end_plane_union(
     total
 }
 
-/// Smallest `z` whose two-sided Mills bound is at most `target`.
-fn smallest_normal_quantile(target: f64) -> f64 {
+/// Smallest `z` whose one-sided Mills bound `phi(z) / z` is at most `target`.
+///
+/// The rate prefactor `exp(-B / kT)` grows when the Hermite barrier estimate
+/// `B_hat ~ Normal(B, sigma^2)` falls, so only the lower tail of `B_hat`
+/// matters. With `P(B_hat < B - z sigma) = Phi(-z)` and the Mills inequality
+/// `Phi(-z) <= phi(z) / z` for `z > 0`, the event `B_hat < B - z sigma` has
+/// probability at most `phi(z) / z`. The upper tail never raises the
+/// prefactor, so no factor of two enters. Solving `2 phi(z) / z <= target`
+/// instead spends half of the budget on a tail the cap does not need, raises
+/// `z`, and makes the cap looser than its failure budget requires.
+fn smallest_one_sided_normal_quantile(target: f64) -> f64 {
     let mut lo = 0.0_f64;
     let mut hi = 1.0_f64;
     let mut guard = 0;
-    while 2.0 * mills_tail(hi) > target {
+    while mills_tail(hi) > target {
         hi += 1.0;
         guard += 1;
         assert!(guard < 40, "normal Mills bound did not fall");
     }
     for _ in 0..60 {
         let mid = 0.5 * (lo + hi);
-        if 2.0 * mills_tail(mid) > target {
+        if mills_tail(mid) > target {
             lo = mid;
         } else {
             hi = mid;
@@ -1021,5 +1130,29 @@ fn widening_gap_matches_the_hermite_trapezoid_difference() {
     assert!(
         predicted < cap,
         "predicted standard error {predicted:.8e} is not under the cap {cap:.8e}"
+    );
+}
+
+#[test]
+fn one_sided_mills_quantile_matches_its_inversion() {
+    // `phi(z) / z = alpha / (5 m)` solved with scipy.optimize.brentq, and the
+    // exact `scipy.stats.norm.isf(alpha / (5 m))` that the Mills bound must
+    // not undercut.
+    let target = 0.2 * ASSERTION_ALPHA;
+    let mills_root = 4.252_330_921_149;
+    let exact = 4.241_306_705_633;
+    let two_sided_root = 4.404_356_789_847;
+    let z = smallest_one_sided_normal_quantile(target);
+    assert!(
+        (z - mills_root).abs() <= 1.0e-9,
+        "one sided quantile {z:.12} versus {mills_root:.12}"
+    );
+    assert!(
+        mills_tail(z) <= target,
+        "Mills tail at the quantile exceeds the target"
+    );
+    assert!(
+        z > exact && z < two_sided_root,
+        "quantile {z:.12} must lie between the exact one sided {exact:.12} and the two sided {two_sided_root:.12}"
     );
 }
