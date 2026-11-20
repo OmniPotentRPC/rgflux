@@ -157,7 +157,7 @@ With two planes the derivative correction cancels and the rule is the trapezoid 
 k = \sqrt{\frac{k_{\mathrm{B}}T}{2\pi}}\,\frac{\exp(-\Delta F / k_{\mathrm{B}}T)}{Z_R}.
 \]
 
-The reactant curvature \(\omega_0 = (\mathbf{n}^\top \mathbf{H}^{-1} \mathbf{n})^{-1/2}\) at the first image is reported in =reactant_frequency= for diagnostics and comparison with Vineyard harmonic transition-state theory. \(\ln Z_R\) and \(\ln k\) are stored in =reactant_log_partition= and =normalized_log_rate=, while the linear fields =reactant_partition=, =normalized_rate=, and =normalized_rate_error= are =Option<f64>= and return =None= when \(\exp(\cdot)\) overflows =f64= (and =Some(0.0)= when it underflows to zero).
+The reactant curvature \(\omega_0 = (\mathbf{n}^\top \mathbf{H}^{-1} \mathbf{n})^{-1/2}\) at the first image is reported in =reactant_frequency= for diagnostics and comparison with Vineyard harmonic transition-state theory. \(\ln Z_R\) and \(\ln k\) are stored in =reactant_log_partition= and =normalized_log_rate=, while the linear fields =reactant_partition=, =normalized_rate=, and =normalized_rate_error= are =Option<f64>=. =reactant_partition= and =normalized_rate= are =None= when \(\exp(\cdot)\) overflows or underflows =f64=, because a partition or a rate of exactly zero would be read as a true zero (and the partition divides the rate), whereas the log fields keep the value. =normalized_rate_error= is =None= only when the linear error overflows, and is =Some(0.0)= when it underflows, since an absolute error that rounds to zero is negligible next to any representable rate.
 
 ** What =pafi_profile= does
 
