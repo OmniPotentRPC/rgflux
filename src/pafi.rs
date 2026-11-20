@@ -322,6 +322,24 @@ pub struct PafiConfig {
     ///
     /// Default: [`StatsConfig::default`].
     pub stats: StatsConfig,
+    /// Optional declaration of rigid-translation invariance on the Cartesian
+    /// `[x, y, z]` axes.
+    ///
+    /// `Some([..])` bypasses numerical symmetry detection: `true` projects
+    /// that mass-weighted translation and `false` retains it. `None` probes
+    /// each axis independently with two central-difference step sizes. The
+    /// probe compares a Richardson truncation estimate with a roundoff floor;
+    /// an uncertainty interval that straddles the floor returns
+    /// [`FluxError::AmbiguousTranslationMode`] rather than silently choosing.
+    ///
+    /// Engines that evaluate forces internally in `f32` can quantize both
+    /// probes to the same value, especially over a large background force.
+    /// Such engines should declare known symmetries explicitly because an
+    /// unresolved sub-`f32` force change cannot be inferred from returned
+    /// `f64` values.
+    ///
+    /// Default: `None`.
+    pub translation_invariance: Option<[bool; 3]>,
 }
 
 impl Default for PafiConfig {
@@ -336,6 +354,7 @@ impl Default for PafiConfig {
             zero_temperature_tol: None,
             seed: 1,
             stats: StatsConfig::default(),
+            translation_invariance: None,
         }
     }
 }
@@ -350,6 +369,7 @@ with_setters!(PafiConfig {
     with_zero_temperature_tol => zero_temperature_tol: opt f64,
     with_seed => seed: val u64,
     with_stats => stats: val StatsConfig,
+    with_translation_invariance => translation_invariance: opt [bool; 3],
 });
 
 /// Integrated free-energy profile along a discretized reaction path.
@@ -1528,6 +1548,103 @@ fn ensure_reactant_minimum<E: DynamicsEngine + ?Sized>(
     Ok(true)
 }
 
+#[derive(Debug)]
+struct HessianProductEstimate {
+    value: Array1<f64>,
+    roundoff_floor: f64,
+}
+
+fn finite_difference_hessian_product<E: DynamicsEngine + ?Sized>(
+    engine: &mut E,
+    origin: &Array1<f64>,
+    root_mass: &Array1<f64>,
+    direction: &Array1<f64>,
+    step: f64,
+) -> Result<HessianProductEstimate, FluxError> {
+    let dof = direction.len();
+    let mut displacement = Array1::zeros(dof);
+    for i in 0..dof {
+        displacement[i] = direction[i] / root_mass[i];
+    }
+    let length = nrm2(displacement.view());
+    if !length.is_finite() || length <= f64::MIN_POSITIVE.sqrt() {
+        return Err(FluxError::InvalidConfig(
+            "PAFI reactant Hessian direction underflowed",
+        ));
+    }
+    let scale = step / length;
+    let mut gradients = Vec::with_capacity(2);
+    for sign in [1.0_f64, -1.0] {
+        let probe = origin + &displacement.mapv(|value| sign * scale * value);
+        engine.set_positions(probe.view())?;
+        let (_, forces) = engine.energy_and_forces()?;
+        gradients.push(forces.mapv(|force| -force));
+    }
+    let mut product = Array1::zeros(dof);
+    let mut component_roundoff = Array1::zeros(dof);
+    for i in 0..dof {
+        product[i] = (gradients[0][i] - gradients[1][i]) / (2.0 * scale) / root_mass[i];
+        component_roundoff[i] = f64::EPSILON * (gradients[0][i].abs() + gradients[1][i].abs())
+            / (2.0 * scale)
+            / root_mass[i];
+    }
+    if product.iter().any(|value| !value.is_finite()) {
+        return Err(FluxError::NonFinite("PAFI reactant Hessian product"));
+    }
+    Ok(HessianProductEstimate {
+        value: product,
+        roundoff_floor: nrm2(component_roundoff.view()),
+    })
+}
+
+fn estimate_hessian_product<E: DynamicsEngine + ?Sized>(
+    engine: &mut E,
+    origin: &Array1<f64>,
+    root_mass: &Array1<f64>,
+    direction: &Array1<f64>,
+    step: f64,
+) -> Result<(Array1<f64>, f64, f64), FluxError> {
+    let coarse = finite_difference_hessian_product(engine, origin, root_mass, direction, step)?;
+    let fine = finite_difference_hessian_product(engine, origin, root_mass, direction, 0.5 * step)?;
+    // A centered derivative has O(h^2) truncation error. The fine-grid error
+    // estimate is therefore (fine - coarse) / (2^2 - 1), and adding it gives
+    // the Richardson-extrapolated Hessian product.
+    let correction = (&fine.value - &coarse.value).mapv(|value| value / 3.0);
+    let uncertainty = nrm2(correction.view());
+    let value = &fine.value + &correction;
+    Ok((value, uncertainty, fine.roundoff_floor))
+}
+
+fn classify_translation_mode(
+    axis: usize,
+    response: f64,
+    uncertainty: f64,
+    roundoff_floor: f64,
+    declaration: Option<bool>,
+) -> Result<bool, FluxError> {
+    if let Some(invariant) = declaration {
+        return Ok(invariant);
+    }
+    if !roundoff_floor.is_finite() {
+        return Ok(false);
+    }
+    let upper = response + uncertainty;
+    let lower = (response - uncertainty).max(0.0);
+    if upper <= roundoff_floor {
+        return Ok(true);
+    }
+    if lower > roundoff_floor {
+        return Ok(false);
+    }
+    Err(FluxError::AmbiguousTranslationMode {
+        axis: ["x", "y", "z"][axis],
+        response,
+        uncertainty,
+        roundoff_floor,
+        ambiguity: uncertainty - (response - roundoff_floor).abs(),
+    })
+}
+
 /// Squared projected reactant frequency `omega_0^2 = 1 / (n^T H^-1 n)`.
 ///
 /// `H` is the mass-weighted Hessian at the first path image and `n` the unit
@@ -1540,27 +1657,21 @@ fn ensure_reactant_minimum<E: DynamicsEngine + ?Sized>(
 fn reactant_curvature<E: DynamicsEngine + ?Sized>(
     engine: &mut E,
     geometry: &PlaneGeometry,
+    translation_invariance: Option<[bool; 3]>,
 ) -> Result<f64, FluxError> {
     let dof = engine.dof();
     let root_mass: Array1<f64> = engine.masses().mapv(f64::sqrt);
     let origin = geometry.anchor.clone();
+    let reach = origin
+        .iter()
+        .fold(0.0_f64, |acc, value| acc.max(value.abs()));
+    // Central difference of a gradient: the step that balances truncation
+    // and roundoff is the cube root of machine epsilon, scaled by the
+    // coordinate magnitude.
+    let step = f64::EPSILON.cbrt() * (1.0 + reach);
 
     let mut translation_modes = Vec::new();
     if dof >= 6 && dof.is_multiple_of(3) {
-        let mut hessian_scale = 0.0_f64;
-        for i in 0..dof {
-            let mut basis = Array1::zeros(dof);
-            basis[i] = 1.0;
-            let product = mass_weighted_hessian_product(
-                engine,
-                origin.view(),
-                root_mass.view(),
-                basis.view(),
-            )?;
-            hessian_scale = hessian_scale.max(nrm2(product.view()));
-        }
-        let zero_mode_tol =
-            256.0 * f64::EPSILON.sqrt() * hessian_scale.max(f64::MIN_POSITIVE.sqrt());
         for axis in 0..3 {
             let mut translation = Array1::zeros(dof);
             for i in (axis..dof).step_by(3) {
@@ -1568,13 +1679,21 @@ fn reactant_curvature<E: DynamicsEngine + ?Sized>(
             }
             let norm = nrm2(translation.view());
             translation.mapv_inplace(|value| value / norm);
-            let product = mass_weighted_hessian_product(
-                engine,
-                origin.view(),
-                root_mass.view(),
-                translation.view(),
-            )?;
-            if nrm2(product.view()) <= zero_mode_tol {
+            let declaration = translation_invariance.map(|axes| axes[axis]);
+            let is_invariant = if declaration.is_some() {
+                classify_translation_mode(axis, 0.0, 0.0, 0.0, declaration)?
+            } else {
+                let (product, uncertainty, roundoff_floor) =
+                    estimate_hessian_product(engine, &origin, &root_mass, &translation, step)?;
+                classify_translation_mode(
+                    axis,
+                    nrm2(product.view()),
+                    uncertainty,
+                    roundoff_floor,
+                    None,
+                )?
+            };
+            if is_invariant {
                 translation_modes.push(translation);
             }
         }
@@ -1781,7 +1900,7 @@ pub fn pafi_profile<E: DynamicsEngine + ?Sized>(
             path_force_quadrature_residual(&arcs, &path_energies, &path_gradients)?;
         let reactant_hessian_certified =
             ensure_reactant_minimum(engine, geometries[0].anchor.view())?;
-        let curvature = reactant_curvature(engine, &geometries[0])?;
+        let curvature = reactant_curvature(engine, &geometries[0], config.translation_invariance)?;
 
         let mut plane_samples = vec![Vec::new(); geometries.len()];
         let mut final_profile = None;
@@ -2890,7 +3009,11 @@ pub fn pafi_profile_adaptive<E: DynamicsEngine + ?Sized>(
             path_force_quadrature_residual(&ref_arcs, &ref_energies, &ref_gradients)?;
         let reactant_hessian_certified =
             ensure_reactant_minimum(engine, ref_geometries[0].anchor.view())?;
-        let reactant_curvature = reactant_curvature(engine, &ref_geometries[0])?;
+        let reactant_curvature = reactant_curvature(
+            engine,
+            &ref_geometries[0],
+            config.base.translation_invariance,
+        )?;
 
         let initial_map = match config.monitor {
             MonitorKind::ForceGradient => EquidistributionMap::from_inputs(
@@ -3483,6 +3606,46 @@ mod tests {
         }
     }
 
+    struct AnisotropicTetheredPair {
+        tether: [f64; 3],
+        coupling: [f64; 3],
+    }
+
+    impl rgsaddle::PointSurface for AnisotropicTetheredPair {
+        fn eval(
+            &self,
+            x: ArrayView1<'_, f64>,
+        ) -> Result<(f64, Array1<f64>), rgsaddle::SaddleError> {
+            let mut energy = 0.0;
+            let mut gradient = Array1::zeros(6);
+            for axis in 0..3 {
+                let first = x[axis];
+                let second = x[3 + axis];
+                let extension = second - first;
+                energy += 0.5 * self.tether[axis] * (first * first + second * second)
+                    + 0.5 * self.coupling[axis] * extension * extension;
+                gradient[axis] = self.tether[axis] * first - self.coupling[axis] * extension;
+                gradient[3 + axis] = self.tether[axis] * second + self.coupling[axis] * extension;
+            }
+            Ok((energy, gradient))
+        }
+    }
+
+    struct ShiftedTetheredPair {
+        inner: AnisotropicTetheredPair,
+        offset: f64,
+    }
+
+    impl rgsaddle::PointSurface for ShiftedTetheredPair {
+        fn eval(
+            &self,
+            x: ArrayView1<'_, f64>,
+        ) -> Result<(f64, Array1<f64>), rgsaddle::SaddleError> {
+            let shifted = x.mapv(|value| value - self.offset);
+            self.inner.eval(shifted.view())
+        }
+    }
+
     struct SingleParticleTrap {
         stiffness: [f64; 3],
     }
@@ -3510,6 +3673,19 @@ mod tests {
         ) -> Result<(f64, Array1<f64>), rgsaddle::SaddleError> {
             let gradient = self.gradient + self.slope * (x[0] - 0.5);
             Ok((x[0], Array1::from_vec(vec![gradient])))
+        }
+    }
+
+    struct LastCoordinateLinear;
+
+    impl rgsaddle::PointSurface for LastCoordinateLinear {
+        fn eval(
+            &self,
+            x: ArrayView1<'_, f64>,
+        ) -> Result<(f64, Array1<f64>), rgsaddle::SaddleError> {
+            let mut gradient = Array1::zeros(x.len());
+            gradient[x.len() - 1] = 1.0;
+            Ok((x[x.len() - 1], gradient))
         }
     }
 
@@ -3552,7 +3728,7 @@ mod tests {
             normal: tangent.clone(),
             dn_ds: Array1::zeros(6),
             dc_ds: 1.0,
-            tangent,
+            tangent: tangent.clone(),
             arc: 0.0,
         };
         for cell in [Some([10.0, 0.0, 0.0, 0.0, 10.0, 0.0, 0.0, 0.0, 10.0]), None] {
@@ -3563,22 +3739,14 @@ mod tests {
             let mut engine =
                 NativeEngine::new(IsotropicPair { stiffness }, config).expect("pair engine");
             let curvature =
-                reactant_curvature(&mut engine, &geometry).expect("projected curvature");
+                reactant_curvature(&mut engine, &geometry, None).expect("projected curvature");
             assert_abs_diff_eq!(curvature, 2.0 * stiffness, epsilon = 1.0e-7);
         }
     }
 
     #[test]
     fn reactant_curvature_keeps_nonzero_translation_modes_in_a_periodic_trap() {
-        let translation_mix = 0.185_507_324_790_644_83;
-        let mut tangent = Array1::from_vec(vec![
-            -1.0 + translation_mix,
-            0.0,
-            0.0,
-            1.0 + translation_mix,
-            0.0,
-            0.0,
-        ]);
+        let mut tangent = Array1::from_vec(vec![0.3, 0.2, -0.1, 0.9, 0.2, 0.4]);
         let tangent_norm = nrm2(tangent.view());
         tangent.mapv_inplace(|value| value / tangent_norm);
         let geometry = PlaneGeometry {
@@ -3586,7 +3754,7 @@ mod tests {
             normal: tangent.clone(),
             dn_ds: Array1::zeros(6),
             dc_ds: 1.0,
-            tangent,
+            tangent: tangent.clone(),
             arc: 0.0,
         };
         let mut engine = NativeEngine::new(
@@ -3600,9 +3768,207 @@ mod tests {
                 .with_cell([10.0, 0.0, 0.0, 0.0, 10.0, 0.0, 0.0, 0.0, 10.0]),
         )
         .expect("tethered pair engine");
-        let curvature = reactant_curvature(&mut engine, &geometry).expect("trap curvature");
-        assert_abs_diff_eq!(curvature, 2.4126, epsilon = 1.0e-4);
-        assert!((curvature - 2.0).abs() > 0.4);
+        let curvature = reactant_curvature(&mut engine, &geometry, None).expect("trap curvature");
+        let hessian_blocks = [
+            [[1.25, -0.25], [-0.25, 3.25]],
+            [[1.25, -0.25], [-0.25, 3.25]],
+            [[1.25, -0.25], [-0.25, 3.25]],
+        ];
+        let mut inverse_quadratic_form = 0.0;
+        for axis in 0..3 {
+            let block = hessian_blocks[axis];
+            let determinant = block[0][0] * block[1][1] - block[0][1] * block[1][0];
+            let first = tangent[axis];
+            let second = tangent[3 + axis];
+            inverse_quadratic_form += (block[1][1] * first * first
+                - 2.0 * block[0][1] * first * second
+                + block[0][0] * second * second)
+                / determinant;
+        }
+        let expected = 1.0 / inverse_quadratic_form;
+        assert_abs_diff_eq!(curvature, expected, epsilon = 1.0e-7);
+    }
+
+    #[test]
+    fn weak_center_of_mass_tether_is_not_silently_projected() {
+        let inv_sqrt_two = 0.5_f64.sqrt();
+        let tangent = Array1::from_vec(vec![inv_sqrt_two, 0.0, 0.0, inv_sqrt_two, 0.0, 0.0]);
+        let geometry = PlaneGeometry {
+            anchor: Array1::zeros(6),
+            normal: tangent.clone(),
+            dn_ds: Array1::zeros(6),
+            dc_ds: 1.0,
+            tangent,
+            arc: 0.0,
+        };
+        let tether = 1.0e-8;
+        let mut engine = NativeEngine::new(
+            AnisotropicTetheredPair {
+                tether: [tether, 0.0, 0.0],
+                coupling: [3.25, 3.25, 3.25],
+            },
+            NativeConfig::default().with_masses(Array1::ones(6)),
+        )
+        .expect("weakly tethered pair");
+        let curvature = reactant_curvature(
+            &mut engine,
+            &geometry,
+            PafiConfig::default().translation_invariance,
+        )
+        .expect("weak tether must be retained");
+        assert_abs_diff_eq!(curvature, tether, epsilon = 1.0e-12);
+    }
+
+    #[test]
+    fn weak_tether_classification_is_invariant_under_rigid_offsets() {
+        let tether = 1.0e-8;
+        let coupling = 3.25;
+        let first = 0.8;
+        let second = 0.6;
+        let determinant = tether * (tether + 2.0 * coupling);
+        let inverse_numerator = (tether + coupling) * (first * first + second * second)
+            + 2.0 * coupling * first * second;
+        let expected = determinant / inverse_numerator;
+
+        for offset in [0.0, 1.0e2, 1.0e4] {
+            let tangent = Array1::from_vec(vec![first, 0.0, 0.0, second, 0.0, 0.0]);
+            let geometry = PlaneGeometry {
+                anchor: Array1::from_elem(6, offset),
+                normal: tangent.clone(),
+                dn_ds: Array1::zeros(6),
+                dc_ds: 1.0,
+                tangent,
+                arc: 0.0,
+            };
+            let mut engine = NativeEngine::new(
+                ShiftedTetheredPair {
+                    inner: AnisotropicTetheredPair {
+                        tether: [tether, 0.0, 0.0],
+                        coupling: [coupling, coupling, coupling],
+                    },
+                    offset,
+                },
+                NativeConfig::default().with_masses(Array1::ones(6)),
+            )
+            .expect("shifted weakly tethered pair");
+            let curvature = reactant_curvature(
+                &mut engine,
+                &geometry,
+                PafiConfig::default().translation_invariance,
+            )
+            .expect("mixed tangent must retain the weak tether");
+            assert_abs_diff_eq!(curvature, expected, epsilon = 1.0e-3 * tether);
+        }
+    }
+
+    #[test]
+    fn declared_translation_invariance_bypasses_numerical_probe_per_axis() {
+        let inv_sqrt_two = 0.5_f64.sqrt();
+        let tangent = Array1::from_vec(vec![0.0, inv_sqrt_two, 0.0, 0.0, inv_sqrt_two, 0.0]);
+        let geometry = PlaneGeometry {
+            anchor: Array1::zeros(6),
+            normal: tangent.clone(),
+            dn_ds: Array1::zeros(6),
+            dc_ds: 1.0,
+            tangent,
+            arc: 0.0,
+        };
+        let mut engine = NativeEngine::new(
+            AnisotropicTetheredPair {
+                tether: [1.0, 0.0, 2.0],
+                coupling: [3.25, 3.25, 3.25],
+            },
+            NativeConfig::default().with_masses(Array1::ones(6)),
+        )
+        .expect("anisotropic pair");
+        let error = reactant_curvature(&mut engine, &geometry, Some([false, true, false]))
+            .expect_err("declared invariant y translation must be projected");
+        assert_eq!(
+            error,
+            FluxError::InvalidConfig(
+                "PAFI reactant tangent lies entirely in the translational zero-mode subspace"
+            )
+        );
+    }
+
+    #[test]
+    fn translation_probe_is_independent_for_each_anisotropic_axis() {
+        let inv_sqrt_two = 0.5_f64.sqrt();
+        for (tether, translation_components, expected) in [
+            ([0.0, 0.0, 2.0], [0.0, 0.0, 1.0], 2.0),
+            ([2.0, 0.0, 0.0], [0.5_f64.sqrt(), 0.5_f64.sqrt(), 0.0], 2.0),
+        ] {
+            let mut tangent = Array1::zeros(6);
+            for axis in 0..3 {
+                tangent[axis] = inv_sqrt_two * translation_components[axis];
+                tangent[3 + axis] = inv_sqrt_two * translation_components[axis];
+            }
+            let geometry = PlaneGeometry {
+                anchor: Array1::zeros(6),
+                normal: tangent.clone(),
+                dn_ds: Array1::zeros(6),
+                dc_ds: 1.0,
+                tangent,
+                arc: 0.0,
+            };
+            let mut engine = NativeEngine::new(
+                AnisotropicTetheredPair {
+                    tether,
+                    coupling: [0.5, 3.25, 1.0e8],
+                },
+                NativeConfig::default().with_masses(Array1::ones(6)),
+            )
+            .expect("anisotropic pair");
+            let curvature = reactant_curvature(
+                &mut engine,
+                &geometry,
+                PafiConfig::default().translation_invariance,
+            )
+            .expect("tethered axis must not be projected");
+            assert_abs_diff_eq!(curvature, expected, epsilon = 1.0e-7);
+        }
+    }
+
+    #[test]
+    fn finite_difference_uncertainty_reports_ambiguous_axis_and_values() {
+        let error = classify_translation_mode(2, 1.5e-8, 0.75e-8, 1.0e-8, None)
+            .expect_err("uncertainty interval straddles the roundoff floor");
+        let message = error.to_string();
+        assert!(message.contains("z axis"));
+        assert!(message.contains("2.5000e-9"));
+        assert!(message.contains("1.5000e-8"));
+        assert!(message.contains("7.5000e-9"));
+        assert!(message.contains("1.0000e-8"));
+    }
+
+    #[test]
+    fn finite_difference_roundoff_uses_every_response_component() {
+        let root_mass = Array1::ones(6);
+        let origin = Array1::zeros(6);
+        let mut direction = Array1::zeros(6);
+        direction[0] = 1.0;
+        let step = f64::EPSILON.cbrt();
+        let mut engine = NativeEngine::new(
+            LastCoordinateLinear,
+            NativeConfig::default().with_masses(Array1::ones(6)),
+        )
+        .expect("linear surface");
+        let estimate =
+            finite_difference_hessian_product(&mut engine, &origin, &root_mass, &direction, step)
+                .expect("finite-difference estimate");
+        assert_eq!(estimate.value, Array1::zeros(6));
+        assert_abs_diff_eq!(
+            estimate.roundoff_floor,
+            f64::EPSILON / step,
+            epsilon = f64::EPSILON
+        );
+    }
+
+    #[test]
+    fn non_finite_roundoff_floor_does_not_certify_translation_invariance() {
+        let invariant = classify_translation_mode(0, 1.0, 0.0, f64::INFINITY, None)
+            .expect("a finite nonzero response must fail closed");
+        assert!(!invariant);
     }
 
     #[test]
@@ -3670,7 +4036,8 @@ mod tests {
             NativeConfig::default().with_masses(Array1::ones(6)),
         )
         .expect("invariant pair engine");
-        let error = reactant_curvature(&mut engine, &geometry).expect_err("translation-only path");
+        let error =
+            reactant_curvature(&mut engine, &geometry, None).expect_err("translation-only path");
         assert_eq!(
             error,
             FluxError::InvalidConfig(
@@ -3704,7 +4071,7 @@ mod tests {
             NativeConfig::default().with_masses(Array1::ones(3)),
         )
         .expect("single-particle engine");
-        let curvature = reactant_curvature(&mut engine, &geometry).expect("trap curvature");
+        let curvature = reactant_curvature(&mut engine, &geometry, None).expect("trap curvature");
         assert_abs_diff_eq!(curvature, expected, epsilon = 1.0e-7);
     }
 

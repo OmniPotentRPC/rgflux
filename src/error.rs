@@ -46,6 +46,23 @@ pub enum FluxError {
     #[error("invalid configuration: {0}")]
     InvalidConfig(&'static str),
 
+    /// A numerically probed Cartesian translation could not be classified.
+    #[error(
+        "PAFI reactant translation probe is ambiguous on the {axis} axis by {ambiguity:.4e}: response {response:.4e}, finite-difference uncertainty {uncertainty:.4e}, roundoff floor {roundoff_floor:.4e}; set PafiConfig::translation_invariance explicitly"
+    )]
+    AmbiguousTranslationMode {
+        /// Cartesian axis (`"x"`, `"y"`, or `"z"`).
+        axis: &'static str,
+        /// Norm of the estimated mass-weighted Hessian response.
+        response: f64,
+        /// Estimated truncation uncertainty of that response.
+        uncertainty: f64,
+        /// Estimated floating-point roundoff floor.
+        roundoff_floor: f64,
+        /// Width by which the response uncertainty interval overlaps the floor.
+        ambiguity: f64,
+    },
+
     /// A holonomic hyperplane constraint residual exceeded its numerical tolerance.
     #[error(
         "holonomic hyperplane constraint residual {residual:.4e} exceeds tolerance {tolerance:.4e}"
