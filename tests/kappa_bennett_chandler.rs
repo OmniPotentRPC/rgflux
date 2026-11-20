@@ -339,7 +339,7 @@ fn double_well_2d_native_shooting_matches_high_friction_kramers_within_se() {
 }
 
 #[test]
-fn double_well_1d_late_return_stays_at_committed_kappa() {
+fn opt_in_commitment_can_hide_a_1d_late_return() {
     // 1D asymmetric double well with saddle at x = 0 (V(0) = 0, V'(0) = 0):
     // - Product basin (x >= 0): V(x) = 16 x^4 - 8 x^2 (minimum at x = 0.5, outer wall at x = 1 / sqrt(2)).
     //   A forward shot (v_x(0) > 0) enters x > 0 and stays on Side::Product for >= 35 steps,
@@ -392,6 +392,8 @@ fn double_well_1d_late_return_stays_at_committed_kappa() {
         .with_antithetic(true)
         .with_seed(23);
 
+    // This deliberately unsafe threshold demonstrates the documented limitation:
+    // stopping early hides the later physical return and changes the plateau.
     for checkpoints in [1_usize, 8, 16] {
         let cfg = base_cfg.clone().with_kappa(
             KappaConfig::default()
@@ -399,7 +401,7 @@ fn double_well_1d_late_return_stays_at_committed_kappa() {
                 .with_commitment_distance(0.1),
         );
         let est = shoot_bennett_chandler(&mut engine, &plane, starts.view(), &cfg)
-            .expect("1d committed estimate");
+            .expect("1d early-commitment estimate");
         assert_abs_diff_eq!(est.plateau, 1.0, epsilon = ALGEBRAIC_TOL);
         assert_eq!(est.standard_error, 0.0);
         for &kt in &est.kappa_t {
@@ -415,7 +417,7 @@ fn double_well_1d_late_return_stays_at_committed_kappa() {
 }
 
 #[test]
-fn double_well_2d_late_return_stays_at_committed_kappa() {
+fn opt_in_commitment_can_hide_a_2d_late_return() {
     struct AsymmetricDoubleWell2D;
 
     impl rgsaddle::PointSurface for AsymmetricDoubleWell2D {
@@ -459,6 +461,8 @@ fn double_well_2d_late_return_stays_at_committed_kappa() {
         .with_antithetic(true)
         .with_seed(23);
 
+    // As in the 1D case, this opt-in result differs from the full trajectory
+    // because signed distance cannot prove irreversible basin commitment.
     for checkpoints in [12_usize, 24] {
         let cfg = base_cfg.clone().with_kappa(
             KappaConfig::default()
@@ -466,7 +470,7 @@ fn double_well_2d_late_return_stays_at_committed_kappa() {
                 .with_commitment_distance(0.1),
         );
         let est = shoot_bennett_chandler(&mut engine, &plane, starts.view(), &cfg)
-            .expect("2d committed estimate");
+            .expect("2d early-commitment estimate");
         assert_abs_diff_eq!(est.plateau, 1.0, epsilon = ALGEBRAIC_TOL);
         assert_eq!(est.standard_error, 0.0);
         for &kt in &est.kappa_t {
