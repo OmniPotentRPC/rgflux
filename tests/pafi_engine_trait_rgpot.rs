@@ -234,17 +234,25 @@ fn assert_close(lhs: f64, rhs: f64) {
     );
 }
 
+fn assert_optional_close(lhs: Option<f64>, rhs: Option<f64>) {
+    match (lhs, rhs) {
+        (Some(lhs), Some(rhs)) => assert_close(lhs, rhs),
+        (None, None) => {}
+        _ => panic!("parity violated: {lhs:?} vs {rhs:?}"),
+    }
+}
+
 fn assert_profiles_match(lhs: &FreeEnergyProfile, rhs: &FreeEnergyProfile) {
     assert_eq!(lhs.dividing_index, rhs.dividing_index);
     assert_close(lhs.dividing_arc, rhs.dividing_arc);
     assert_close(lhs.barrier, rhs.barrier);
     assert_close(lhs.barrier_error, rhs.barrier_error);
     assert_close(lhs.reactant_frequency, rhs.reactant_frequency);
-    assert_close(lhs.reactant_partition, rhs.reactant_partition);
+    assert_optional_close(lhs.reactant_partition, rhs.reactant_partition);
     assert_close(lhs.reactant_log_partition, rhs.reactant_log_partition);
-    assert_close(lhs.normalized_rate, rhs.normalized_rate);
+    assert_optional_close(lhs.normalized_rate, rhs.normalized_rate);
     assert_close(lhs.normalized_log_rate, rhs.normalized_log_rate);
-    assert_close(lhs.normalized_rate_error, rhs.normalized_rate_error);
+    assert_optional_close(lhs.normalized_rate_error, rhs.normalized_rate_error);
     assert_close(lhs.quadrature_residual, rhs.quadrature_residual);
     for (left, right) in lhs.arc_lengths.iter().zip(&rhs.arc_lengths) {
         assert_close(*left, *right);
