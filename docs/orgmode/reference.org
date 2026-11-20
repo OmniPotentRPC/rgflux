@@ -940,14 +940,24 @@ The generated block is authoritative. Run
 - =rgflux::pafi::FreeEnergyProfile::arc_lengths=
 - =rgflux::pafi::FreeEnergyProfile::barrier=
 - =rgflux::pafi::FreeEnergyProfile::barrier_error=
+- =rgflux::pafi::FreeEnergyProfile::dividing_arc=
 - =rgflux::pafi::FreeEnergyProfile::dividing_index=
 - =rgflux::pafi::FreeEnergyProfile::free_energy=
 - =rgflux::pafi::FreeEnergyProfile::normalized_log_rate=
 - =rgflux::pafi::FreeEnergyProfile::normalized_rate=
 - =rgflux::pafi::FreeEnergyProfile::normalized_rate_error=
+- =rgflux::pafi::FreeEnergyProfile::quadrature_residual=
+- =rgflux::pafi::FreeEnergyProfile::reactant_frequency=
 - =rgflux::pafi::FreeEnergyProfile::reactant_log_partition=
 - =rgflux::pafi::FreeEnergyProfile::reactant_partition=
 - =rgflux::pafi::FreeEnergyProfile::standard_error=
+- =rgflux::pafi::HermiteIntegral=
+- =rgflux::pafi::HermiteIntegral::cumulative=
+- =rgflux::pafi::IntegralEstimate=
+- =rgflux::pafi::IntegralEstimate::error=
+- =rgflux::pafi::IntegralEstimate::values=
+- =rgflux::pafi::MeanForceIntegral=
+- =rgflux::pafi::MeanForceIntegral::cumulative=
 - =rgflux::pafi::PafiConfig=
 - =rgflux::pafi::PafiConfig::burn_in_steps=
 - =rgflux::pafi::PafiConfig::default=
@@ -968,6 +978,8 @@ The generated block is authoritative. Run
 - =rgflux::pafi::PafiConfig::with_time_step=
 - =rgflux::pafi::PafiConfig::with_zero_temperature_tol=
 - =rgflux::pafi::PafiConfig::zero_temperature_tol=
+- =rgflux::pafi::SimpsonIntegral=
+- =rgflux::pafi::SimpsonIntegral::cumulative=
 - =rgflux::pafi::pafi_profile=
 - =rgflux::pafi::pafi_profile_dyn=
 
