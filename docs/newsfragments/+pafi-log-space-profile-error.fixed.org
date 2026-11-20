@@ -1,3 +1,1 @@
-The free-energy =standard_error= and =barrier_error= are a scaled
-Euclidean norm of the weighted plane uncertainties. A finite uncertainty
-whose square overflows stays finite.
+=pafi::pafi_profile= accumulates the Euclidean norms for =standard_error= and =barrier_error= in log space, avoiding intermediate =w^2 * sigma^2= overflow when a finite plane-force standard error exceeds =sqrt(f64::MAX)=, and folds the Hermite-minus-trapezoid truncation residual in via =f64::hypot=.

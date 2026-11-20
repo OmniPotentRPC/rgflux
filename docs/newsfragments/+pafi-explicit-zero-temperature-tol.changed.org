@@ -1,4 +1,1 @@
-=PafiConfig::zero_temperature_tol= is =Option<f64>=. =None=, the
-default, scales the tolerance with =planes=. An explicit value is used
-at every plane count, including a value equal to the tolerance at the
-default plane count.
+=pafi::PafiConfig::zero_temperature_tol= changed type from =f64= to =Option<f64>= (default =None=). Callers that read the field or pass it directly must update: wrap an explicit value in =Some(..)= and handle =None=. =with_zero_temperature_tol(tol)= still takes an =f64=. When unset, the zero-temperature trapezoid consistency tolerance scales as =2 * (pi^2 / 12) / (planes - 1)^2=. An explicit value stays fixed across plane counts, including when =tol= equals the 9-plane default.
