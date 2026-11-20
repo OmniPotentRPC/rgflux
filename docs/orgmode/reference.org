@@ -49,7 +49,7 @@ Every public configuration struct is =#[non_exhaustive]= and provides chainable 
 
 | Field | Type | Default | Constraint / Meaning |
 |---+---+---+---|
-| =gamma= | =f64= | =1.0= | Langevin friction coefficient \(\gamma \ge 0\) in inverse time units (=0.0= selects velocity-Verlet NVE) |
+| =gamma= | =f64= | =1.0= | Langevin friction coefficient \(\gamma \ge 0\) in inverse time units (=0.0= selects velocity-Verlet NVE, which =hyperplane::sample_hyperplane=, =ohtst::optimize_hyperplane=, and =pafi::pafi_profile= reject with =FluxError::InvalidConfig= because they need canonical sampling) |
 | =temperature= | =f64= | =1.0= | Absolute temperature \(T \ge 0\) |
 | =boltzmann= | =f64= | =1.0= | Boltzmann constant \(k_{\mathrm{B}} > 0\) in the engine's energy-per-temperature unit |
 

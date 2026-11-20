@@ -503,6 +503,7 @@ Points to adapt for a real path:
 - *Planes and tolerance*: The zero-temperature check compares \(\lvert I_T - \Delta E_0\rvert / \max(E_{\mathrm{unit}}, \lvert\Delta E_0\rvert)\) with a dimensionless tolerance. Here \(I_T\) is the trapezoid integral of \(dV/ds\), \(\Delta E_0\) is the endpoint energy change and \(E_{\mathrm{unit}}\) is one energy unit of the engine. `zero_temperature_tol` is `Option<f64>`. `None`, the default, uses \(2 (\pi^2 / 12) / (\text{planes} - 1)^2\), about 2.6% at 9 planes, and scales when `planes` changes. `with_zero_temperature_tol` sets a value used at every plane count, including a value equal to the 9-plane tolerance. A sharper path can require a larger explicit tolerance. A failing check returns `FluxError::InvalidConfig` before any sampling.
 - *Statistical error*: Set `with_target_error(0.01)` and `with_max_rounds(8)` to repeat sampling in rounds of `sample_steps` until `barrier_error` reaches the target. Reaching `max_rounds` first is not an error, so compare `barrier_error` with the target yourself.
 - *Reproducibility*: The seed of plane \(k\) in round \(r\) is `seed + 4099 * k + 1000003 * r`, so a fixed `with_seed` gives the same profile for a deterministic engine.
+- *Thermostat*: The engine needs Langevin friction \(\gamma > 0\); \(\gamma = 0\) is NVE and returns `FluxError::InvalidConfig`. Any positive friction targets the same profile, so choose it for the standard error and the burn-in.
 - *Engine*: `pafi_profile_dyn` accepts `&mut dyn DynamicsEngine`. The engine is restored on return, with the stochastic stream the only exception.
 
 ## Shoot Bennett-Chandler reactive-flux trajectories and compare with Kramers
@@ -654,7 +655,7 @@ Every public configuration struct is `#[non_exhaustive]` and provides chainable 
 
 | Field | Type | Default | Constraint / Meaning |
 |---+---+---+---|
-| `gamma` | `f64` | `1.0` | Langevin friction coefficient \(\gamma \ge 0\) in inverse time units (`0.0` selects velocity-Verlet NVE) |
+| `gamma` | `f64` | `1.0` | Langevin friction coefficient \(\gamma \ge 0\) in inverse time units (`0.0` selects velocity-Verlet NVE, which `hyperplane::sample_hyperplane`, `ohtst::optimize_hyperplane`, and `pafi::pafi_profile` reject with `FluxError::InvalidConfig` because they need canonical sampling) |
 | `temperature` | `f64` | `1.0` | Absolute temperature \(T \ge 0\) |
 | `boltzmann` | `f64` | `1.0` | Boltzmann constant \(k_{\mathrm{B}} > 0\) in the engine's energy-per-temperature unit |
 
@@ -1691,7 +1692,7 @@ where \(\mu\) is the effective directional flux mass along \(\mathbf{n}\), evalu
 \frac{\partial A}{\partial c} = \langle \lambda \rangle_c, \qquad \lambda(\mathbf{x}) = -\frac{\mathbf{n}^\top \mathbf{M}^{-1} \mathbf{F}(\mathbf{x})}{\mathbf{n}^\top \mathbf{M}^{-1} \mathbf{n}} = \frac{\mathbf{n}^\top \mathbf{M}^{-1} \nabla V(\mathbf{x})}{\mathbf{n}^\top \mathbf{M}^{-1} \mathbf{n}}.
 \]
 
-`hyperplane::sample_hyperplane` equilibrates the constrained system for `burn_in_steps`, records \(\lambda_t\) over `sample_steps` steps, and estimates \(\langle \lambda \rangle_c\) and its block-averaged standard error \(\sigma_\lambda\) via `stats::batch_means` cite:`flyvbjergErrorEstimates1989,flegalMcmcThirdSignificantFigure2008` while retaining dividing-surface configurations every `retention_stride` steps.
+`hyperplane::sample_hyperplane` equilibrates the constrained system for `burn_in_steps`, records \(\lambda_t\) over `sample_steps` steps, and estimates \(\langle \lambda \rangle_c\) and its block-averaged standard error \(\sigma_\lambda\) via `stats::batch_means` cite:`flyvbjergErrorEstimates1989,flegalMcmcThirdSignificantFigure2008` while retaining dividing-surface configurations every `retention_stride` steps. The average is a canonical expectation only when the dynamics samples the canonical ensemble, so `sample_hyperplane` requires Langevin friction \(\gamma > 0\) and returns `FluxError::InvalidConfig` for \(\gamma = 0\). NVE dynamics started from the anchor samples an energy shell, and the mean it gave before this check was biased with no error. For \(\gamma > 0\) the mean does not depend on \(\gamma\), the constraint scheme (`ConstraintProjection::Rattle` or `Shake`), or the mass distribution, only its standard error and the burn-in it needs do.
 
 `ohtst::optimize_hyperplane` holds the seed normal \(\mathbf{n}\) fixed and determines the stationary dividing hyperplane offset \(c^\ddagger\) and harmonic hyperplanar TST rate cite:`vineyardFrequencyFactors1957,johannessonOptimizationHyperplanar2001`:
 
@@ -1703,7 +1704,7 @@ where \(\mu\) is the effective directional flux mass along \(\mathbf{n}\), evalu
    \kappa = \frac{\langle \lambda \rangle_{c_{\mathrm{probe}}}}{c_{\mathrm{probe}} - s_{\min}} > 0.
    \]
 
-   Because \(\langle \lambda \rangle\) carries the sign of \(c_{\mathrm{probe}} - s_{\min}\), dividing by the signed separation yields \(\kappa > 0\) on either side of the reactant minimum.
+   Because \(\langle \lambda \rangle\) carries the sign of \(c_{\mathrm{probe}} - s_{\min}\), dividing by the signed separation yields \(\kappa > 0\) on either side of the reactant minimum. This probe is a canonical expectation, so `optimize_hyperplane` requires \(\gamma > 0\) and rejects NVE dynamics with `FluxError::InvalidConfig`.
 4. *Rate and delta-method uncertainty*: With flux mass \(\mu = (\sum_i n_i^2 / m_i)^{-1}\) from `rgsaddle::flux_mass` (mapping a normal/mass length mismatch to `FluxError::Shape` and a non-finite or non-positive metric to `FluxError::InvalidConfig`) and angular frequency \(\omega = \sqrt{\kappa / \mu}\), the fixed-normal OH-TST rate and its first-order delta-method standard error are
 
    \[
@@ -1812,6 +1813,7 @@ The numerator and denominator in step 3 are energies in the engine's energy unit
 ### Assumptions, units, and engine wiring
 
 - Assumes a smooth path of at least two images, with one coordinate per degree of freedom of the engine, whose thermal fluctuations on each plane stay inside the region where neighbouring planes do not intersect, so that \(\mathbf{n} \cdot \mathbf{X}' - (\mathbf{x} - \mathbf{X}) \cdot \mathbf{n}'\) stays positive.
+- The plane means are canonical averages, so the engine must run Langevin dynamics with \(\gamma > 0\) at a positive \(k_{\mathrm{B}}T\). `pafi_profile` returns `FluxError::InvalidConfig` for \(\gamma = 0\), which is NVE. Within \(\gamma > 0\) the expected profile does not depend on \(\gamma\); a larger \(\gamma\) changes the standard error and the burn-in, and a time step too large for \(\gamma\) and the stiffest mode adds an \(O(\Delta t^2)\) bias.
 - Every plane starts at its anchor, so a plane whose thermal centre lies far from the anchor needs a long `burn_in_steps`. The first image is the reactant minimum. A non-positive curvature there returns `FluxError::InvalidConfig`. A profile that never rises still has a finite Gaussian \(Z_R\), and its barrier is the free energy at the first plane.
 - Path images, masses and positions use the engine units \([L]\) and \([M]\); the arc length \(s\) is mass-weighted, \([M]^{1/2}[L]\), and equals a length for unit masses. `free_energy`, `standard_error`, `barrier`, `barrier_error`, `target_error`, `quadrature_residual` and \(k_{\mathrm{B}}T\) are in \([E]\), `time_step` in \([T]\), `reactant_frequency` and `normalized_rate` in \([T]^{-1}\), and `dividing_arc` in the units of \(s\).
 - `pafi_profile` accepts any `E: DynamicsEngine + ?Sized`, and `pafi_profile_dyn` takes `&mut dyn DynamicsEngine`. The engine must report `StepReport::constraint_force` on constrained steps and implement `energy_and_forces` for the zero-temperature check and for the reactant Hessian.
