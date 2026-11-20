@@ -1,0 +1,8 @@
+# Daw and Chandross, Physical Review Materials 5, 043603 (2021).
+# DOI: 10.1103/PhysRevMaterials.5.043603
+# Table II, pure Cu. Equation (5): the long-time mean-square displacement
+# has slope 6 M_tilde, and the vacancy mobility is M = N_at M_tilde.
+# M(T) = M0 exp(-Qm / k_B T). This row is the comparison column.
+# It is not an input to a rate computed by this crate.
+doi,table,equation,M0_A2_per_ps,M0_unit,Qm_eV,Qm_unit,Qm_sigma_eV,ln_M0_sigma,coordination
+10.1103/PhysRevMaterials.5.043603,II,(5),190,Angstrom^2/ps,0.67,eV,0.013,0.13,12
