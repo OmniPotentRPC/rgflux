@@ -1,12 +1,18 @@
 #![cfg(feature = "rgpot")]
 
+mod pafi_support;
+
 use std::os::raw::c_void;
 
 use ndarray::{Array1, Array2, ArrayView1};
+use pafi_support::{assert_below, assert_coverage, block_stats, seed, widening_barrier_se_cap_at};
 use rgflux::engine::native::{NativeConfig, NativeEngine};
 use rgflux::engine::rgpot::{RgpotConfig, RgpotSurface};
 use rgflux::engine::{DynamicsEngine, ThermostatConfig};
-use rgflux::pafi::{PafiConfig, pafi_profile, pafi_profile_dyn};
+use rgflux::pafi::{
+    FreeEnergyProfile, HermiteIntegral, MeanForceIntegral, PafiConfig, pafi_profile,
+    pafi_profile_dyn,
+};
 use rgflux::stats::StatsConfig;
 use rgpot_core::potential::PotentialImpl;
 use rgpot_core::status::rgpot_status_t;
@@ -212,4 +218,187 @@ fn pafi_runs_unchanged_on_native_and_rgpot_backed_engines() {
         z_rate <= 2.0,
         "rate native {native_rate:.8e} ± {native_rate_error:.8e}, rgpot {rgpot_rate:.8e} ± {rgpot_rate_error:.8e}, z={z_rate:.4}"
     );
+}
+
+const COVERAGE_PLANES: usize = 21;
+const COVERAGE_TEMPERATURE: f64 = 0.02;
+const COVERAGE_SAMPLES: usize = 16_000;
+const COVERAGE_MASS_Y: f64 = 4.0;
+const COVERAGE_GAMMA: f64 = 1.3;
+
+fn assert_close(lhs: f64, rhs: f64) {
+    let tolerance = 1024.0 * f64::EPSILON * lhs.abs().max(rhs.abs()).max(1.0);
+    assert!(
+        (lhs - rhs).abs() <= tolerance,
+        "parity violated: {lhs:.16e} vs {rhs:.16e}"
+    );
+}
+
+fn assert_close_option(lhs: Option<f64>, rhs: Option<f64>) {
+    match (lhs, rhs) {
+        (Some(lhs), Some(rhs)) => assert_close(lhs, rhs),
+        (None, None) => {}
+        _ => panic!("parity violated: {lhs:?} vs {rhs:?}"),
+    }
+}
+
+fn assert_profiles_match(lhs: &FreeEnergyProfile, rhs: &FreeEnergyProfile) {
+    assert_eq!(lhs.dividing_index, rhs.dividing_index);
+    assert_close(lhs.dividing_arc, rhs.dividing_arc);
+    assert_close(lhs.barrier, rhs.barrier);
+    assert_close(lhs.barrier_error, rhs.barrier_error);
+    assert_close(lhs.reactant_frequency, rhs.reactant_frequency);
+    assert_close_option(lhs.reactant_partition, rhs.reactant_partition);
+    assert_close(lhs.reactant_log_partition, rhs.reactant_log_partition);
+    assert_close_option(lhs.normalized_rate, rhs.normalized_rate);
+    assert_close(lhs.normalized_log_rate, rhs.normalized_log_rate);
+    assert_close_option(lhs.normalized_rate_error, rhs.normalized_rate_error);
+    assert_close(lhs.quadrature_residual, rhs.quadrature_residual);
+    for (left, right) in lhs.arc_lengths.iter().zip(&rhs.arc_lengths) {
+        assert_close(*left, *right);
+    }
+    for (left, right) in lhs.free_energy.iter().zip(&rhs.free_energy) {
+        assert_close(*left, *right);
+    }
+    for (left, right) in lhs.standard_error.iter().zip(&rhs.standard_error) {
+        assert_close(*left, *right);
+    }
+}
+
+fn hermite_barrier(planes: usize, thermal: f64) -> f64 {
+    let denominator = (planes - 1) as f64;
+    let arcs: Vec<f64> = (0..planes).map(|i| (i as f64) / denominator).collect();
+    let gradients: Vec<f64> = arcs
+        .iter()
+        .map(|arc| {
+            let x = -1.0 + *arc;
+            -4.0 * x * (1.0 - x * x) + 0.25 * thermal / (1.5 + 0.5 * x)
+        })
+        .collect();
+    HermiteIntegral
+        .cumulative(&arcs, &gradients)
+        .expect("rgpot hermite barrier")
+        .values[planes - 1]
+}
+
+fn coverage_engine(seed_value: u64) -> NativeEngine<ThreeDWell> {
+    let mut engine = NativeEngine::new(
+        ThreeDWell,
+        NativeConfig::default()
+            .with_masses(Array1::from_vec(vec![1.0, COVERAGE_MASS_Y, 2.0]))
+            .with_seed(seed_value)
+            .with_thermostat(
+                ThermostatConfig::default()
+                    .with_gamma(COVERAGE_GAMMA)
+                    .with_temperature(COVERAGE_TEMPERATURE)
+                    .with_boltzmann(1.0),
+            ),
+    )
+    .expect("native engine");
+    engine
+        .shoot_velocities(seed_value)
+        .expect("initial velocities");
+    engine
+}
+
+fn coverage_rgpot_engine(seed_value: u64) -> NativeEngine<RgpotSurface> {
+    let state = Box::new(CallbackState {
+        forces: vec![0.0; 3],
+    });
+    let potential = PotentialImpl::new(
+        three_d_well_callback,
+        Box::into_raw(state).cast::<c_void>(),
+        Some(drop_state),
+    );
+    let surface = RgpotSurface::new(
+        potential,
+        RgpotConfig::default().with_atomic_numbers(vec![29]),
+    )
+    .expect("rgpot surface");
+    let mut engine = NativeEngine::new(
+        surface,
+        NativeConfig::default()
+            .with_masses(Array1::from_vec(vec![1.0, COVERAGE_MASS_Y, 2.0]))
+            .with_seed(seed_value)
+            .with_thermostat(
+                ThermostatConfig::default()
+                    .with_gamma(COVERAGE_GAMMA)
+                    .with_temperature(COVERAGE_TEMPERATURE)
+                    .with_boltzmann(1.0),
+            ),
+    )
+    .expect("rgpot-backed native engine");
+    engine
+        .shoot_velocities(seed_value)
+        .expect("rgpot initial velocities");
+    engine
+}
+
+/// The base engine tests keep the sixty-one plane burn-in. The same potential
+/// and the same seeds must also agree on the whole profile to rounding, on a
+/// short run and on the sampled profile used for the Hermite coverage check.
+#[test]
+fn pafi_trait_object_matches_generic_to_rounding() {
+    let path = path_x_only(-1.0, 0.0, COVERAGE_PLANES);
+    let seed_value = seed(77);
+    let config = PafiConfig::default()
+        .with_planes(COVERAGE_PLANES)
+        .with_burn_in_steps(100)
+        .with_sample_steps(300)
+        .with_time_step(0.05)
+        .with_stats(StatsConfig::default().with_min_batches(2))
+        .with_seed(seed_value);
+    let mut engine = coverage_engine(seed_value);
+    let generic = pafi_profile(&mut engine, path.view(), &config).expect("generic profile");
+    let dyn_engine: &mut dyn DynamicsEngine = &mut engine;
+    let dynamic = pafi_profile_dyn(dyn_engine, path.view(), &config).expect("dynamic profile");
+    assert_profiles_match(&generic, &dynamic);
+}
+
+#[test]
+fn pafi_native_and_rgpot_profiles_agree_to_rounding() {
+    let path = path_x_only(-1.0, 0.0, COVERAGE_PLANES);
+    let seed_value = seed(9);
+    let config = PafiConfig::default()
+        .with_planes(COVERAGE_PLANES)
+        .with_burn_in_steps(100)
+        .with_sample_steps(300)
+        .with_time_step(0.05)
+        .with_stats(StatsConfig::default().with_min_batches(2))
+        .with_seed(seed_value);
+    let mut native = coverage_engine(seed_value);
+    let native_profile = pafi_profile(&mut native, path.view(), &config).expect("native profile");
+    let mut rgpot = coverage_rgpot_engine(seed_value);
+    let rgpot_profile = pafi_profile(&mut rgpot, path.view(), &config).expect("rgpot profile");
+    assert_profiles_match(&native_profile, &rgpot_profile);
+}
+
+#[test]
+fn pafi_rgpot_barrier_covers_hermite_expectation() {
+    let path = path_x_only(-1.0, 0.0, COVERAGE_PLANES);
+    let seed_value = seed(41);
+    let config = PafiConfig::default()
+        .with_planes(COVERAGE_PLANES)
+        .with_burn_in_steps(200)
+        .with_sample_steps(COVERAGE_SAMPLES)
+        .with_time_step(0.05)
+        .with_stats(block_stats(COVERAGE_SAMPLES))
+        .with_seed(seed_value);
+    let mut rgpot = coverage_rgpot_engine(seed_value);
+    let profile = pafi_profile(&mut rgpot, path.view(), &config).expect("rgpot profile");
+    let last = profile.free_energy.len() - 1;
+    let barrier = profile.free_energy[last];
+    let se = profile.standard_error[last];
+    let expected = hermite_barrier(COVERAGE_PLANES, COVERAGE_TEMPERATURE);
+    assert_below(
+        "rgpot barrier SE",
+        se,
+        widening_barrier_se_cap_at(
+            COVERAGE_SAMPLES,
+            COVERAGE_MASS_Y,
+            COVERAGE_GAMMA,
+            COVERAGE_TEMPERATURE,
+        ),
+    );
+    assert_coverage("rgpot barrier", barrier, se, expected);
 }

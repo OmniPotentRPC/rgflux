@@ -56,6 +56,118 @@ fn main() -> Result<(), rgflux::FluxError> {
 }
 #+end_src
 
+* Diagnose correlated samples with batch means, effective sample size, and Geweke windows
+
+Use =stats::batch_means= for the mean and its correlation-aware standard
+error, =stats::effective_sample_size= for the Geyer initial monotone sequence
+estimate, and =stats::check_stationarity= before accepting an equilibrium or
+plateau window
+@@rst::cite:`goswamiBayesianHierarchical2025,flyvbjergErrorEstimates1989,geyerPracticalMcmc1992,gewekeEvaluatingAccuracy1992,flegalMcmcThirdSignificantFigure2008`@@.
+
+For \(a\) non-overlapping batches of width \(b\), batch means \(Y_j\), and
+\(n = ab\) retained observations, the asymptotic variance and standard error
+are
+
+\[
+ \widehat{\sigma}_{\mathrm{BM}}^2 =
+ \frac{b}{a - 1}\sum_{j=1}^{a}(Y_j-\bar{Y})^2,\qquad
+ \operatorname{SE}(\bar{X}) =
+ \sqrt{\widehat{\sigma}_{\mathrm{BM}}^2/n}.
+\]
+
+Geyer's paired initial positive and monotone autocovariance sequence gives the
+statistical inefficiency \(g = 2\tau_{\mathrm{int}}\) and
+\(n_{\mathrm{eff}} = n/g\). The Geweke diagnostic compares leading and
+trailing windows with
+
+\[
+ \lvert z\rvert =
+ \frac{|\bar{X}_{\mathrm{first}}-\bar{X}_{\mathrm{last}}|}
+ {\sqrt{\operatorname{SE}_{\mathrm{first}}^2+
+        \operatorname{SE}_{\mathrm{last}}^2}}.
+\]
+
+#+begin_src rust
+use rgflux::stats::{
+    StatsConfig, batch_means, check_stationarity, effective_sample_size,
+};
+
+fn main() -> Result<(), rgflux::FluxError> {
+    let samples: Vec<f64> = (0..256)
+        .map(|i| {
+            let phase = (i % 16) as f64;
+            (phase * std::f64::consts::TAU / 16.0).sin()
+        })
+        .collect();
+    let config = StatsConfig::default()
+        .with_min_batches(8)
+        .with_stationarity_first_fraction(0.25)
+        .with_stationarity_last_fraction(0.50)
+        .with_max_z_score(3.0);
+
+    let estimate = batch_means(&samples, &config)?;
+    let n_eff = effective_sample_size(&samples)?;
+    let stationarity = check_stationarity(&samples, &config)?;
+
+    assert!(estimate.standard_error >= 0.0);
+    assert_eq!(estimate.n_eff, n_eff);
+    assert!(n_eff >= 1.0 && n_eff <= samples.len() as f64);
+    assert!(stationarity.is_stationary);
+    Ok(())
+}
+#+end_src
+
+* Assemble a rate-network edge and kMC configuration
+
+A directed rate network stores non-negative first-order rates \(k_{ij}\).
+Its continuous-time master equation is
+
+\[
+ \frac{dp_i}{dt} =
+ \sum_{j\ne i} p_j k_{ji} -
+ p_i\sum_{j\ne i}k_{ij}.
+\]
+For a BKL or Gillespie residence-time step in state \(i\), define
+\(K_i = \sum_j k_{ij}\), select event \(j\) with probability
+\(k_{ij}/K_i\), and draw
+\(\Delta t = -\ln u/K_i\) for \(u\) uniform on \((0,1)\)
+@@rst::cite:`goswamiEfficientExploration2025,goswamiConcurrencyAkmc2025,bortzNewAlgorithmMonteCarlo1975,gillespieGeneralMethod1976,henkelmanLongTimeScale2001`@@.
+
+=RateEdge::new= validates one directed edge. =NetworkConfig= records thermal
+and detailed-balance policy, while =RateTableConfig= records trajectory
+limits. =build_rate_table= is deliberately a typed migration boundary in this
+release and returns =FluxError::Unimplemented= rather than silently producing
+an incomplete table.
+
+#+begin_src rust
+use rgflux::FluxError;
+use rgflux::network::{
+    NetworkConfig, RateEdge, RateTableConfig, build_rate_table,
+};
+
+fn main() -> Result<(), rgflux::FluxError> {
+    let edges = vec![
+        RateEdge::new(0, 1, 2.0)?,
+        RateEdge::new(1, 0, 0.5)?,
+    ];
+    let network = NetworkConfig::default()
+        .with_temperature(500.0)
+        .with_boltzmann(1.0)
+        .with_enforce_detailed_balance(true)
+        .with_min_rate(1.0e-12);
+    let trajectory = RateTableConfig::default()
+        .with_max_steps(10_000)
+        .with_seed(7);
+
+    assert_eq!(trajectory.max_steps, 10_000);
+    assert!(matches!(
+        build_rate_table(2, &edges, &network),
+        Err(FluxError::Unimplemented(_))
+    ));
+    Ok(())
+}
+#+end_src
+
 * Place a fixed-normal OH-TST dividing hyperplane and evaluate the rate
 
 Pass a seed =HyperplaneConstraint= and =OhtstConfig= to =ohtst::optimize_hyperplane= @@rst::cite:`goswamiAdaptivePruning2026,johannessonOptimizationHyperplanar2001,bligaardOptimizationHyperplanar2005,vineyardFrequencyFactors1957`@@. Even when the seed offset is displaced from the saddle (here \(c_0 = -0.4\) while the barrier sits at \(c^\ddagger = 0\)), =optimize_hyperplane= relaxes into the reactant minimum, brackets and bisects the stationary dividing hyperplane along the seed normal, samples the curvature probe plane, and returns \(k_{\mathrm{OHTST}} = \frac{1}{2\pi}\sqrt{\kappa / \mu}\exp(-\Delta V / k_{\mathrm{B}}T)\) (with \(\mu\) from =rgsaddle::flux_mass=) alongside its delta-method standard error:
