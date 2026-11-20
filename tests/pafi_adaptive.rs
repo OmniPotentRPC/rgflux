@@ -717,6 +717,26 @@ fn adaptive_driver_uses_the_selected_monitor() {
         "the refinement driver must retain the selected ForceGradient monitor"
     );
     let selected_monitor = curvature.equidistribution.monitor_values();
+    let expected_path_curvature = [
+        0.528_182_608_179_389_8,
+        0.482_686_751_824_158_9,
+        0.433_404_036_507_978_93,
+        0.382_713_336_672_160_6,
+        0.333_460_320_099_071_45,
+        0.309_584_176_535_397_44,
+        0.287_582_701_515_973_9,
+        0.266_139_948_975_763_1,
+        0.245_806_909_162_337_8,
+    ];
+    let path_curvature_error = selected_monitor
+        .iter()
+        .zip(expected_path_curvature)
+        .map(|(actual, expected)| (actual - expected).abs())
+        .fold(0.0_f64, f64::max);
+    assert!(
+        selected_monitor.len() == expected_path_curvature.len() && path_curvature_error <= 1.0e-12,
+        "PathCurvature final monitor changed: {selected_monitor:?}"
+    );
     assert!(
         selected_monitor.iter().any(|&value| value > 1.0e-6),
         "the final driver map must retain non-zero PathCurvature values"
@@ -733,6 +753,27 @@ fn adaptive_driver_uses_the_selected_monitor() {
     assert!(
         selected_force_distance > 1.0e-3,
         "PathCurvature must not be replaced by ForceGradient in the adaptive driver"
+    );
+    let variance_monitor = uniform.equidistribution.monitor_values();
+    let expected_variance = [
+        1.728_979_977_755_787_8e-6,
+        9.820_964_175_163_463e-9,
+        5.925_105_140_408_073e-7,
+        1.922_407_176_454_967_2e-7,
+        4.283_908_639_871_08e-7,
+        1.922_407_176_454_967_2e-7,
+        5.925_105_140_408_073e-7,
+        9.820_964_175_163_463e-9,
+        1.728_979_977_755_787_8e-6,
+    ];
+    let variance_error = variance_monitor
+        .iter()
+        .zip(expected_variance)
+        .map(|(actual, expected)| (actual - expected).abs())
+        .fold(0.0_f64, f64::max);
+    assert!(
+        variance_monitor.len() == expected_variance.len() && variance_error <= 1.0e-12,
+        "AutocorrelatedVariance final monitor changed: {variance_monitor:?}"
     );
 }
 
