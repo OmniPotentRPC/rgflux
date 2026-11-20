@@ -835,17 +835,8 @@ fn projected_force_sample<E: DynamicsEngine + ?Sized>(
     let jacobian_projection = weighted
         .iter()
         .zip(masses.iter())
-        .zip(positions.iter().zip(geometry.anchor.iter()))
         .zip(geometry.dn_ds.iter())
-        .map(|(((weighted, mass), (position, anchor)), dn_ds)| {
-            let root = mass.sqrt();
-            let displacement = if root > 0.0 {
-                weighted / root
-            } else {
-                position - anchor
-            };
-            displacement * dn_ds
-        })
+        .map(|((weighted, mass), dn_ds)| weighted / mass.sqrt() * dn_ds)
         .sum::<f64>();
     let value = lambda * (geometry.dc_ds - jacobian_projection);
     if !value.is_finite() {
@@ -5964,6 +5955,56 @@ mod tests {
         let curvature = reactant_curvature(&mut engine, &geometry, None).expect("soft tether");
         assert_abs_diff_eq!(curvature, 16.0 / 13.0, epsilon = 1.0e-6);
         assert!((curvature - 2.0).abs() > 0.4);
+    }
+
+    #[test]
+    fn projected_force_uses_the_mass_weighted_centre_of_mass() {
+        let mass_1 = 1.0;
+        let mass_2 = 3.0;
+        let masses = Array1::from_vec(vec![mass_1, mass_1, mass_1, mass_2, mass_2, mass_2]);
+        let mut engine = NativeEngine::new(
+            IsotropicPair { stiffness: 3.25 },
+            NativeConfig::default().with_masses(masses),
+        )
+        .expect("engine");
+        let dx_1 = 0.2;
+        let dx_2 = -0.1;
+        let mut dn_ds = Array1::zeros(6);
+        dn_ds[0] = 0.4;
+        dn_ds[3] = -0.2;
+        let mut tangent = Array1::zeros(6);
+        tangent[0] = 1.0;
+        let geometry = PlaneGeometry {
+            anchor: Array1::zeros(6),
+            normal: tangent.clone(),
+            dn_ds,
+            dc_ds: 1.0,
+            tangent,
+            arc: 0.0,
+        };
+        let mut positions = Array1::zeros(6);
+        positions[0] = dx_1;
+        positions[3] = dx_2;
+        let root_mass = engine.masses().mapv(f64::sqrt);
+        let origin = geometry.anchor.clone();
+        let modes = classified_translation_modes(
+            &mut engine,
+            &origin,
+            &root_mass,
+            translation_probe_step(&origin),
+            None,
+        )
+        .expect("translation modes");
+        assert_eq!(modes.len(), 3);
+        engine.set_positions(positions.view()).expect("positions");
+        let force = projected_force_sample(&engine, &geometry, 1.0, &modes).expect("force");
+        let relative = dx_1 - dx_2;
+        let internal = mass_2 / (mass_1 + mass_2) * relative;
+        let internal_2 = -mass_1 / (mass_1 + mass_2) * relative;
+        let equal_mass_half = 0.5 * (dx_1 - dx_2);
+        assert!((internal - equal_mass_half).abs() > 0.05);
+        let expected = 1.0 - internal * geometry.dn_ds[0] - internal_2 * geometry.dn_ds[3];
+        assert_abs_diff_eq!(force, expected, epsilon = 1.0e-12);
     }
 
     const RIGID_SHIFT: [f64; 3] = [4.0, -2.5, 0.0];
