@@ -56,6 +56,8 @@
 //! - Positive barrier `ΔV > 0` above the reactant minimum and positive harmonic
 //!   reactant curvature `κ > 0` at the probe offset `c_probe`.
 //! - Strictly positive thermal energy `k_B * T > 0` and masses `m_i > 0`.
+//! - Positive Langevin friction `gamma > 0`, because the curvature probe is a
+//!   canonical constrained-force expectation.
 //!
 //! ## Units
 //!
@@ -279,11 +281,11 @@ pub struct OhtstEstimate {
 /// # Errors
 ///
 /// - [`FluxError::InvalidConfig`] when a [`OhtstConfig`] field violates its
-///   bounds, thermal energy `k_B * T <= 0`, the flux-mass metric from
-///   [`rgsaddle::flux_mass`] is non-finite or non-positive, reactant
-///   minimization stalls or exhausts its budget, no stationary dividing
-///   surface with positive barrier is found along `seed_plane.normal`, or the
-///   sampled reactant curvature `κ <= 0`.
+///   bounds, thermostat friction is `0`, thermal energy `k_B * T <= 0`, the
+///   flux-mass metric from [`rgsaddle::flux_mass`] is non-finite or
+///   non-positive, reactant minimization stalls or exhausts its budget, no
+///   stationary dividing surface with positive barrier is found along
+///   `seed_plane.normal`, or the sampled reactant curvature `κ <= 0`.
 /// - [`FluxError::Shape`] when `seed_plane.normal.len()` does not match
 ///   `engine.dof()` or `engine.masses().len()`.
 /// - [`FluxError::NonFinite`] when the evaluated rate or standard error

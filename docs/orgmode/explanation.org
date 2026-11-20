@@ -58,7 +58,7 @@ where \(\mu\) is the effective directional flux mass along \(\mathbf{n}\), evalu
 \frac{\partial A}{\partial c} = \langle \lambda \rangle_c, \qquad \lambda(\mathbf{x}) = -\frac{\mathbf{n}^\top \mathbf{M}^{-1} \mathbf{F}(\mathbf{x})}{\mathbf{n}^\top \mathbf{M}^{-1} \mathbf{n}} = \frac{\mathbf{n}^\top \mathbf{M}^{-1} \nabla V(\mathbf{x})}{\mathbf{n}^\top \mathbf{M}^{-1} \mathbf{n}}.
 \]
 
-=hyperplane::sample_hyperplane= equilibrates the constrained system for =burn_in_steps=, records \(\lambda_t\) over =sample_steps= steps, and estimates \(\langle \lambda \rangle_c\) and its block-averaged standard error \(\sigma_\lambda\) via =stats::batch_means= @@rst::cite:`flyvbjergErrorEstimates1989,flegalMcmcThirdSignificantFigure2008`@@ while retaining dividing-surface configurations every =retention_stride= steps.
+=hyperplane::sample_hyperplane= equilibrates the constrained system for =burn_in_steps=, records \(\lambda_t\) over =sample_steps= steps, and estimates \(\langle \lambda \rangle_c\) and its block-averaged standard error \(\sigma_\lambda\) via =stats::batch_means= @@rst::cite:`flyvbjergErrorEstimates1989,flegalMcmcThirdSignificantFigure2008`@@ while retaining dividing-surface configurations every =retention_stride= steps. The average is a canonical expectation only when the dynamics samples the canonical ensemble, so =sample_hyperplane= requires Langevin friction \(\gamma > 0\) and returns =FluxError::InvalidConfig= for \(\gamma = 0\). NVE dynamics started from the anchor samples an energy shell, and the mean it gave before this check was biased with no error. For \(\gamma > 0\) the mean does not depend on \(\gamma\), the constraint scheme (=ConstraintProjection::Rattle= or =Shake=), or the mass distribution, only its standard error and the burn-in it needs do.
 
 =ohtst::optimize_hyperplane= holds the seed normal \(\mathbf{n}\) fixed and determines the stationary dividing hyperplane offset \(c^\ddagger\) and harmonic hyperplanar TST rate @@rst::cite:`vineyardFrequencyFactors1957,johannessonOptimizationHyperplanar2001`@@:
 
@@ -70,7 +70,7 @@ where \(\mu\) is the effective directional flux mass along \(\mathbf{n}\), evalu
    \kappa = \frac{\langle \lambda \rangle_{c_{\mathrm{probe}}}}{c_{\mathrm{probe}} - s_{\min}} > 0.
    \]
 
-   Because \(\langle \lambda \rangle\) carries the sign of \(c_{\mathrm{probe}} - s_{\min}\), dividing by the signed separation yields \(\kappa > 0\) on either side of the reactant minimum.
+   Because \(\langle \lambda \rangle\) carries the sign of \(c_{\mathrm{probe}} - s_{\min}\), dividing by the signed separation yields \(\kappa > 0\) on either side of the reactant minimum. This probe is a canonical expectation, so =optimize_hyperplane= requires \(\gamma > 0\) and rejects NVE dynamics with =FluxError::InvalidConfig=.
 4. *Rate and delta-method uncertainty*: With flux mass \(\mu = (\sum_i n_i^2 / m_i)^{-1}\) from =rgsaddle::flux_mass= (mapping a normal/mass length mismatch to =FluxError::Shape= and a non-finite or non-positive metric to =FluxError::InvalidConfig=) and angular frequency \(\omega = \sqrt{\kappa / \mu}\), the fixed-normal OH-TST rate and its first-order delta-method standard error are
 
    \[
@@ -157,7 +157,11 @@ With two planes the derivative correction cancels and the rule is the trapezoid 
 k = \frac{\omega_0}{2\pi}\exp\!\left(-\frac{\Delta F}{k_{\mathrm{B}}T}\right), \qquad Z_R = \frac{\sqrt{2\pi k_{\mathrm{B}}T}}{\omega_0},
 \]
 
-which is Vineyard harmonic transition-state theory when the path is the unstable mode and the transverse entropy is already in \(\Delta F\). \(\ln Z_R\) and \(\ln k\) are stored as well, so a large barrier does not underflow the reported log rate.
+\(\ln Z_R\) and \(\ln k\) are stored as well, so a large barrier does not underflow the reported log rate.
+
+What \(k\) is: the transition-state rate of the one-dimensional reduction along the path, with the dividing plane at the maximum of the profile and the reactant partition function replaced by its Gaussian value \(Z_R\). It assumes a canonical reactant population, no recrossing (transmission coefficient 1), and a reactant well that is harmonic along the path normal over the thermal range. In the harmonic limit it is Vineyard harmonic transition-state theory, with the transverse entropy already in \(\Delta F\).
+
+What \(k\) is not: it is not the exact transition-state rate, because the Gaussian \(Z_R\) differs from the integral over an anharmonic reactant well, and it is not a dynamical rate, because recrossing is not estimated. On the widening double well, \(k\) is about 4% above the rate with the integrated \(Z_R\) at \(k_{\mathrm{B}}T = 0.2\) and about 8% above it at \(k_{\mathrm{B}}T = 0.35\); the integration tests check that gap. \(\Delta F\) does not rest on the Gaussian assumption: it is the Hermite integral of the sampled plane means and approaches \(F(s^\ddagger) - F(s_0)\) of the plane foliation as sampling and plane spacing are refined.
 
 ** What =pafi_profile= does
 
@@ -179,6 +183,7 @@ The numerator and denominator in step 3 are energies in the engine's energy unit
 ** Assumptions, units, and engine wiring
 
 - Assumes a smooth path of at least two images, with one coordinate per degree of freedom of the engine, whose thermal fluctuations on each plane stay inside the region where neighbouring planes do not intersect, so that \(\mathbf{n} \cdot \mathbf{X}' - (\mathbf{x} - \mathbf{X}) \cdot \mathbf{n}'\) stays positive.
+- The plane means are canonical averages, so the engine must run Langevin dynamics with \(\gamma > 0\) at a positive \(k_{\mathrm{B}}T\). =pafi_profile= returns =FluxError::InvalidConfig= for \(\gamma = 0\), which is NVE. Within \(\gamma > 0\) the expected profile does not depend on \(\gamma\); a larger \(\gamma\) changes the standard error and the burn-in, and a time step too large for \(\gamma\) and the stiffest mode adds an \(O(\Delta t^2)\) bias.
 - Every plane starts at its anchor, so a plane whose thermal centre lies far from the anchor needs a long =burn_in_steps=. The first image is the reactant minimum. A non-positive curvature there returns =FluxError::InvalidConfig=. A profile that never rises still has a finite Gaussian \(Z_R\), and its barrier is the free energy at the first plane.
 - Path images, masses and positions use the engine units \([L]\) and \([M]\); the arc length \(s\) is mass-weighted, \([M]^{1/2}[L]\), and equals a length for unit masses. =free_energy=, =standard_error=, =barrier=, =barrier_error=, =target_error=, =quadrature_residual= and \(k_{\mathrm{B}}T\) are in \([E]\), =time_step= in \([T]\), =reactant_frequency= and =normalized_rate= in \([T]^{-1}\), and =dividing_arc= in the units of \(s\).
 - =pafi_profile= accepts any =E: DynamicsEngine + ?Sized=, and =pafi_profile_dyn= takes =&mut dyn DynamicsEngine=. The engine must report =StepReport::constraint_force= on constrained steps and implement =energy_and_forces= for the zero-temperature check and for the reactant Hessian.
