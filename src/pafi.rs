@@ -1233,7 +1233,7 @@ fn integrate_profile(
         ));
     }
     let normalized_rate = finite_exponential(normalized_log_rate);
-    let normalized_rate_error = linear_rate_error(normalized_log_rate, barrier_error / kbt);
+    let normalized_rate_error = linear_rate_error(normalized_log_rate, barrier_error, kbt);
 
     Ok(FreeEnergyProfile {
         arc_lengths: quadrature.arcs.clone(),
@@ -1288,17 +1288,18 @@ fn linear_euclidean_norm(weights: &[f64], sigmas: &[f64]) -> f64 {
     scale * sum.sqrt()
 }
 
-/// Linear standard error `exp(log_rate) * sigma`.
+/// Linear standard error `exp(log_rate) * error / scale`.
 ///
-/// `Some(0.0)` when `sigma == 0`, even when `exp(log_rate)` underflows.
-/// Otherwise `Some` when `exp(log_rate + ln(sigma))` is finite and positive.
-/// `None` when `sigma != 0` and that exponential overflows, underflows, or is
-/// not finite.
-fn linear_rate_error(log_rate: f64, sigma: f64) -> Option<f64> {
-    if sigma == 0.0 {
+/// The ratio is formed as `ln(error) - ln(scale)` so an intermediate linear
+/// division cannot overflow or underflow. `Some(0.0)` when `error == 0`, even
+/// when `exp(log_rate)` underflows. Otherwise `Some` when the final
+/// exponential is finite and positive. `None` when that exponential
+/// overflows, underflows, or is not finite.
+fn linear_rate_error(log_rate: f64, error: f64, scale: f64) -> Option<f64> {
+    if error == 0.0 {
         return Some(0.0);
     }
-    finite_exponential(log_rate + sigma.ln())
+    finite_exponential(log_rate + error.ln() - scale.ln())
 }
 
 /// Squared projected reactant frequency `omega_0^2 = 1 / (n^T H^-1 n)`.
@@ -2095,6 +2096,25 @@ mod tests {
     fn finite_exponential_rejects_linear_overflow_and_underflow() {
         assert_eq!(finite_exponential(f64::MAX.ln() + 1.0), None);
         assert_eq!(finite_exponential(f64::from_bits(1).ln() - 1.0), None);
+    }
+
+    #[test]
+    fn linear_rate_error_rejects_underflow_after_error_scaling() {
+        assert_eq!(linear_rate_error(-2401.0, 2400.0, 1.0), None);
+    }
+
+    #[test]
+    fn linear_rate_error_matches_linear_ratio_in_normal_range() {
+        let log_rate = -3.25_f64;
+        let barrier_error = 0.75_f64;
+        let kbt = 1.5_f64;
+        let expected = finite_exponential(log_rate + (barrier_error / kbt).ln());
+        let actual = linear_rate_error(log_rate, barrier_error, kbt);
+        assert_abs_diff_eq!(
+            actual.expect("representable scaled error"),
+            expected.expect("representable linear-ratio error"),
+            epsilon = f64::EPSILON
+        );
     }
 
     #[test]
