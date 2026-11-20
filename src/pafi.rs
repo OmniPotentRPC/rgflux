@@ -926,7 +926,9 @@ impl Quadrature {
             previous[k] += 0.5 * h;
             previous[k + 1] += 0.5 * h;
             for (j, weight) in previous.iter_mut().enumerate() {
-                *weight += h * h / 12.0 * (derivative[k][j] - derivative[k + 1][j]);
+                // `h * derivative` is of order one, so scaling it before `h / 12`
+                // keeps a spacing above `sqrt(f64::MAX)` from overflowing `h * h`.
+                *weight += h / 12.0 * (h * derivative[k][j] - h * derivative[k + 1][j]);
             }
             cumulative[k + 1] = previous;
         }
@@ -980,8 +982,8 @@ impl Quadrature {
         weights[k + 1] += h * right_value;
         for (j, weight) in weights.iter_mut().enumerate() {
             *weight += h
-                * h
-                * (left_slope * self.derivative[k][j] + right_slope * self.derivative[k + 1][j]);
+                * (left_slope * (h * self.derivative[k][j])
+                    + right_slope * (h * self.derivative[k + 1][j]));
         }
         weights
     }
@@ -1000,9 +1002,8 @@ impl Quadrature {
         let u4 = u2 * u2;
         free_energy[k]
             + h * (gradients[k] * (u - u3 + 0.5 * u4) + gradients[k + 1] * (u3 - 0.5 * u4))
-            + h * h
-                * (slopes[k] * (0.5 * u2 - 2.0 * u3 / 3.0 + 0.25 * u4)
-                    + slopes[k + 1] * (0.25 * u4 - u3 / 3.0))
+            + h * ((h * slopes[k]) * (0.5 * u2 - 2.0 * u3 / 3.0 + 0.25 * u4)
+                + (h * slopes[k + 1]) * (0.25 * u4 - u3 / 3.0))
     }
 
     /// Global maximum of the interpolated profile.
@@ -1479,7 +1480,9 @@ fn reactant_log_partition_and_sensitivity(
     }
     let mut d_ln_zr_d_f = vec![0.0_f64; n];
     for i in 0..=dividing {
-        d_ln_zr_d_f[i] = -scaled_numerator[i] / (kbt * scaled_half_partition);
+        // The ratio lies in `[0, 1]`, so dividing by `kbt` last cannot
+        // underflow the product `kbt * scaled_half_partition`.
+        d_ln_zr_d_f[i] = -(scaled_numerator[i] / scaled_half_partition) / kbt;
     }
     Ok((reactant_log_partition, d_ln_zr_d_f))
 }
@@ -3453,6 +3456,81 @@ mod tests {
                 "wide integral {wide_value} versus scaled unit integral {scaled}"
             );
         }
+    }
+
+    #[test]
+    fn quadrature_weights_do_not_square_a_huge_spacing() {
+        // `spacing^2` exceeds `f64::MAX` while the derivative weights scale as
+        // `1 / spacing`, so every product `spacing * weight` is of order one.
+        let spacing = 1.0e160_f64;
+        assert!((spacing * spacing).is_infinite());
+        let unit: Vec<f64> = (0..5).map(f64::from).collect();
+        let wide: Vec<f64> = unit.iter().map(|node| node * spacing).collect();
+        let gradients = [1.0, 2.0, 3.0, 2.0, 1.0];
+        let unit_integral = Quadrature::new(&unit)
+            .expect("unit quadrature")
+            .integrate(&gradients);
+        let wide_integral = Quadrature::new(&wide)
+            .expect("wide quadrature")
+            .integrate(&gradients);
+        let lagrange_log_weight_tol =
+            (DERIVATIVE_WINDOW * DERIVATIVE_WINDOW) as f64 * 64.0 * f64::EPSILON;
+        for (unit_value, wide_value) in unit_integral.iter().zip(wide_integral) {
+            let scaled = unit_value * spacing;
+            assert!(
+                wide_value.is_finite()
+                    && (wide_value - scaled).abs()
+                        <= lagrange_log_weight_tol * scaled.abs().max(spacing),
+                "wide integral {wide_value} versus scaled unit integral {scaled}"
+            );
+        }
+    }
+
+    #[test]
+    fn dividing_plane_on_a_huge_spacing_matches_the_scaled_unit_grid() {
+        let spacing = 0.5e160_f64;
+        let peak = 1.7_f64;
+        let unit: Vec<f64> = (0..8).map(|k| f64::from(k) * 0.5).collect();
+        let wide: Vec<f64> = unit.iter().map(|node| node * (spacing / 0.5)).collect();
+        let gradients: Vec<f64> = unit.iter().map(|s| -(s - peak)).collect();
+        let quadrature = Quadrature::new(&wide).expect("quadrature");
+        let free_energy = quadrature.integrate(&gradients);
+        let plane = quadrature.dividing_plane(&gradients, &free_energy);
+        let scale = spacing / 0.5;
+        assert!(
+            (plane.arc - peak * scale).abs() <= 1.0e-9 * scale,
+            "dividing arc {} versus {}",
+            plane.arc,
+            peak * scale
+        );
+        let barrier = peak * peak / 2.0 * scale;
+        assert!(
+            (plane.free_energy - barrier).abs() <= 1.0e-9 * scale,
+            "barrier {} versus {barrier}",
+            plane.free_energy
+        );
+    }
+
+    #[test]
+    fn reactant_sensitivity_keeps_a_ratio_when_kbt_times_the_partition_underflows() {
+        // The scaled half partition is `1e-200`, so multiplying it by `kbt`
+        // underflows to zero. Each node holds half of it, so
+        // `d ln Z_R / d F_i` is `-0.5 / kbt`.
+        let kbt = 1.0e-200_f64;
+        let arcs = [0.0, 1.0e-200];
+        assert_eq!(kbt * 1.0e-200, 0.0);
+        let (_, sensitivity) =
+            reactant_log_partition_and_sensitivity(&arcs, &[0.0, 0.0], 1, kbt).expect("partition");
+        for value in sensitivity {
+            assert!(
+                (value - (-0.5 / kbt)).abs() <= 4.0 * f64::EPSILON * (0.5 / kbt),
+                "sensitivity {value} versus {}",
+                -0.5 / kbt
+            );
+        }
+        let profile = profile_from(&arcs, &[1.0, 1.0], &[0.0, 0.0], kbt, 4.0).expect("profile");
+        assert!(profile.reactant_log_partition.is_finite());
+        assert!(profile.normalized_log_rate.is_finite());
     }
 
     struct BondQuartic;
