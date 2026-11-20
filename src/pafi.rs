@@ -3838,6 +3838,68 @@ mod tests {
         }
     }
 
+    #[test]
+    fn projected_curvature_agrees_with_the_symmetrized_hessian() {
+        // The conjugate-gradient solve applies unsymmetrized directional
+        // products. Each differs from the symmetric Hessian product by the
+        // same `O(h^2)` truncation that symmetrizing the dense matrix halves,
+        // so both curvatures agree with the analytic one to that order.
+        let masses = [1.0, 4.0];
+        let mut engine = NativeEngine::new(
+            CoupledCubic,
+            NativeConfig::default()
+                .with_masses(Array1::from_vec(masses.to_vec()))
+                .with_thermostat(ThermostatConfig::default().with_temperature(0.2)),
+        )
+        .expect("engine");
+        let root = engine.masses().mapv(f64::sqrt);
+        let (x, y) = (0.3_f64, 0.7_f64);
+        let origin = Array1::from_vec(vec![x, y]);
+        let tangent = Array1::from_vec(vec![0.6, 0.8]);
+        let geometry = PlaneGeometry {
+            anchor: origin.clone(),
+            normal: tangent.clone(),
+            dn_ds: Array1::zeros(2),
+            dc_ds: 0.0,
+            tangent: tangent.clone(),
+            arc: 0.0,
+        };
+        let projected = reactant_curvature(&mut engine, &geometry).expect("curvature");
+
+        let normal_norm = (root[0] * tangent[0]).hypot(root[1] * tangent[1]);
+        let n = [
+            root[0] * tangent[0] / normal_norm,
+            root[1] * tangent[1] / normal_norm,
+        ];
+        let inverse_curvature = |h: [[f64; 2]; 2]| {
+            let determinant = h[0][0] * h[1][1] - h[0][1] * h[1][0];
+            (h[1][1] * n[0] * n[0] - (h[0][1] + h[1][0]) * n[0] * n[1] + h[0][0] * n[1] * n[1])
+                / determinant
+        };
+        let dense =
+            mass_weighted_hessian(&mut engine, origin.view(), root.view()).expect("hessian");
+        let symmetrized = 1.0
+            / inverse_curvature([
+                [dense[(0, 0)], dense[(0, 1)]],
+                [dense[(1, 0)], dense[(1, 1)]],
+            ]);
+        let coupling = 1.2 * y * y / (masses[0] * masses[1]).sqrt();
+        let analytic = 1.0
+            / inverse_curvature([
+                [1.0 / masses[0], coupling],
+                [coupling, (1.0 + 2.4 * x * y) / masses[1]],
+            ]);
+        let curvature_tol = 16.0 * hessian_displacement_fraction().powi(2);
+        assert!(
+            (projected - symmetrized).abs() <= curvature_tol,
+            "projected {projected} against symmetrized {symmetrized}"
+        );
+        assert!(
+            (projected - analytic).abs() <= curvature_tol,
+            "projected {projected} against analytic {analytic}"
+        );
+    }
+
     struct SaddleWell;
 
     impl rgsaddle::PointSurface for SaddleWell {
