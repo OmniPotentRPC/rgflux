@@ -788,9 +788,9 @@ fn node_value(rows: &[Vec<f64>], means: &[f64], node: usize) -> f64 {
 
 fn increment_variance(rows: &[Vec<f64>], variances: &[f64], node: usize) -> f64 {
     let mut total = 0.0_f64;
-    for i in 0..variances.len() {
+    for (i, variance) in variances.iter().enumerate() {
         let weight = rows[node][i] - rows[node - 1][i];
-        total += weight * weight * variances[i];
+        total += weight * weight * variance;
     }
     total
 }
@@ -970,9 +970,7 @@ fn curved_standard_error_model_matches_the_langevin_gap() {
     );
     assert!(
         (sampling_model - sampling).abs() <= 1.0e-9 * sampling,
-        "sampling variance {:.16e} versus {:.16e}",
-        sampling_model,
-        sampling
+        "sampling variance {sampling_model:.16e} versus {sampling:.16e}"
     );
     assert!(
         (model.gap_sigma - gap_sigma).abs() <= 1.0e-9 * gap_sigma,

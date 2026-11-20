@@ -143,6 +143,11 @@ fn reference_pafi_defaults_match_the_code() {
         "=max_rounds=",
         format!("=usize= | ={}=", defaults.max_rounds).as_str(),
     );
+    assert_row_contains(
+        &pafi_rows,
+        "=zero_temperature_tol=",
+        "=Option<f64>= | =None=",
+    );
     assert_row_contains(&pafi_rows, "=zero_temperature_tol=", "\\approx");
     assert_row_contains(
         &pafi_rows,
@@ -156,6 +161,38 @@ fn reference_pafi_defaults_match_the_code() {
     );
     assert_eq!(defaults.sample_steps, 4_000);
     assert!(defaults.target_error.is_none());
+    assert!(defaults.zero_temperature_tol.is_none());
+    let (documented, unit) = documented_approximate_value(&pafi_rows, "=zero_temperature_tol=");
+    let intervals = (defaults.planes - 1) as f64;
+    let nine_plane_effective =
+        2.0 * (std::f64::consts::PI * std::f64::consts::PI / 12.0) / (intervals * intervals);
+    let difference = (nine_plane_effective - documented).abs();
+    assert!(
+        difference <= 0.5 * unit,
+        "documented zero_temperature_tol {documented} differs from {nine_plane_effective} by {difference}"
+    );
+}
+
+fn documented_approximate_value(rows: &[String], field: &str) -> (f64, f64) {
+    let row = rows
+        .iter()
+        .find(|row| row.contains(field))
+        .unwrap_or_else(|| panic!("missing row for {field}"));
+    let marker = "\\approx ";
+    let rest = row
+        .split_once(marker)
+        .unwrap_or_else(|| panic!("row for {field} has no `{marker}`:\n{row}"))
+        .1;
+    let numeric: String = rest
+        .chars()
+        .take_while(|ch| ch.is_ascii_digit() || *ch == '.')
+        .collect();
+    let value: f64 = numeric
+        .parse()
+        .unwrap_or_else(|_| panic!("row for {field} has unparseable `{numeric}`:\n{row}"));
+    let decimals = numeric.split('.').nth(1).map(str::len).unwrap_or(0);
+    let unit = 10_f64.powi(-(decimals as i32));
+    (value, unit)
 }
 
 #[test]
@@ -432,7 +469,12 @@ fn howto_pafi_widening_well_example_runs() -> Result<(), FluxError> {
     let analytic = 1.0 + 0.5 * temperature * 1.5_f64.ln();
     assert!(profile.barrier_error > 0.0);
     assert!((profile.barrier - analytic).abs() < 5.0 * profile.barrier_error);
-    assert!(profile.normalized_rate > 0.0 && profile.normalized_rate_error > 0.0);
+    assert!(
+        profile.normalized_rate.is_some_and(|rate| rate > 0.0)
+            && profile
+                .normalized_rate_error
+                .is_some_and(|error| error > 0.0)
+    );
     Ok(())
 }
 

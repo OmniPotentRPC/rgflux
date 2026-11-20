@@ -470,7 +470,7 @@ fn zero_noise_quartic_reproduces_the_barrier_energy() {
 }
 
 #[test]
-fn zero_noise_quartic_rate_is_the_projected_frequency_formula() {
+fn zero_noise_quartic_rate_matches_the_doubled_line_integral() {
     for kt in TEMPERATURES {
         let sampling = Sampling {
             planes: 257,
@@ -479,19 +479,25 @@ fn zero_noise_quartic_rate_is_the_projected_frequency_formula() {
             path_end: 0.0,
         };
         let profile = pafi_once(QUARTIC_1D, kt, sampling, 1);
-        // The plane spacing is fine enough that the integrated barrier is
-        // converged, so any remaining rate error is the normalization.
         assert!(
             (profile.barrier - 1.0).abs() <= 2.0e-5,
             "barrier {:.8} is not converged at 257 planes",
             profile.barrier
         );
-        let vineyard = vineyard_rate(QUARTIC_1D, kt);
-        let ratio = profile.normalized_rate / vineyard;
-        eprintln!("quartic kT={kt}: k/k_vineyard={ratio:.8}");
+        // Mass-weighted arc length is `sqrt(m) dx`. The reactant partition is
+        // the doubled trapezoid from the minimum to the saddle.
+        let mass = MASSES[0];
+        let integral = simpson(|x| (-(1.0 - x * x).powi(2) / kt).exp(), -1.0, 0.0, 8_000);
+        let partition = 2.0 * mass.sqrt() * integral;
+        let expected = (kt / (2.0 * PI)).sqrt() * (-profile.barrier / kt).exp() / partition;
+        let rate = profile
+            .normalized_rate
+            .expect("representable normalized rate");
+        let ratio = rate / expected;
+        eprintln!("quartic kT={kt}: k/k_line={ratio:.8}");
         assert!(
             (ratio - 1.0).abs() <= 1.0e-6,
-            "converged quadrature must give omega_0/(2 pi) exp(-dE/kT); ratio to Vineyard {ratio:.8} at kT={kt}"
+            "converged quadrature must match the doubled line integral; ratio {ratio:.8} at kT={kt}"
         );
     }
 }
