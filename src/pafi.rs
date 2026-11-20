@@ -343,6 +343,16 @@ pub struct PafiConfig {
     /// unresolved sub-`f32` force change cannot be inferred from returned
     /// `f64` values.
     ///
+    /// Numerical probing cannot resolve a physical tether whose Hessian
+    /// response is below the floating-point floor. With a large background
+    /// gradient this floor contains a term of order `eps * |gradient| / h`;
+    /// it also contains the propagated probe-position rounding bound. A
+    /// smaller tether can therefore be classified as invariant and projected.
+    /// Set the corresponding axis to `false` when such a weak tether is known
+    /// to exist. The ambiguous band is only the interval where the
+    /// Richardson truncation uncertainty straddles the computed roundoff
+    /// floor; its total width is twice that uncertainty.
+    ///
     /// Default: `None`.
     pub translation_invariance: Option<[bool; 3]>,
 }
@@ -1360,6 +1370,7 @@ fn finite_difference_hessian_product<E: DynamicsEngine + ?Sized>(
     root_mass: &Array1<f64>,
     direction: &Array1<f64>,
     step: f64,
+    hessian_frobenius: f64,
 ) -> Result<HessianProductEstimate, FluxError> {
     let dof = direction.len();
     let mut displacement = Array1::zeros(dof);
@@ -1374,8 +1385,23 @@ fn finite_difference_hessian_product<E: DynamicsEngine + ?Sized>(
     }
     let scale = step / length;
     let mut gradients = Vec::with_capacity(2);
+    let mut position_error_norms = Vec::with_capacity(2);
+    let unit_roundoff = 0.5 * f64::EPSILON;
     for sign in [1.0_f64, -1.0] {
-        let probe = origin + &displacement.mapv(|value| sign * scale * value);
+        let delta = displacement.mapv(|value| sign * scale * value);
+        let probe = origin + &delta;
+        let mut mass_weighted_position_error_sq = 0.0;
+        for i in 0..dof {
+            // `delta[i]` incurs one multiplication rounding and adding it to
+            // `origin[i]` incurs one addition rounding. The standard
+            // round-to-nearest bound uses u = eps/2 for each operation.
+            let delta_error = unit_roundoff * delta[i].abs();
+            let addition_error =
+                unit_roundoff * (origin[i].abs() + (1.0 + unit_roundoff) * delta[i].abs());
+            let mass_weighted_error = root_mass[i] * (delta_error + addition_error);
+            mass_weighted_position_error_sq += mass_weighted_error * mass_weighted_error;
+        }
+        position_error_norms.push(mass_weighted_position_error_sq.sqrt());
         engine.set_positions(probe.view())?;
         let (_, forces) = engine.energy_and_forces()?;
         gradients.push(forces.mapv(|force| -force));
@@ -1391,9 +1417,12 @@ fn finite_difference_hessian_product<E: DynamicsEngine + ?Sized>(
     if product.iter().any(|value| !value.is_finite()) {
         return Err(FluxError::NonFinite("PAFI reactant Hessian product"));
     }
+    let gradient_roundoff = nrm2(component_roundoff.view());
+    let position_roundoff =
+        hessian_frobenius * (position_error_norms[0] + position_error_norms[1]) / (2.0 * scale);
     Ok(HessianProductEstimate {
         value: product,
-        roundoff_floor: nrm2(component_roundoff.view()),
+        roundoff_floor: gradient_roundoff + position_roundoff,
     })
 }
 
@@ -1403,16 +1432,34 @@ fn estimate_hessian_product<E: DynamicsEngine + ?Sized>(
     root_mass: &Array1<f64>,
     direction: &Array1<f64>,
     step: f64,
+    hessian_frobenius: f64,
 ) -> Result<(Array1<f64>, f64, f64), FluxError> {
-    let coarse = finite_difference_hessian_product(engine, origin, root_mass, direction, step)?;
-    let fine = finite_difference_hessian_product(engine, origin, root_mass, direction, 0.5 * step)?;
+    let coarse = finite_difference_hessian_product(
+        engine,
+        origin,
+        root_mass,
+        direction,
+        step,
+        hessian_frobenius,
+    )?;
+    let fine = finite_difference_hessian_product(
+        engine,
+        origin,
+        root_mass,
+        direction,
+        0.5 * step,
+        hessian_frobenius,
+    )?;
     // A centered derivative has O(h^2) truncation error. The fine-grid error
     // estimate is therefore (fine - coarse) / (2^2 - 1), and adding it gives
     // the Richardson-extrapolated Hessian product.
     let correction = (&fine.value - &coarse.value).mapv(|value| value / 3.0);
     let uncertainty = nrm2(correction.view());
     let value = &fine.value + &correction;
-    Ok((value, uncertainty, fine.roundoff_floor))
+    // Richardson extrapolation is (4 * fine - coarse) / 3, so independent
+    // absolute roundoff bounds propagate with those same absolute weights.
+    let roundoff_floor = (4.0 * fine.roundoff_floor + coarse.roundoff_floor) / 3.0;
+    Ok((value, uncertainty, roundoff_floor))
 }
 
 fn classify_translation_mode(
@@ -1467,6 +1514,21 @@ fn reactant_curvature<E: DynamicsEngine + ?Sized>(
     // coordinate magnitude.
     let step = f64::EPSILON.cbrt() * (1.0 + reach);
 
+    let hessian_frobenius = if dof >= 6 && dof % 3 == 0 && translation_invariance.is_none() {
+        let mut squared_bound = 0.0;
+        for i in 0..dof {
+            let mut basis = Array1::zeros(dof);
+            basis[i] = 1.0;
+            let (column, uncertainty, roundoff_floor) =
+                estimate_hessian_product(engine, &origin, &root_mass, &basis, step, 0.0)?;
+            let column_bound = nrm2(column.view()) + uncertainty + roundoff_floor;
+            squared_bound += column_bound * column_bound;
+        }
+        squared_bound.sqrt()
+    } else {
+        0.0
+    };
+
     let mut translation_modes = Vec::new();
     if dof >= 6 && dof % 3 == 0 {
         for axis in 0..3 {
@@ -1480,8 +1542,14 @@ fn reactant_curvature<E: DynamicsEngine + ?Sized>(
             let is_invariant = if declaration.is_some() {
                 classify_translation_mode(axis, 0.0, 0.0, 0.0, declaration)?
             } else {
-                let (product, uncertainty, roundoff_floor) =
-                    estimate_hessian_product(engine, &origin, &root_mass, &translation, step)?;
+                let (product, uncertainty, roundoff_floor) = estimate_hessian_product(
+                    engine,
+                    &origin,
+                    &root_mass,
+                    &translation,
+                    step,
+                    hessian_frobenius,
+                )?;
                 classify_translation_mode(
                     axis,
                     nrm2(product.view()),
@@ -1524,7 +1592,7 @@ fn reactant_curvature<E: DynamicsEngine + ?Sized>(
 
     let mut apply = |direction: &Array1<f64>| -> Result<Array1<f64>, FluxError> {
         let (mut product, _, _) =
-            estimate_hessian_product(engine, &origin, &root_mass, direction, step)?;
+            estimate_hessian_product(engine, &origin, &root_mass, direction, step, 0.0)?;
         remove_translations(&mut product);
         Ok(product)
     };
@@ -2636,6 +2704,12 @@ pub struct AdaptiveFreeEnergyProfile {
     pub tail: SpectralTailReport,
     /// Final monitor equidistribution map `s -> sigma(s)`.
     pub equidistribution: EquidistributionMap,
+    /// Final geometric path-curvature channel `||dn/ds||_2` at each plane,
+    /// before monitor selection or normalization.
+    pub final_path_curvatures: Vec<f64>,
+    /// Final autocorrelation-weighted force-variance channel at each plane,
+    /// before monitor selection or normalization.
+    pub final_tau_weighted_variances: Vec<f64>,
     /// Number of plane-insertion refinement rounds executed after the initial placement.
     pub refinement_rounds: usize,
     /// Total force calls performed across zero-temperature checks and constrained MD steps.
@@ -2908,6 +2982,8 @@ pub fn pafi_profile_adaptive<E: DynamicsEngine + ?Sized>(
                         profile,
                         tail,
                         equidistribution: current_map,
+                        final_path_curvatures: curvatures,
+                        final_tau_weighted_variances: variances,
                         refinement_rounds,
                         force_calls,
                     });
@@ -2986,6 +3062,8 @@ pub fn pafi_profile_adaptive<E: DynamicsEngine + ?Sized>(
                         profile,
                         tail,
                         equidistribution: current_map,
+                        final_path_curvatures: curvatures,
+                        final_tau_weighted_variances: variances,
                         refinement_rounds,
                         force_calls,
                     });
@@ -3069,6 +3147,8 @@ pub fn pafi_profile_adaptive<E: DynamicsEngine + ?Sized>(
                         profile,
                         tail,
                         equidistribution: current_map,
+                        final_path_curvatures: curvatures,
+                        final_tau_weighted_variances: variances,
                         refinement_rounds,
                         force_calls,
                     });
@@ -3414,16 +3494,34 @@ mod tests {
         }
     }
 
-    struct LastCoordinateLinear;
+    struct CoordinateLinear {
+        index: usize,
+    }
 
-    impl rgsaddle::PointSurface for LastCoordinateLinear {
+    impl rgsaddle::PointSurface for CoordinateLinear {
         fn eval(
             &self,
             x: ArrayView1<'_, f64>,
         ) -> Result<(f64, Array1<f64>), rgsaddle::SaddleError> {
             let mut gradient = Array1::zeros(x.len());
-            gradient[x.len() - 1] = 1.0;
-            Ok((x[x.len() - 1], gradient))
+            gradient[self.index] = 1.0;
+            Ok((x[self.index], gradient))
+        }
+    }
+
+    struct AnharmonicOneDim {
+        harmonic: f64,
+        quartic: f64,
+    }
+
+    impl rgsaddle::PointSurface for AnharmonicOneDim {
+        fn eval(
+            &self,
+            x: ArrayView1<'_, f64>,
+        ) -> Result<(f64, Array1<f64>), rgsaddle::SaddleError> {
+            let energy = 0.5 * self.harmonic * x[0] * x[0] + 0.25 * self.quartic * x[0].powi(4);
+            let gradient = self.harmonic * x[0] + self.quartic * x[0].powi(3);
+            Ok((energy, Array1::from_vec(vec![gradient])))
         }
     }
 
@@ -3479,6 +3577,47 @@ mod tests {
             let curvature =
                 reactant_curvature(&mut engine, &geometry, None).expect("projected curvature");
             assert_abs_diff_eq!(curvature, 2.0 * stiffness, epsilon = 1.0e-7);
+        }
+    }
+
+    #[test]
+    fn invariant_pair_is_projected_across_far_from_origin_probe_grid() {
+        let stiffness = 3.25;
+        let mut tangent = Array1::from_vec(vec![0.3, 0.2, -0.1, 0.9, 0.2, 0.4]);
+        let tangent_norm = nrm2(tangent.view());
+        tangent.mapv_inplace(|value| value / tangent_norm);
+        let mut engine = NativeEngine::new(
+            IsotropicPair { stiffness },
+            NativeConfig::default().with_masses(Array1::ones(6)),
+        )
+        .expect("pair engine");
+        for anchor_index in 0..60 {
+            let anchor = 0.25 * anchor_index as f64;
+            for extension in [0.0, 0.25, 0.75, 2.0] {
+                let positions = Array1::from_vec(vec![
+                    anchor,
+                    anchor,
+                    anchor,
+                    anchor + extension,
+                    anchor + extension,
+                    anchor + extension,
+                ]);
+                let geometry = PlaneGeometry {
+                    anchor: positions,
+                    normal: tangent.clone(),
+                    dn_ds: Array1::zeros(6),
+                    dc_ds: 1.0,
+                    tangent: tangent.clone(),
+                    arc: 0.0,
+                };
+                let curvature = reactant_curvature(&mut engine, &geometry, None)
+                    .unwrap_or_else(|error| {
+                        panic!(
+                            "invariant probe failed at anchor {anchor} and extension {extension}: {error}"
+                        )
+                    });
+                assert_abs_diff_eq!(curvature, 2.0 * stiffness, epsilon = 1.0e-7);
+            }
         }
     }
 
@@ -3588,6 +3727,34 @@ mod tests {
     }
 
     #[test]
+    fn declared_false_keeps_an_invariant_translation_unprojected() {
+        let mut tangent = Array1::from_vec(vec![0.8, 0.0, 0.0, 0.6, 0.0, 0.0]);
+        let tangent_norm = nrm2(tangent.view());
+        tangent.mapv_inplace(|value| value / tangent_norm);
+        let geometry = PlaneGeometry {
+            anchor: Array1::zeros(6),
+            normal: tangent.clone(),
+            dn_ds: Array1::zeros(6),
+            dc_ds: 1.0,
+            tangent,
+            arc: 0.0,
+        };
+        let mut engine = NativeEngine::new(
+            IsotropicPair { stiffness: 3.25 },
+            NativeConfig::default().with_masses(Array1::ones(6)),
+        )
+        .expect("invariant pair");
+        let error = reactant_curvature(&mut engine, &geometry, Some([false, true, true]))
+            .expect_err("declared false x translation must remain in the solve");
+        assert_eq!(
+            error,
+            FluxError::InvalidConfig(
+                "PAFI reactant Hessian is not positive definite along the path normal"
+            )
+        );
+    }
+
+    #[test]
     fn translation_probe_is_independent_for_each_anisotropic_axis() {
         let inv_sqrt_two = 0.5_f64.sqrt();
         for (tether, translation_components, expected) in [
@@ -3644,20 +3811,116 @@ mod tests {
         let mut direction = Array1::zeros(6);
         direction[0] = 1.0;
         let step = f64::EPSILON.cbrt();
+        for index in [0, 5] {
+            let mut engine = NativeEngine::new(
+                CoordinateLinear { index },
+                NativeConfig::default().with_masses(Array1::ones(6)),
+            )
+            .expect("linear surface");
+            let estimate = finite_difference_hessian_product(
+                &mut engine,
+                &origin,
+                &root_mass,
+                &direction,
+                step,
+                0.0,
+            )
+            .expect("finite-difference estimate");
+            assert_eq!(estimate.value, Array1::zeros(6));
+            assert_abs_diff_eq!(
+                estimate.roundoff_floor,
+                f64::EPSILON / step,
+                epsilon = f64::EPSILON
+            );
+        }
+    }
+
+    #[test]
+    fn position_rounding_floor_matches_operation_error_bound() {
+        let stiffness = 3.25;
+        let origin = Array1::from_elem(6, 10.0);
+        let root_mass = Array1::ones(6);
+        let inv_sqrt_two = 0.5_f64.sqrt();
+        let direction = Array1::from_vec(vec![inv_sqrt_two, 0.0, 0.0, inv_sqrt_two, 0.0, 0.0]);
+        let step = f64::EPSILON.cbrt() * 11.0;
+        let hessian_frobenius = 12.0_f64.sqrt() * stiffness;
         let mut engine = NativeEngine::new(
-            LastCoordinateLinear,
+            IsotropicPair { stiffness },
             NativeConfig::default().with_masses(Array1::ones(6)),
         )
-        .expect("linear surface");
-        let estimate =
-            finite_difference_hessian_product(&mut engine, &origin, &root_mass, &direction, step)
-                .expect("finite-difference estimate");
-        assert_eq!(estimate.value, Array1::zeros(6));
+        .expect("pair engine");
+        let without_position = finite_difference_hessian_product(
+            &mut engine,
+            &origin,
+            &root_mass,
+            &direction,
+            step,
+            0.0,
+        )
+        .expect("gradient-only floor");
+        let with_position = finite_difference_hessian_product(
+            &mut engine,
+            &origin,
+            &root_mass,
+            &direction,
+            step,
+            hessian_frobenius,
+        )
+        .expect("position-aware floor");
+
+        let unit_roundoff = 0.5 * f64::EPSILON;
+        let position_error_norm = |sign: f64| {
+            let mut squared = 0.0;
+            for i in 0..6 {
+                let delta = sign * step * direction[i];
+                let multiplication = unit_roundoff * delta.abs();
+                let addition =
+                    unit_roundoff * (origin[i].abs() + (1.0 + unit_roundoff) * delta.abs());
+                squared += (multiplication + addition).powi(2);
+            }
+            squared.sqrt()
+        };
+        let expected_position = hessian_frobenius
+            * (position_error_norm(1.0) + position_error_norm(-1.0))
+            / (2.0 * step);
         assert_abs_diff_eq!(
-            estimate.roundoff_floor,
-            f64::EPSILON / step,
-            epsilon = f64::EPSILON
+            with_position.roundoff_floor - without_position.roundoff_floor,
+            expected_position,
+            epsilon = f64::EPSILON * expected_position
         );
+    }
+
+    #[test]
+    fn richardson_correction_recovers_anharmonic_hessian() {
+        let harmonic = 2.75;
+        let quartic = 8.0;
+        let origin = Array1::zeros(1);
+        let root_mass = Array1::ones(1);
+        let direction = Array1::ones(1);
+        let step = 0.1;
+        let mut engine = NativeEngine::new(
+            AnharmonicOneDim { harmonic, quartic },
+            NativeConfig::default().with_masses(Array1::ones(1)),
+        )
+        .expect("anharmonic engine");
+        let fine = finite_difference_hessian_product(
+            &mut engine,
+            &origin,
+            &root_mass,
+            &direction,
+            0.5 * step,
+            0.0,
+        )
+        .expect("fine Hessian product");
+        assert_abs_diff_eq!(
+            fine.value[0],
+            harmonic + quartic * step * step / 4.0,
+            epsilon = 1.0e-12
+        );
+        let (corrected, _, _) =
+            estimate_hessian_product(&mut engine, &origin, &root_mass, &direction, step, 0.0)
+                .expect("Richardson Hessian product");
+        assert_abs_diff_eq!(corrected[0], harmonic, epsilon = 1.0e-12);
     }
 
     #[test]
