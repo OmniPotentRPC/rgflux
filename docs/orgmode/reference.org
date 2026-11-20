@@ -450,6 +450,12 @@ The generated block is authoritative. Run
 *** =FluxError=
 
 - =rgflux::FluxError=
+- =rgflux::FluxError::AmbiguousTranslationMode=
+- =rgflux::FluxError::AmbiguousTranslationMode::ambiguity=
+- =rgflux::FluxError::AmbiguousTranslationMode::axis=
+- =rgflux::FluxError::AmbiguousTranslationMode::response=
+- =rgflux::FluxError::AmbiguousTranslationMode::roundoff_floor=
+- =rgflux::FluxError::AmbiguousTranslationMode::uncertainty=
 - =rgflux::FluxError::BackendUnavailable=
 - =rgflux::FluxError::ConstraintViolation=
 - =rgflux::FluxError::ConstraintViolation::residual=
@@ -726,6 +732,12 @@ The generated block is authoritative. Run
 
 - =rgflux::error=
 - =rgflux::error::FluxError=
+- =rgflux::error::FluxError::AmbiguousTranslationMode=
+- =rgflux::error::FluxError::AmbiguousTranslationMode::ambiguity=
+- =rgflux::error::FluxError::AmbiguousTranslationMode::axis=
+- =rgflux::error::FluxError::AmbiguousTranslationMode::response=
+- =rgflux::error::FluxError::AmbiguousTranslationMode::roundoff_floor=
+- =rgflux::error::FluxError::AmbiguousTranslationMode::uncertainty=
 - =rgflux::error::FluxError::BackendUnavailable=
 - =rgflux::error::FluxError::ConstraintViolation=
 - =rgflux::error::FluxError::ConstraintViolation::residual=
@@ -1035,6 +1047,7 @@ The generated block is authoritative. Run
 - =rgflux::pafi::PafiConfig::stats=
 - =rgflux::pafi::PafiConfig::target_error=
 - =rgflux::pafi::PafiConfig::time_step=
+- =rgflux::pafi::PafiConfig::translation_invariance=
 - =rgflux::pafi::PafiConfig::with_burn_in_steps=
 - =rgflux::pafi::PafiConfig::with_max_rounds=
 - =rgflux::pafi::PafiConfig::with_planes=
@@ -1043,6 +1056,7 @@ The generated block is authoritative. Run
 - =rgflux::pafi::PafiConfig::with_stats=
 - =rgflux::pafi::PafiConfig::with_target_error=
 - =rgflux::pafi::PafiConfig::with_time_step=
+- =rgflux::pafi::PafiConfig::with_translation_invariance=
 - =rgflux::pafi::PafiConfig::with_zero_temperature_tol=
 - =rgflux::pafi::PafiConfig::zero_temperature_tol=
 - =rgflux::pafi::SimpsonIntegral=
