@@ -42,6 +42,12 @@
 //!
 //! Seeds: `PAFI_SEED_OFFSET` shifts every seed by a multiple of a large odd
 //! constant, so a sweep over offsets draws independent suites.
+//!
+//! Sweeps: [`offset_sweep`] draws a capped quantity at a fixed list of
+//! offsets and [`assert_sweep_within_budget`] requires the empirical failure
+//! rate of each cap to stay within [`ASSERTION_ALPHA`]. The curved, widening,
+//! rate, refinement, end-plane and rgpot caps each have an ignored sweep test
+//! that runs with `cargo test -- --ignored sweep`.
 
 #![allow(dead_code)]
 
@@ -103,6 +109,98 @@ pub const fn t_cap(reference: f64, cv: f64) -> f64 {
 /// [`seed`].
 pub fn seed_with_offset(base: u64, offset: u64) -> u64 {
     base.wrapping_add(offset.wrapping_mul(0x9E37_79B9_7F4A_7C15))
+}
+
+/// Result of an empirical offset sweep over several capped quantities.
+pub struct SweepReport {
+    /// Number of seed offsets that were drawn.
+    pub offsets: u64,
+    /// Failures of each check: a value that is not finite, not positive, or
+    /// above its cap.
+    pub failures: Vec<u64>,
+    /// Largest `value / cap` seen for each check.
+    pub worst_ratio: Vec<f64>,
+}
+
+/// Runs `trial` at offsets `0..offsets` and tallies each check against its
+/// cap.
+///
+/// `trial` maps one offset to `(value, cap)` pairs, one per check, in a fixed
+/// order of length `checks`. Offsets are spread over worker threads. Every
+/// trial is seeded from its offset alone, so the report does not depend on
+/// the worker count or the scheduling.
+pub fn offset_sweep<F>(offsets: u64, checks: usize, trial: F) -> SweepReport
+where
+    F: Fn(u64) -> Vec<(f64, f64)> + Sync,
+{
+    let workers = std::thread::available_parallelism()
+        .map_or(1, usize::from)
+        .clamp(1, 8);
+    let trial = &trial;
+    let partials = std::thread::scope(|scope| {
+        let mut handles = Vec::with_capacity(workers);
+        for worker in 0..workers {
+            handles.push(scope.spawn(move || {
+                let mut failures = vec![0_u64; checks];
+                let mut worst = vec![0.0_f64; checks];
+                let mut offset = worker as u64;
+                while offset < offsets {
+                    let outcomes = trial(offset);
+                    assert_eq!(
+                        outcomes.len(),
+                        checks,
+                        "sweep trial must return every check"
+                    );
+                    for (index, (value, cap)) in outcomes.into_iter().enumerate() {
+                        if !(value.is_finite() && value > 0.0 && value <= cap) {
+                            failures[index] += 1;
+                        }
+                        worst[index] = worst[index].max(value / cap);
+                    }
+                    offset += workers as u64;
+                }
+                (failures, worst)
+            }));
+        }
+        handles
+            .into_iter()
+            .map(|handle| handle.join().expect("sweep thread"))
+            .collect::<Vec<_>>()
+    });
+    let mut failures = vec![0_u64; checks];
+    let mut worst_ratio = vec![0.0_f64; checks];
+    for (local_failures, local_worst) in partials {
+        for index in 0..checks {
+            failures[index] += local_failures[index];
+            worst_ratio[index] = worst_ratio[index].max(local_worst[index]);
+        }
+    }
+    SweepReport {
+        offsets,
+        failures,
+        worst_ratio,
+    }
+}
+
+/// Asserts that every check of a sweep failed at a rate within
+/// [`ASSERTION_ALPHA`], the budget of one statistical assertion.
+///
+/// With fewer than `1 / ASSERTION_ALPHA` offsets a single failure already
+/// exceeds the budget, so the sweep accepts no failures.
+pub fn assert_sweep_within_budget(name: &str, labels: &[&str], report: &SweepReport) {
+    assert_eq!(labels.len(), report.failures.len(), "one label per check");
+    for (index, label) in labels.iter().enumerate() {
+        let failures = report.failures[index];
+        let rate = (failures as f64) / (report.offsets as f64);
+        eprintln!(
+            "{name} sweep {label}: failures={failures} seeds={} rate={rate:.6e} budget={ASSERTION_ALPHA:.6e} worst_ratio={:.6}",
+            report.offsets, report.worst_ratio[index]
+        );
+        assert!(
+            rate <= ASSERTION_ALPHA,
+            "{name} sweep {label}: empirical failure rate {rate:.6e} exceeds {ASSERTION_ALPHA:.6e}"
+        );
+    }
 }
 
 /// Deterministic seed for suite offset `PAFI_SEED_OFFSET` (default zero).
