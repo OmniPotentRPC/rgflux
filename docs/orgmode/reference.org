@@ -868,7 +868,7 @@ The generated block is authoritative. Run
 - =rgflux::kappa::bennett_chandler::ShootingConfig::steps=
 - =rgflux::kappa::bennett_chandler::ShootingConfig::time_step=
 - =rgflux::kappa::bennett_chandler::ShootingConfig::with_antithetic=
-- =rgflux::kappa::bennett_chandler::ShootingConfig::with_commit_checkpoints=
+- =rgflux::kappa::bennett_chandler::ShootingConfig::with_early_commitment=
 - =rgflux::kappa::bennett_chandler::ShootingConfig::with_estimator=
 - =rgflux::kappa::bennett_chandler::ShootingConfig::with_kappa=
 - =rgflux::kappa::bennett_chandler::ShootingConfig::with_seed=

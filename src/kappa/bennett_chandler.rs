@@ -251,13 +251,16 @@ with_setters!(ShootingConfig {
 });
 
 impl ShootingConfig {
-    /// Set [`KappaConfig::commit_checkpoints`] on [`Self::kappa`].
-    ///
-    /// A nonzero value opts into early commitment and also requires a finite,
-    /// positive [`KappaConfig::commitment_distance`].
+    /// Opt into early commitment with an explicit checkpoint count and
+    /// minimum absolute signed distance.
     #[must_use]
-    pub fn with_commit_checkpoints(mut self, commit_checkpoints: usize) -> Self {
+    pub fn with_early_commitment(
+        mut self,
+        commit_checkpoints: usize,
+        commitment_distance: f64,
+    ) -> Self {
         self.kappa.commit_checkpoints = commit_checkpoints;
+        self.kappa.commitment_distance = commitment_distance;
         self
     }
 }

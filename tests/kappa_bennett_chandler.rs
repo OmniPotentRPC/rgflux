@@ -683,8 +683,9 @@ fn validate_commit_checkpoints_and_config_setters() {
         .with_steps(16)
         .with_kappa(kcfg.clone());
     assert_eq!(scfg.kappa, kcfg);
-    let scfg2 = scfg.with_commit_checkpoints(9);
+    let scfg2 = scfg.with_early_commitment(9, 0.5);
     assert_eq!(scfg2.kappa.commit_checkpoints, 9);
+    assert_eq!(scfg2.kappa.commitment_distance, 0.5);
 
     assert_eq!(
         Side::committed_from_signed_distance(-1e-12),

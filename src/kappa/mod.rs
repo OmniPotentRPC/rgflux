@@ -65,7 +65,7 @@ pub const DEFAULT_COMMIT_CHECKPOINTS: usize = 0;
 ///
 /// [`shoot_reactive_trajectories`] and [`shoot_bennett_chandler`] read
 /// [`Self::commit_checkpoints`] through [`ShootingConfig::kappa`] (or
-/// [`ShootingConfig::with_commit_checkpoints`]). Steepest-descent endpoint
+/// [`ShootingConfig::with_early_commitment`]). Steepest-descent endpoint
 /// quenching is not yet implemented, so [`Self::quench_force_tol`] and
 /// [`Self::quench_max_steps`] are not read yet.
 #[derive(Clone, Debug, PartialEq)]
