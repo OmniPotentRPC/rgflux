@@ -223,7 +223,7 @@ Here \(I_T\) is the trapezoid integral of \(dV/ds\) over the plane anchors and \
 | =normalized_rate= | =Option<f64>= | Linear transition rate \(k = \exp(\ln k)\) in inverse engine time, or =None= if \(\exp(\ln k)\) overflows or underflows =f64= (never =Some(0.0)=) |
 | =normalized_log_rate= | =f64= | \(\ln k = \tfrac{1}{2}\ln(k_{\mathrm{B}}T / 2\pi) - \Delta F / k_{\mathrm{B}}T - \ln Z_R\), finite even when =normalized_rate= underflows or overflows =f64= |
 | =normalized_rate_error= | =Option<f64>= | Delta-method standard error \(\exp(\ln k + \ln \sigma_{\ln k})\) propagating the plane-mean errors through both \(\Delta F / k_{\mathrm{B}}T\) and \(\ln Z_R\) in log space, or =None= if the linear error overflows =f64= (=Some(0.0)= when \(\sigma_{\ln k} = 0\) or the product underflows) |
-| =quadrature_residual= | =f64= | Largest absolute gap between the Hermite integral of \(dV/ds\) and the endpoint energy change. The acceptance check remains the trapezoid comparison in =PafiConfig::zero_temperature_tol= |
+| =quadrature_residual= | =f64= | Largest absolute discrepancy, over the sampled planes, between the Hermite integral of \(dV/ds\) from the first plane and the anchor energy measured from the first plane. The acceptance check remains the trapezoid comparison in =PafiConfig::zero_temperature_tol= |
 
 ** =network::NetworkConfig= and =RateTableConfig=
 
@@ -257,7 +257,7 @@ Here \(I_T\) is the trapezoid integral of \(dV/ds\) over the plane anchors and \
 | =hyperplane::HyperplaneSample= | =plane=, =mean_force=, =standard_error=, =configurations= | Output of =hyperplane::sample_hyperplane(engine, plane, config)= |
 | =ohtst::OhtstEstimate= | =plane=, =rate=, =standard_error= | Output of =ohtst::optimize_hyperplane(engine, seed_plane, config)= |
 | =ffs::FfsEstimate= | =initial_flux=, =interface_probabilities=, =rate=, =standard_error= | Output of =ffs::forward_flux_rate(engine, order_param, config)= |
-| =pafi::FreeEnergyProfile= | =arc_lengths=, =free_energy=, =standard_error=, =barrier=, =barrier_error=, =dividing_index=, =dividing_arc=, =reactant_frequency=, =reactant_partition=, =reactant_log_partition=, =normalized_rate=, =normalized_log_rate=, =normalized_rate_error=, =quadrature_residual= | Output of =pafi::pafi_profile(engine, path_images, config)= and =pafi::pafi_profile_dyn(engine, path_images, config)=; see the field table in the configuration section |
+| =pafi::FreeEnergyProfile= | =arc_lengths=, =free_energy=, =standard_error=, =barrier=, =barrier_error=, =dividing_index=, =dividing_arc=, =reactant_frequency=, =reactant_hessian_certified=, =reactant_partition=, =reactant_log_partition=, =normalized_rate=, =normalized_log_rate=, =normalized_rate_error=, =quadrature_residual= | Output of =pafi::pafi_profile(engine, path_images, config)= and =pafi::pafi_profile_dyn(engine, path_images, config)=; see the field table in the configuration section |
 | =network::RateEdge= | =from=, =to=, =rate= (=RateEdge::new(from, to, rate)=) | Directed elementary transition edge in =network::build_rate_table= |
 
 ** Estimator and sampling entry points

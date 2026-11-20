@@ -33,9 +33,14 @@
 //! more planes the window has at least four nodes, the rule is exact for
 //! cubic `g`, and the global error is `O(h^4)` for smoother `g`. The dividing
 //! plane `s*` is the global maximum of that interpolant, not the highest
-//! sampled plane: on each segment the derivative is a cubic, solved in closed
-//! form, and the barrier is the largest value at those roots and the
-//! endpoints. The barrier is `Delta F = F(s*) - F(s_0)`.
+//! sampled plane: on each segment the derivative is a cubic, whose roots in
+//! the segment are bracketed between its critical points and refined by
+//! bisection, and the barrier is the largest value at those roots and the
+//! sampled endpoints. The endpoint slopes are formed from derivative weights
+//! already scaled by the segment width, so a very wide or very narrow plane
+//! spacing neither underflows nor overflows them, and a slope or interpolant
+//! value that is still not finite returns [`FluxError::NonFinite`]. The
+//! barrier is `Delta F = F(s*) - F(s_0)`.
 //!
 //! The reactant partition is the doubled trapezoid of the Boltzmann weight up
 //! to `s_div`, the right endpoint `s_{k+1}` of the segment `[s_k, s_{k+1}]`
