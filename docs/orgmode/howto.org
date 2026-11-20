@@ -343,9 +343,7 @@ fn main() -> Result<(), rgflux::FluxError> {
     assert!(profile.barrier_error > 0.0);
     assert!((profile.barrier - analytic).abs() < 5.0 * profile.barrier_error);
     assert!(
-        profile
-            .normalized_rate
-            .is_some_and(|rate| rate > 0.0)
+        profile.normalized_rate.is_some_and(|rate| rate > 0.0)
             && profile
                 .normalized_rate_error
                 .is_some_and(|error| error > 0.0)

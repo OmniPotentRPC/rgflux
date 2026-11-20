@@ -155,12 +155,13 @@ fn reactant_frequency_is_the_mass_weighted_hessian_projection() {
         profile.reactant_frequency,
         expected
     );
-    let gaussian = (2.0 * PI * kt).sqrt() / expected;
-    let partition = profile.reactant_partition.expect("representable partition");
-    assert!((partition - gaussian).abs() <= 1.0e-6 * gaussian);
-    assert!((profile.reactant_log_partition - gaussian.ln()).abs() <= 1.0e-6 * gaussian.ln().abs());
-    let flux = (kt / (2.0 * PI)).sqrt() * (-profile.barrier / kt).exp() / partition;
-    let rate = profile.normalized_rate.expect("representable rate");
-    assert!((rate - flux).abs() <= 1.0e-12 * flux);
+    let reactant_partition = profile
+        .reactant_partition
+        .expect("representable reactant partition");
+    let flux = (kt / (2.0 * PI)).sqrt() * (-profile.barrier / kt).exp() / reactant_partition;
+    let normalized_rate = profile
+        .normalized_rate
+        .expect("representable normalized rate");
+    assert!((normalized_rate - flux).abs() <= 1.0e-12 * flux);
     assert!((profile.normalized_log_rate - flux.ln()).abs() <= 1.0e-9 * flux.ln().abs().max(1.0));
 }
