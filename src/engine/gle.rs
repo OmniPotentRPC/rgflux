@@ -125,11 +125,11 @@ pub fn atomic_units_per_engine_time() -> f64 {
 pub struct GleThermostat {
     active: bool,
     drift: [[f64; GLE_DIM]; GLE_DIM],
-    cached_dt: u64,
-    cached_kbt: u64,
-    /// `0` when auxiliaries belong to Cartesian coordinates. Otherwise the
-    /// FNV-1a key of the mass-independent Cartesian normal they were drawn for.
-    basis_key: u64,
+    cached_dt: Option<f64>,
+    cached_kbt: Option<f64>,
+    /// `None` when auxiliaries belong to Cartesian coordinates. Otherwise the
+    /// FNV-1a key of the mass-weighted axis they were drawn for.
+    basis_key: Option<u64>,
     transition: [[f64; GLE_DIM]; GLE_DIM],
     diffusion: [[f64; GLE_DIM]; GLE_DIM],
     auxiliaries: Vec<f64>,
@@ -143,9 +143,9 @@ impl GleThermostat {
         Self {
             active: false,
             drift: [[0.0; GLE_DIM]; GLE_DIM],
-            cached_dt: u64::MAX,
-            cached_kbt: u64::MAX,
-            basis_key: 0,
+            cached_dt: None,
+            cached_kbt: None,
+            basis_key: None,
             transition: identity(),
             diffusion: [[0.0; GLE_DIM]; GLE_DIM],
             auxiliaries: Vec::new(),
@@ -165,9 +165,9 @@ impl GleThermostat {
                 self.active = true;
                 let factor = atomic_units_per_engine_time();
                 self.drift = scale(&SMART_SAMPLING_A_AU, factor);
-                self.cached_dt = u64::MAX;
-                self.cached_kbt = u64::MAX;
-                self.basis_key = 0;
+                self.cached_dt = None;
+                self.cached_kbt = None;
+                self.basis_key = None;
                 self.auxiliaries
                     .resize(dof.saturating_mul(GLE_DIM - 1), 0.0);
                 self.auxiliaries_ready = false;
@@ -203,8 +203,8 @@ impl GleThermostat {
         if !self.active {
             return Ok(());
         }
-        if self.basis_key != 0 {
-            self.basis_key = 0;
+        if self.basis_key.is_some() {
+            self.basis_key = None;
             self.auxiliaries_ready = false;
         }
         if velocities.len() != masses.len() {
@@ -306,15 +306,15 @@ impl GleThermostat {
             velocities[0] = 0.0;
             self.auxiliaries.clear();
             self.auxiliaries_ready = false;
-            self.basis_key = 0;
+            self.basis_key = None;
             return Ok(());
         }
-        let key = normal_key(normal);
+        let key = normal_key(&axis);
         let tangent = dof - 1;
         let extra = GLE_DIM - 1;
         let width = tangent * extra;
-        if self.basis_key != key || self.auxiliaries.len() != width {
-            self.basis_key = key;
+        if self.basis_key != Some(key) || self.auxiliaries.len() != width {
+            self.basis_key = Some(key);
             self.auxiliaries.resize(width, 0.0);
             self.auxiliaries_ready = false;
         }
@@ -391,7 +391,7 @@ impl GleThermostat {
     }
 
     fn ensure_propagator(&mut self, dt: f64, kbt: f64) -> Result<(), FluxError> {
-        if self.cached_dt == dt.to_bits() && self.cached_kbt == kbt.to_bits() {
+        if self.cached_dt == Some(dt) && self.cached_kbt == Some(kbt) {
             return Ok(());
         }
         let transition = expm(&scale(&self.drift, -dt));
@@ -410,8 +410,8 @@ impl GleThermostat {
         }
         self.transition = transition;
         self.diffusion = diffusion;
-        self.cached_dt = dt.to_bits();
-        self.cached_kbt = kbt.to_bits();
+        self.cached_dt = Some(dt);
+        self.cached_kbt = Some(kbt);
         Ok(())
     }
 }
@@ -600,14 +600,14 @@ fn dense_scale<const N: usize>(matrix: &[[f64; N]; N]) -> f64 {
         .fold(0.0_f64, |acc, value| acc.max(value.abs()))
 }
 
-fn normal_key(normal: &[f64]) -> u64 {
+fn normal_key(values: &[f64]) -> u64 {
     let mut hash = 0xcbf29ce484222325_u64;
-    for value in normal {
+    for value in values {
         hash = hash
             .wrapping_mul(0x100000001b3)
             .wrapping_add(value.to_bits());
     }
-    if hash == 0 { 1 } else { hash }
+    hash
 }
 
 fn mass_weighted_axis(normal: &[f64], masses: &[f64]) -> Result<Vec<f64>, FluxError> {
@@ -743,6 +743,48 @@ mod tests {
         assert!(
             relative < 0.12,
             "mass-weighted momentum variance {variance} vs kT {kbt}"
+        );
+    }
+
+    #[test]
+    fn the_same_normal_with_different_masses_does_not_reuse_the_tangent_basis() {
+        let normal = [0.6_f64, 0.8];
+        let light = [1.0_f64, 1.0];
+        let heavy = [1.0_f64, 16.0];
+        let light_axis = mass_weighted_axis(&normal, &light).expect("light axis");
+        let heavy_axis = mass_weighted_axis(&normal, &heavy).expect("heavy axis");
+        assert!(
+            (light_axis[0] - heavy_axis[0]).abs() > 0.2,
+            "the masses have to move the mass-weighted axis"
+        );
+        let start = [0.3_f64, -0.2];
+        let kbt = 0.25;
+        let dt = 0.05;
+        let mut warmed = GleThermostat::inactive();
+        warmed.sync(ColoredNoise::SmartSampling, start.len());
+        let mut rng = StdRng::seed_from_u64(9);
+        let mut warm_velocity = start;
+        warmed
+            .apply_on_tangent(&mut warm_velocity, &light, &normal, &mut rng, kbt, dt)
+            .expect("warm");
+        let mut reused = start;
+        let mut rng_second = StdRng::seed_from_u64(42);
+        warmed
+            .apply_on_tangent(&mut reused, &heavy, &normal, &mut rng_second, kbt, dt)
+            .expect("second");
+        let mut fresh = GleThermostat::inactive();
+        fresh.sync(ColoredNoise::SmartSampling, start.len());
+        let mut redrawn = start;
+        let mut rng_fresh = StdRng::seed_from_u64(42);
+        fresh
+            .apply_on_tangent(&mut redrawn, &heavy, &normal, &mut rng_fresh, kbt, dt)
+            .expect("fresh");
+        assert!(
+            reused
+                .iter()
+                .zip(redrawn)
+                .all(|(left, right)| (left - right).abs() <= 1.0e-12),
+            "cached basis survived a mass change: reused {reused:?} fresh {redrawn:?}"
         );
     }
 }
