@@ -3525,6 +3525,72 @@ mod tests {
         }
     }
 
+    struct AmbiguousTranslationPair {
+        coupling: f64,
+        background_gradient: f64,
+        tether: f64,
+        quartic: f64,
+    }
+
+    impl rgsaddle::PointSurface for AmbiguousTranslationPair {
+        fn eval(
+            &self,
+            x: ArrayView1<'_, f64>,
+        ) -> Result<(f64, Array1<f64>), rgsaddle::SaddleError> {
+            let mut energy = 0.0;
+            let mut gradient = Array1::zeros(6);
+            for axis in 0..3 {
+                let extension = x[3 + axis] - x[axis];
+                energy += 0.5 * self.coupling * extension * extension;
+                gradient[axis] = -self.coupling * extension;
+                gradient[3 + axis] = self.coupling * extension;
+            }
+            let inv_sqrt_two = 0.5_f64.sqrt();
+            let center = (x[0] + x[3]) * inv_sqrt_two;
+            energy += self.background_gradient * center
+                + 0.5 * self.tether * center * center
+                + 0.25 * self.quartic * center.powi(4);
+            let center_gradient =
+                self.background_gradient + self.tether * center + self.quartic * center.powi(3);
+            gradient[0] += center_gradient * inv_sqrt_two;
+            gradient[3] += center_gradient * inv_sqrt_two;
+            Ok((energy, gradient))
+        }
+    }
+
+    struct AllToAllHarmonic {
+        atoms: usize,
+        stiffness: f64,
+        tether: f64,
+    }
+
+    impl rgsaddle::PointSurface for AllToAllHarmonic {
+        fn eval(
+            &self,
+            x: ArrayView1<'_, f64>,
+        ) -> Result<(f64, Array1<f64>), rgsaddle::SaddleError> {
+            let mut energy = 0.0;
+            let mut gradient = Array1::zeros(x.len());
+            for i in 0..x.len() {
+                energy += 0.5 * self.tether * x[i] * x[i];
+                gradient[i] += self.tether * x[i];
+            }
+            for first in 0..self.atoms {
+                for second in (first + 1)..self.atoms {
+                    for axis in 0..3 {
+                        let i = 3 * first + axis;
+                        let j = 3 * second + axis;
+                        let extension = x[j] - x[i];
+                        energy += 0.5 * self.stiffness * extension * extension;
+                        gradient[i] -= self.stiffness * extension;
+                        gradient[j] += self.stiffness * extension;
+                    }
+                }
+            }
+            Ok((energy, gradient))
+        }
+    }
+
     #[test]
     fn mass_metric_sets_normal_and_multiplier_conversion() {
         let path = Array2::from_shape_vec((2, 2), vec![0.0, 0.0, 1.0, 1.0]).expect("shape");
@@ -3619,6 +3685,49 @@ mod tests {
                 assert_abs_diff_eq!(curvature, 2.0 * stiffness, epsilon = 1.0e-7);
             }
         }
+    }
+
+    #[test]
+    fn dense_invariant_hessian_requires_full_frobenius_bound() {
+        let atoms = 64;
+        let stiffness = 0.25;
+        let tether = 1.3e-8;
+        let dof = 3 * atoms;
+        let mut positions = Array1::zeros(dof);
+        let mut tangent = Array1::zeros(dof);
+        for atom in 0..atoms {
+            for axis in 0..3 {
+                let i = 3 * atom + axis;
+                positions[i] = 14.75 + (atom as f64) / 3.0 + 0.1 * axis as f64;
+                tangent[i] = ((atom + 2 * axis) % 5) as f64 - 2.0;
+            }
+        }
+        let tangent_norm = nrm2(tangent.view());
+        tangent.mapv_inplace(|value| value / tangent_norm);
+        let geometry = PlaneGeometry {
+            anchor: positions,
+            normal: tangent.clone(),
+            dn_ds: Array1::zeros(dof),
+            dc_ds: 1.0,
+            tangent,
+            arc: 0.0,
+        };
+        let mut engine = NativeEngine::new(
+            AllToAllHarmonic {
+                atoms,
+                stiffness,
+                tether,
+            },
+            NativeConfig::default().with_masses(Array1::ones(dof)),
+        )
+        .expect("dense invariant engine");
+        let curvature =
+            reactant_curvature(&mut engine, &geometry, None).expect("projected curvature");
+        assert_abs_diff_eq!(
+            curvature,
+            atoms as f64 * stiffness + tether,
+            epsilon = 1.0e-7
+        );
     }
 
     #[test]
@@ -3891,6 +4000,67 @@ mod tests {
     }
 
     #[test]
+    fn position_rounding_floor_uses_masses_and_adds_gradient_roundoff() {
+        let root_mass = Array1::from_vec(vec![1.0, 2.0, 3.0, 1.5, 2.5, 4.0]);
+        let masses = root_mass.mapv(|value| value * value);
+        let origin = Array1::from_vec(vec![1.0, -2.0, 3.0, -4.0, 5.0, -6.0]);
+        let mut direction = Array1::from_vec(vec![0.3, -0.2, 0.1, 0.4, -0.5, 0.6]);
+        let direction_norm = nrm2(direction.view());
+        direction.mapv_inplace(|value| value / direction_norm);
+        let step = f64::EPSILON.cbrt() * 7.0;
+        let hessian_frobenius = 7.0;
+        let mut engine = NativeEngine::new(
+            CoordinateLinear { index: 0 },
+            NativeConfig::default().with_masses(masses),
+        )
+        .expect("linear surface");
+        let gradient_only = finite_difference_hessian_product(
+            &mut engine,
+            &origin,
+            &root_mass,
+            &direction,
+            step,
+            0.0,
+        )
+        .expect("gradient-only floor");
+        let combined = finite_difference_hessian_product(
+            &mut engine,
+            &origin,
+            &root_mass,
+            &direction,
+            step,
+            hessian_frobenius,
+        )
+        .expect("combined floor");
+
+        let displacement = &direction / &root_mass;
+        let scale = step / nrm2(displacement.view());
+        let unit_roundoff = 0.5 * f64::EPSILON;
+        let position_error_norm = |sign: f64| {
+            let mut squared = 0.0;
+            for i in 0..origin.len() {
+                let delta = sign * scale * displacement[i];
+                let multiplication = unit_roundoff * delta.abs();
+                let addition =
+                    unit_roundoff * (origin[i].abs() + (1.0 + unit_roundoff) * delta.abs());
+                let mass_weighted = root_mass[i] * (multiplication + addition);
+                squared += mass_weighted * mass_weighted;
+            }
+            squared.sqrt()
+        };
+        let expected_position = hessian_frobenius
+            * (position_error_norm(1.0) + position_error_norm(-1.0))
+            / (2.0 * scale);
+        assert!(gradient_only.roundoff_floor > 0.0);
+        assert!(expected_position > 0.0);
+        assert_abs_diff_eq!(
+            combined.roundoff_floor,
+            gradient_only.roundoff_floor + expected_position,
+            epsilon = f64::EPSILON * combined.roundoff_floor
+        );
+    }
+
+    #[test]
     fn richardson_roundoff_floor_uses_both_step_sizes() {
         let origin = Array1::zeros(6);
         let root_mass = Array1::ones(6);
@@ -3942,6 +4112,72 @@ mod tests {
             estimate_hessian_product(&mut engine, &origin, &root_mass, &direction, step, 0.0)
                 .expect("Richardson Hessian product");
         assert_abs_diff_eq!(corrected[0], harmonic, epsilon = 1.0e-12);
+    }
+
+    #[test]
+    fn reactant_curvature_uses_richardson_product_in_cg_solve() {
+        let harmonic = 2.75;
+        let quartic = 8.0;
+        let anchor = 0.7;
+        let geometry = PlaneGeometry {
+            anchor: Array1::from_vec(vec![anchor]),
+            normal: Array1::ones(1),
+            dn_ds: Array1::zeros(1),
+            dc_ds: 1.0,
+            tangent: Array1::ones(1),
+            arc: 0.0,
+        };
+        let mut engine = NativeEngine::new(
+            AnharmonicOneDim { harmonic, quartic },
+            NativeConfig::default().with_masses(Array1::ones(1)),
+        )
+        .expect("anharmonic engine");
+        let curvature =
+            reactant_curvature(&mut engine, &geometry, None).expect("reactant curvature");
+        let expected = harmonic + 3.0 * quartic * anchor * anchor;
+        assert_abs_diff_eq!(curvature, expected, epsilon = 1.0e-10);
+    }
+
+    #[test]
+    fn engine_probe_reports_thin_ambiguous_translation_band() {
+        let tangent = Array1::from_vec(vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0]);
+        let geometry = PlaneGeometry {
+            anchor: Array1::zeros(6),
+            normal: tangent.clone(),
+            dn_ds: Array1::zeros(6),
+            dc_ds: 1.0,
+            tangent,
+            arc: 0.0,
+        };
+        let mut engine = NativeEngine::new(
+            AmbiguousTranslationPair {
+                coupling: 3.25,
+                background_gradient: 300.0,
+                tether: 1.0e-8,
+                quartic: 2_000.0,
+            },
+            NativeConfig::default().with_masses(Array1::ones(6)),
+        )
+        .expect("ambiguous translation engine");
+        let error =
+            reactant_curvature(&mut engine, &geometry, None).expect_err("ambiguous x translation");
+        match error {
+            FluxError::AmbiguousTranslationMode {
+                axis,
+                response,
+                uncertainty,
+                roundoff_floor,
+                ..
+            } => {
+                assert_eq!(axis, "x");
+                assert!(
+                    response < roundoff_floor && roundoff_floor < response + uncertainty,
+                    "expected response < floor < response + uncertainty, got {response:e} < {roundoff_floor:e} < {:e}",
+                    response + uncertainty
+                );
+            }
+            other => panic!("expected ambiguous translation mode, got {other}"),
+        }
     }
 
     #[test]
