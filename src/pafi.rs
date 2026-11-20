@@ -410,7 +410,11 @@ pub struct FreeEnergyProfile {
     /// Propagated standard error of the linear normalized rate. The reactant
     /// Hessian is deterministic, so only [`Self::barrier`] contributes.
     ///
-    /// `None` only when the representable linear error overflows.
+    /// Holds `exp(normalized_log_rate + ln(sigma))` with
+    /// `sigma = barrier_error / k_B T`. `Some(0.0)` when `sigma == 0`.
+    /// Otherwise `Some` when that exponential is finite and positive.
+    /// `None` when `sigma != 0` and the exponential overflows to infinity,
+    /// underflows to zero, or is not finite (for example non-finite `sigma`).
     pub normalized_rate_error: Option<f64>,
     /// Largest absolute discrepancy, over the sampled planes, between the
     /// Hermite integral of `dV/ds` and the anchor energy measured from the
@@ -1286,8 +1290,10 @@ fn linear_euclidean_norm(weights: &[f64], sigmas: &[f64]) -> f64 {
 
 /// Linear standard error `exp(log_rate) * sigma`.
 ///
-/// A zero `sigma` remains representable even when the corresponding rate is
-/// not. `None` means the nonzero linear error overflows.
+/// `Some(0.0)` when `sigma == 0`, even when `exp(log_rate)` underflows.
+/// Otherwise `Some` when `exp(log_rate + ln(sigma))` is finite and positive.
+/// `None` when `sigma != 0` and that exponential overflows, underflows, or is
+/// not finite.
 fn linear_rate_error(log_rate: f64, sigma: f64) -> Option<f64> {
     if sigma == 0.0 {
         return Some(0.0);
@@ -1937,6 +1943,18 @@ mod tests {
                 .reactant_partition
                 .is_some_and(|partition| partition.is_finite() && partition > 0.0)
         );
+    }
+
+    #[test]
+    fn normalized_rate_error_is_none_when_the_linear_value_underflows() {
+        let arcs = [0.0, 1.0, 2.0, 3.0];
+        let gradients = [800.0, 800.0, 800.0, 800.0];
+        let errors = [0.01, 0.01, 0.01, 0.01];
+        let profile = profile_from(&arcs, &gradients, &errors, 1.0, 4.0).expect("profile");
+        assert!(profile.barrier > 700.0);
+        assert!(profile.normalized_rate.is_none());
+        assert!(profile.normalized_rate_error.is_none());
+        assert!(profile.barrier_error > 0.0);
     }
 
     #[test]

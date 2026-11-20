@@ -425,7 +425,7 @@ fn main() -> Result<(), rgflux::FluxError> {
 
 Projected Average Force Integration (PAFI) cite:`goswamiEnhancedClimbingImage2026,goswamiReproducibleOrchestration2026,swinburneUnsupervisedCalculation2018` takes the images of a converged minimum-energy path, for example from a nudged elastic band, and returns the free-energy profile \(F(s)\), the barrier \(\Delta F\), the dividing plane, and the normalized rate \(k\) through `pafi::pafi_profile`. The method is described under /Projected Average Force Integration/ in the explanation page and the defaults in the reference page.
 
-The example runs a straight path from the minimum \(x = -1\) to the saddle \(x = 0\) of the widening double well \(V(x, y) = (1 - x^2)^2 + \tfrac{1}{2}(1.5 + 0.5x)y^2\) at \(k_{\mathrm{B}}T = 0.2\), where the exact barrier is \(\Delta F = 1 + \tfrac{1}{2}k_{\mathrm{B}}T \ln 1.5\). It uses 33 planes. The trapezoid rule over the planes biases \(\Delta F\) low by about \(0.0156\,(8/(\text{planes} - 1))^2\) here, which is 0.025 with the default 9 planes (eight standard errors of this short run) and 0.0016 with 33, so the run checks the result within five standard errors.
+The example runs a straight path from the minimum \(x = -1\) to the saddle \(x = 0\) of the widening double well \(V(x, y) = (1 - x^2)^2 + \tfrac{1}{2}(1.5 + 0.5x)y^2\) at \(k_{\mathrm{B}}T = 0.2\), where the exact barrier is \(\Delta F = 1 + \tfrac{1}{2}k_{\mathrm{B}}T \ln 1.5\). It uses 33 planes. The free-energy profile is the cubic Hermite integral of the plane means, so the trapezoid bias of about \(0.0156\,(8/(\text{planes} - 1))^2\) (0.025 with the default 9 planes, 0.0016 with 33) is the scale of the zero-temperature guard and is not left in \(\Delta F\). The run checks the barrier within five standard errors.
 
 ```rust
 use ndarray::{Array1, Array2, ArrayView1};
@@ -485,7 +485,14 @@ fn main() -> Result<(), rgflux::FluxError> {
     let analytic = 1.0 + 0.5 * temperature * 1.5_f64.ln();
     assert!(profile.barrier_error > 0.0);
     assert!((profile.barrier - analytic).abs() < 5.0 * profile.barrier_error);
-    assert!(profile.normalized_rate > 0.0 && profile.normalized_rate_error > 0.0);
+    assert!(
+        profile
+            .normalized_rate
+            .is_some_and(|rate| rate > 0.0)
+            && profile
+                .normalized_rate_error
+                .is_some_and(|error| error > 0.0)
+    );
     Ok(())
 }
 ```
@@ -493,7 +500,7 @@ fn main() -> Result<(), rgflux::FluxError> {
 Points to adapt for a real path:
 
 - *Images*: `path_images` has one row per image and one column per degree of freedom, in the units and ordering of the engine. The planes are placed by the spline, not at the images, so the number of images and `planes` are independent.
-- *Planes and tolerance*: The zero-temperature check compares \(\lvert I_T - \Delta E_0\rvert / \max(E_{\mathrm{unit}}, \lvert\Delta E_0\rvert)\) with a dimensionless tolerance. Here \(I_T\) is the trapezoid integral of \(dV/ds\), \(\Delta E_0\) is the endpoint energy change and \(E_{\mathrm{unit}}\) is one energy unit of the engine. The stored default is about 2.6% for 9 planes. While the field retains that value, the effective tolerance scales as \((\text{planes} - 1)^{-2}\) when `planes` changes. A value supplied with `with_zero_temperature_tol` is used unchanged. A sharper path can require a larger explicit tolerance. A failing check returns `FluxError::InvalidConfig` before any sampling.
+- *Planes and tolerance*: The zero-temperature check compares \(\lvert I_T - \Delta E_0\rvert / \max(E_{\mathrm{unit}}, \lvert\Delta E_0\rvert)\) with a dimensionless tolerance. Here \(I_T\) is the trapezoid integral of \(dV/ds\), \(\Delta E_0\) is the endpoint energy change and \(E_{\mathrm{unit}}\) is one energy unit of the engine. `zero_temperature_tol` is `Option<f64>`. `None`, the default, uses \(2 (\pi^2 / 12) / (\text{planes} - 1)^2\), about 2.6% at 9 planes, and scales when `planes` changes. `with_zero_temperature_tol` sets a value used at every plane count, including a value equal to the 9-plane tolerance. A sharper path can require a larger explicit tolerance. A failing check returns `FluxError::InvalidConfig` before any sampling.
 - *Statistical error*: Set `with_target_error(0.01)` and `with_max_rounds(8)` to repeat sampling in rounds of `sample_steps` until `barrier_error` reaches the target. Reaching `max_rounds` first is not an error, so compare `barrier_error` with the target yourself.
 - *Reproducibility*: The seed of plane \(k\) in round \(r\) is `seed + 4099 * k + 1000003 * r`, so a fixed `with_seed` gives the same profile for a deterministic engine.
 - *Engine*: `pafi_profile_dyn` accepts `&mut dyn DynamicsEngine`. The engine is restored on return, with the stochastic stream the only exception.
@@ -608,7 +615,7 @@ fn main() -> Result<(), rgflux::FluxError> {
 | `kappa::bennett_chandler` | Engine-free reactive-flux estimator and `DynamicsEngine` trajectory shooter | Implemented |
 | `kappa` | Kramers analytical barrier-recrossing factor; surface-shooting quench classifiers and first-crossing estimators | `kramers_transmission_coefficient` and `KappaConfig` implemented; the quench and first-crossing drivers are not yet implemented |
 | `hyperplane` | Constrained hyperplane sampling (`sample_hyperplane`) and zero-variance control variates | Mean constraint force and configuration retention implemented; the in-plane virial, torque, and control variates are not yet implemented |
-| `pafi` | Projected Average Force Integration along reaction paths (`PafiConfig`, `FreeEnergyProfile`, `pafi_profile`, `pafi_profile_dyn`) | Implemented: mass-metric spline planes with not-a-knot ends, zero-temperature path-force check, burn-in and batch-means sampling per plane, adaptive rounds to a target error, log-stable reactant partition quadrature, trapezoid free-energy profile, barrier, and normalized rate with propagated errors; the engine is restored on return |
+| `pafi` | Projected Average Force Integration along reaction paths (`PafiConfig`, `FreeEnergyProfile`, `pafi_profile`, `pafi_profile_dyn`) | Implemented: mass-metric spline planes with not-a-knot ends, zero-temperature trapezoid path-force check, burn-in and batch-means sampling per plane, adaptive rounds to a target error, cubic Hermite free-energy profile, global interpolant maximum, projected-frequency reactant partition, barrier, and normalized rate with propagated errors; the engine is restored on return |
 | `ohtst` | OH-TST with a fixed hyperplane normal (`optimize_hyperplane`) | Implemented for a fixed normal with `rgsaddle::flux_mass`; normal optimization is not yet implemented |
 | `ffs` | Forward Flux Sampling across ordered interfaces (`forward_flux_rate`) | Implemented: flux collection, staged trials, and uncertainty propagation. Exit restores positions, velocities, the periodic cell, the thermostat, and the constraint; the stochastic stream is left where the run put it |
 | `network` | Symmetry-resolved rate networks and kinetic Monte Carlo rate tables (`NetworkConfig`, `RateTableConfig`, `RateEdge`, `build_rate_table`) | `RateEdge::new` and configuration types implemented; `build_rate_table` is not yet implemented |
@@ -795,29 +802,32 @@ Constructors and methods: `HyperplaneConstraint::new(normal, offset)`, `from_dir
 | `time_step` | `f64` | `0.002` | Integration timestep \(\Delta t > 0\) in engine time units |
 | `target_error` | `Option<f64>` | `None` | Optional target standard error on \(\Delta F\) (finite, \(\ge 0\)); `None` runs one round |
 | `max_rounds` | `usize` | `4` | Maximum sampling rounds (\(\ge 1\)); later rounds run only while `target_error` is set and not reached, and missing it is not an error |
-| `zero_temperature_tol` | `f64` | \(2 (\pi^2 / 12) / 8^2 \approx 0.0257\) | Dimensionless tolerance for \(\lvert I_T - \Delta E_0\rvert / \max(E_{\mathrm{unit}}, \lvert\Delta E_0\rvert)\), where both energies use engine energy units and \(E_{\mathrm{unit}}\) is one such unit (finite, \(\ge 0\)); see the scaling note below |
+| `zero_temperature_tol` | `Option<f64>` | `None` | Dimensionless tolerance for \(\lvert I_T - \Delta E_0\rvert / \max(E_{\mathrm{unit}}, \lvert\Delta E_0\rvert)\), where both energies use engine energy units and \(E_{\mathrm{unit}}\) is one such unit. `None` uses \(2 (\pi^2 / 12) / (\text{planes} - 1)^2\) (\(\approx 0.0257\) at 9 planes). `Some(value)` uses that finite value (\(\ge 0\)) at every plane count, including the 9-plane value; see the scaling note below |
 | `seed` | `u64` | `1` | Base of the per-plane seeds `seed + 4099 * plane + 1000003 * round` (wrapping) |
 | `stats` | `StatsConfig` | `StatsConfig::default()` | Batch-means settings for the per-plane force series |
 
 Here \(I_T\) is the trapezoid integral of \(dV/ds\) over the plane anchors and \(\Delta E_0\) is the endpoint energy change. The ratio is relative to \(\lvert\Delta E_0\rvert\) at or above one engine energy unit and bounds the absolute discrepancy below that scale.
 
-The value stored by `PafiConfig::default()` is the 9-plane value shown in the table. While the field retains that value, the effective tolerance is \(2 (\pi^2 / 12) / (\text{planes} - 1)^2\), so changing `planes` scales the tolerance with the trapezoid error. An explicitly different value is used unchanged. The scaling follows a quarter-turn circular arc through a harmonic well. A path that turns further can need a larger explicit tolerance.
+`None`, the value stored by `PafiConfig::default()`, sets the effective tolerance to \(2 (\pi^2 / 12) / (\text{planes} - 1)^2\). At the default 9 planes that is the \(\approx 0.0257\) in the table, and changing `planes` scales the tolerance with the trapezoid error. `Some(value)` uses `value` at every plane count, including a value equal to the 9-plane tolerance. The scaling follows a quarter-turn circular arc through a harmonic well. A path that turns further can need a larger explicit tolerance.
 
 ### `pafi::FreeEnergyProfile`
 
 | Field | Type | Meaning |
 |---+---+---|
 | `arc_lengths` | `Vec<f64>` | Plane coordinates \(s_k\): the mass-weighted chord-length parameter of the spline, from 0 at the first image to the total path length at the last, at equal spacing. Not scaled to \([0, 1]\) |
-| `free_energy` | `Vec<f64>` | \(F(s_k) - F(s_0)\) by the trapezoid rule; the first entry is 0 |
-| `standard_error` | `Vec<f64>` | Standard error of `free_energy` from the batch-means errors of the plane forces; the first entry is 0 |
-| `barrier` | `f64` | \(\Delta F = \max_k F(s_k)\) |
-| `barrier_error` | `f64` | Standard error of `barrier` |
-| `dividing_index` | `usize` | First plane where `barrier` is attained |
-| `reactant_partition` | `f64` | \(Z_R = 2 \int_0^{s^*} \exp(-F(s) / k_{\mathrm{B}}T)\,ds\) by the trapezoid rule, in units of \(s\) |
-| `reactant_log_partition` | `f64` | \(\ln Z_R\) from shifted log-sum-exp trapezoid quadrature |
-| `normalized_rate` | `f64` | \(k = \sqrt{k_{\mathrm{B}}T / (2\pi)}\,\exp(-F(s^*) / k_{\mathrm{B}}T) / Z_R\) in inverse engine time |
-| `normalized_log_rate` | `f64` | \(\ln k\) computed from \(\ln Z_R\) |
-| `normalized_rate_error` | `f64` | Delta-method standard error of `normalized_rate` from the plane force errors |
+| `free_energy` | `Vec<f64>` | \(F(s_k) - F(s_0)\) by cubic Hermite quadrature of the plane means; the first entry is 0. With two planes the derivative correction cancels and the rule is the trapezoid rule. With three planes it is exact for a quadratic gradient. With four or more planes it is exact for a cubic gradient |
+| `standard_error` | `Vec<f64>` | Standard error of `free_energy`: batch-means plane-force error through the Hermite weights, combined by hypot with the absolute Hermite-minus-trapezoid difference on the same nodes; the first entry is 0. The weighted uncertainty norm is scaled to avoid overflow from finite plane errors |
+| `barrier` | `f64` | \(\Delta F\), the global maximum of the Hermite interpolant, which can exceed every sampled value |
+| `barrier_error` | `f64` | Standard error of `barrier`: the same combination at `s*` |
+| `dividing_index` | `usize` | First plane with the highest sampled free energy. The interpolant maximum recorded in `dividing_arc` can lie on a different interval |
+| `dividing_arc` | `f64` | Arc length \(s^*\) of the global maximum of the Hermite interpolant |
+| `reactant_frequency` | `f64` | \(\omega_0 = ( \mathbf{n}^\top \mathbf{H}^{-1} \mathbf{n} )^{-1/2}\) from the mass-weighted Hessian at the first image, in inverse engine time |
+| `reactant_partition` | `Option<f64>` | \(Z_R = \sqrt{2\pi k_{\mathrm{B}}T} / \omega_0\), in units of \(s\). `Some` when its exponential is finite and positive; otherwise `None` |
+| `reactant_log_partition` | `f64` | \(\ln Z_R = \tfrac{1}{2}\ln(2\pi k_{\mathrm{B}}T) - \ln \omega_0\) |
+| `normalized_rate` | `Option<f64>` | \(k = (\omega_0 / 2\pi) \exp(-\Delta F / k_{\mathrm{B}}T)\) in inverse engine time. `Some` when its exponential is finite and positive; otherwise `None` |
+| `normalized_log_rate` | `f64` | \(\ln k = \ln \omega_0 - \ln(2\pi) - \Delta F / k_{\mathrm{B}}T\), including when the linear rate underflows |
+| `normalized_rate_error` | `Option<f64>` | Delta-method standard error \(k\,\sigma_{\Delta F} / k_{\mathrm{B}}T\), i.e. `exp(normalized_log_rate + ln(sigma))` with \(\sigma =\) `barrier_error` \(/ k_{\mathrm{B}}T\). `Some(0.0)` when \(\sigma = 0\). Otherwise `Some` when that exponential is finite and positive. `None` when \(\sigma \neq 0\) and it overflows, underflows, or is not finite. \(Z_R\) is a property of the reactant Hessian, so its sampling sensitivity is zero |
+| `quadrature_residual` | `f64` | Largest absolute gap between the Hermite integral of \(dV/ds\) and the endpoint energy change. The acceptance check remains the trapezoid comparison in `PafiConfig::zero_temperature_tol` |
 
 ### `network::NetworkConfig` and `RateTableConfig`
 
@@ -851,7 +861,7 @@ The value stored by `PafiConfig::default()` is the 9-plane value shown in the ta
 | `hyperplane::HyperplaneSample` | `plane`, `mean_force`, `standard_error`, `configurations` | Output of `hyperplane::sample_hyperplane(engine, plane, config)` |
 | `ohtst::OhtstEstimate` | `plane`, `rate`, `standard_error` | Output of `ohtst::optimize_hyperplane(engine, seed_plane, config)` |
 | `ffs::FfsEstimate` | `initial_flux`, `interface_probabilities`, `rate`, `standard_error` | Output of `ffs::forward_flux_rate(engine, order_param, config)` |
-| `pafi::FreeEnergyProfile` | `arc_lengths`, `free_energy`, `standard_error`, `barrier`, `barrier_error`, `dividing_index`, `reactant_partition`, `reactant_log_partition`, `normalized_rate`, `normalized_log_rate`, `normalized_rate_error` | Output of `pafi::pafi_profile(engine, path_images, config)` and `pafi::pafi_profile_dyn(engine, path_images, config)`; see the field table in the configuration section |
+| `pafi::FreeEnergyProfile` | `arc_lengths`, `free_energy`, `standard_error`, `barrier`, `barrier_error`, `dividing_index`, `dividing_arc`, `reactant_frequency`, `reactant_partition`, `reactant_log_partition`, `normalized_rate`, `normalized_log_rate`, `normalized_rate_error`, `quadrature_residual` | Output of `pafi::pafi_profile(engine, path_images, config)` and `pafi::pafi_profile_dyn(engine, path_images, config)`; see the field table in the configuration section |
 | `network::RateEdge` | `from`, `to`, `rate` (`RateEdge::new(from, to, rate)`) | Directed elementary transition edge in `network::build_rate_table` |
 
 ### Estimator and sampling entry points
@@ -1756,19 +1766,19 @@ Two limits anchor the estimator:
 - *Straight path (\(\mathbf{n}' = \mathbf{0}\))*: the Jacobian term vanishes and \(dF/ds\) is the Sprik-Ciccotti mean constraint force \(\langle \lambda \rangle\) that `hyperplane::sample_hyperplane` samples on a single plane cite:`sprikFreeEnergyConstrained1998`. On the widening double well \(V(x, y) = (1 - x^2)^2 + \tfrac{1}{2}k(x)y^2\) with \(k(x) = 1.5 + 0.5x\), the profile from \(x = -1\) to \(x = 0\) ends at \(\Delta F(T) = \Delta E_0 + \tfrac{1}{2}k_{\mathrm{B}}T \ln(k(0)/k(-1))\). The integration tests reproduce this value within two standard errors, for unit and anisotropic masses.
 - *Zero temperature (\(T \to 0\))*: the sampled points collapse onto the anchor and the integral of \(dF/ds\) becomes the static line integral \(\int \nabla V(\mathbf{X}) \cdot \mathbf{X}'\,ds = \Delta E_0\). `pafi_profile` evaluates that trapezoid sum on the plane anchors before it samples anything and compares it with the end-to-end energy change, see the tolerance note below.
 
-The profile is the trapezoid integral of the plane means \(g_k\),
+The profile integrates the plane means \(g_k\) with the cubic Hermite rule. On an interval of width \(h\) with endpoint derivatives \(g'\) from a five-point Lagrange window,
 
 \[
-F(s_k) - F(s_0) = \sum_{j=1}^{k} \tfrac{1}{2}\,(g_{j-1} + g_j)\,(s_j - s_{j-1}),
+\int_{s_k}^{s_{k+1}} g\,ds = \tfrac{h}{2}(g_k + g_{k+1}) + \tfrac{h^2}{12}(g'_k - g'_{k+1}).
 \]
 
-the barrier is \(\Delta F = \max_k F(s_k)\) at the dividing plane \(s^*\), and the normalized rate is
+With two planes the derivative correction cancels and the rule is the trapezoid rule, exact for a linear gradient. With three planes it is exact for a quadratic gradient. With four or more planes the window carries a cubic gradient exactly. The barrier \(\Delta F\) is the global maximum of that interpolant, searched on every interval, so it can sit between samples and away from the highest sample. The normalized rate uses the reactant curvature \(\omega_0^2 = 1 / (\mathbf{n}^\top \mathbf{H}^{-1} \mathbf{n})\) at the first image,
 
 \[
-k = \sqrt{\frac{k_{\mathrm{B}}T}{2\pi}}\;\frac{\exp(-F(s^*)/k_{\mathrm{B}}T)}{Z_R}, \qquad Z_R = 2\int_0^{s^*} \exp\!\left(-\frac{F(s)}{k_{\mathrm{B}}T}\right) ds,
+k = \frac{\omega_0}{2\pi}\exp\!\left(-\frac{\Delta F}{k_{\mathrm{B}}T}\right), \qquad Z_R = \frac{\sqrt{2\pi k_{\mathrm{B}}T}}{\omega_0},
 \]
 
-with \(Z_R\) also by the trapezoid rule.
+which is Vineyard harmonic transition-state theory when the path is the unstable mode and the transverse entropy is already in \(\Delta F\). \(\ln Z_R\) and \(\ln k\) are stored as well, so a large barrier does not underflow the reported log rate.
 
 ### What `pafi_profile` does
 
@@ -1776,7 +1786,7 @@ with \(Z_R\) also by the trapezoid rule.
 2. *Planes*: `planes` planes sit at equal values of the parameter from the first to the last image. Each has an anchor \(\mathbf{X}(s_k)\), the normal \(\mathbf{n}\), and \(\mathbf{n}'\).
 3. *Zero-temperature check*: let \(I_T\) be the trapezoid sum of \(dV/ds\) over the anchors and \(\Delta E_0 = V(\mathbf{X}(s_{K-1})) - V(\mathbf{X}(s_0))\). The code compares \(\lvert I_T - \Delta E_0\rvert / \max(E_{\mathrm{unit}}, \lvert\Delta E_0\rvert)\) with the effective `zero_temperature_tol`, where \(E_{\mathrm{unit}}\) is one energy unit of the engine. A mismatch returns `FluxError::InvalidConfig` without sampling.
 4. *Sampling*: On each plane the engine gets the constraint, is placed at the anchor, receives Maxwell-Boltzmann velocities from the per-plane seed, runs `burn_in_steps` steps, and then `sample_steps` steps that each record \(\lambda\,(\mathbf{n} \cdot \mathbf{X}' - (\mathbf{x} - \mathbf{X}) \cdot \mathbf{n}')\). `stats::batch_means` turns each series into a mean and a standard error.
-5. *Integration*: The profile, barrier, dividing plane, \(Z_R\) and rate follow from the plane means. The plane errors are independent, so they propagate through the trapezoid weights; the rate error comes from the delta method over the profile and \(Z_R\).
+5. *Integration*: The profile and the dividing plane follow from the Hermite rule on the plane means. \(\omega_0\) is the reactant curvature at the first image, from conjugate gradients on central-difference Hessian-vector products of `energy_and_forces`. The plane errors are independent and propagate through the Hermite weights of the barrier. \(Z_R\) does not depend on the samples, so the rate error is \(k\,\sigma_{\Delta F} / k_{\mathrm{B}}T\).
 6. *Adaptive rounds*: With `target_error` set, steps 4 and 5 repeat for up to `max_rounds` rounds, each adding `sample_steps` samples to every plane, until `barrier_error` is at most the target. The result uses all samples. Missing the target is not an error, so compare `barrier_error` with it.
 
 The seed of plane \(k\) in round \(r\) is `seed + 4099 * k + 1000003 * r` (wrapping), so the planes are independent and a run is reproducible.
@@ -1785,14 +1795,14 @@ The seed of plane \(k\) in round \(r\) is `seed + 4099 * k + 1000003 * r` (wrapp
 
 The numerator and denominator in step 3 are energies in the engine's energy units, so their ratio and `zero_temperature_tol` are dimensionless. For \(\lvert\Delta E_0\rvert \ge E_{\mathrm{unit}}\) the check is relative to the endpoint energy change. Below one energy unit it instead bounds the absolute discrepancy to the effective tolerance times one engine energy unit.
 
-The value stored by `PafiConfig::default()` is \(2 (\pi^2 / 12) / 8^2 \approx 0.0257\), the value for the default 9 planes. When the field retains that value, changing `planes` makes the effective tolerance \(2 (\pi^2 / 12) / (\text{planes} - 1)^2\). An explicitly different value is used unchanged and does not scale with `planes`. This scaling follows the trapezoid error on a quarter-turn circular arc through a harmonic well, \(\pi^2 / (12 (\text{planes} - 1)^2)\). A path that turns through more than a quarter circle can need a larger explicit tolerance, which also weakens the guard against inconsistent forces and tangents.
+`None`, the value stored by `PafiConfig::default()`, makes the effective tolerance \(2 (\pi^2 / 12) / (\text{planes} - 1)^2\), which is \(2 (\pi^2 / 12) / 8^2 \approx 0.0257\) at the default 9 planes. Changing `planes` scales that tolerance. An explicit value passed to `with_zero_temperature_tol` is the tolerance at every plane count, including when it equals the 9-plane value. This scaling follows the trapezoid error on a quarter-turn circular arc through a harmonic well, \(\pi^2 / (12 (\text{planes} - 1)^2)\). A path that turns through more than a quarter circle can need a larger explicit tolerance, which also weakens the guard against inconsistent forces and tangents.
 
 ### Assumptions, units, and engine wiring
 
 - Assumes a smooth path of at least two images, with one coordinate per degree of freedom of the engine, whose thermal fluctuations on each plane stay inside the region where neighbouring planes do not intersect, so that \(\mathbf{n} \cdot \mathbf{X}' - (\mathbf{x} - \mathbf{X}) \cdot \mathbf{n}'\) stays positive.
-- Every plane starts at its anchor, so a plane whose thermal centre lies far from the anchor needs a long `burn_in_steps`. The free energy has to rise somewhere, otherwise the dividing plane is the first plane, \(Z_R\) is zero and the call returns `FluxError::InvalidConfig`.
-- Path images, masses and positions use the engine units \([L]\) and \([M]\); the arc length \(s\) is mass-weighted, \([M]^{1/2}[L]\), and equals a length for unit masses. `free_energy`, `standard_error`, `barrier`, `barrier_error`, `target_error` and \(k_{\mathrm{B}}T\) are in \([E]\), `time_step` in \([T]\), and `normalized_rate` in \([T]^{-1}\).
-- `pafi_profile` accepts any `E: DynamicsEngine + ?Sized`, and `pafi_profile_dyn` takes `&mut dyn DynamicsEngine`. The engine must report `StepReport::constraint_force` on constrained steps and implement `energy_and_forces` for the zero-temperature check.
+- Every plane starts at its anchor, so a plane whose thermal centre lies far from the anchor needs a long `burn_in_steps`. The first image is the reactant minimum. A non-positive curvature there returns `FluxError::InvalidConfig`. A profile that never rises still has a finite Gaussian \(Z_R\), and its barrier is the free energy at the first plane.
+- Path images, masses and positions use the engine units \([L]\) and \([M]\); the arc length \(s\) is mass-weighted, \([M]^{1/2}[L]\), and equals a length for unit masses. `free_energy`, `standard_error`, `barrier`, `barrier_error`, `target_error`, `quadrature_residual` and \(k_{\mathrm{B}}T\) are in \([E]\), `time_step` in \([T]\), `reactant_frequency` and `normalized_rate` in \([T]^{-1}\), and `dividing_arc` in the units of \(s\).
+- `pafi_profile` accepts any `E: DynamicsEngine + ?Sized`, and `pafi_profile_dyn` takes `&mut dyn DynamicsEngine`. The engine must report `StepReport::constraint_force` on constrained steps and implement `energy_and_forces` for the zero-temperature check and for the reactant Hessian.
 - Like the other samplers it restores positions, velocities, the periodic cell, the thermostat, and the constraint on return, including on errors. The stochastic stream is left where the last plane reseeded it.
 
 ## Reactive-flux recrossing (`kappa` and `kappa::bennett_chandler`)

@@ -221,7 +221,7 @@ Here \(I_T\) is the trapezoid integral of \(dV/ds\) over the plane anchors and \
 | =reactant_log_partition= | =f64= | \(\ln Z_R = \tfrac{1}{2}\ln(2\pi k_{\mathrm{B}}T) - \ln \omega_0\) |
 | =normalized_rate= | =Option<f64>= | \(k = (\omega_0 / 2\pi) \exp(-\Delta F / k_{\mathrm{B}}T)\) in inverse engine time. =Some= when its exponential is finite and positive; otherwise =None= |
 | =normalized_log_rate= | =f64= | \(\ln k = \ln \omega_0 - \ln(2\pi) - \Delta F / k_{\mathrm{B}}T\), including when the linear rate underflows |
-| =normalized_rate_error= | =Option<f64>= | Delta-method standard error \(k\,\sigma_{\Delta F} / k_{\mathrm{B}}T\). =None= only when its nonzero linear value overflows. \(Z_R\) is a property of the reactant Hessian, so its sampling sensitivity is zero |
+| =normalized_rate_error= | =Option<f64>= | Delta-method standard error \(k\,\sigma_{\Delta F} / k_{\mathrm{B}}T\), i.e. =exp(normalized_log_rate + ln(sigma))= with \(\sigma =\) =barrier_error= \(/ k_{\mathrm{B}}T\). =Some(0.0)= when \(\sigma = 0\). Otherwise =Some= when that exponential is finite and positive. =None= when \(\sigma \neq 0\) and it overflows, underflows, or is not finite. \(Z_R\) is a property of the reactant Hessian, so its sampling sensitivity is zero |
 | =quadrature_residual= | =f64= | Largest absolute gap between the Hermite integral of \(dV/ds\) and the endpoint energy change. The acceptance check remains the trapezoid comparison in =PafiConfig::zero_temperature_tol= |
 
 ** =network::NetworkConfig= and =RateTableConfig=
