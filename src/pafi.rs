@@ -1394,6 +1394,9 @@ fn integrate_profile(
             propagate(weights).hypot((hermite - trapezoid).abs())
         })
         .collect();
+    if standard_error.iter().any(|value| !value.is_finite()) {
+        return Err(FluxError::NonFinite("PAFI profile standard error"));
+    }
     let barrier = dividing.free_energy;
     let lower_barrier = trapezoid_to(&quadrature.arcs, gradients, dividing.arc);
     if !lower_barrier.is_finite() {
@@ -2522,6 +2525,24 @@ mod tests {
         assert_eq!(
             result,
             Err(FluxError::NonFinite("PAFI integrated free energy"))
+        );
+    }
+
+    #[test]
+    fn overflowing_profile_standard_error_is_rejected() {
+        // The maximum sits near s = 4, away from the last plane, so only the
+        // cumulative error of that plane sees its huge uncertainty. Squaring a
+        // finite 1e200 overflows, and the barrier error stays finite.
+        let arcs: Vec<f64> = (0..12).map(f64::from).collect();
+        let gradients: Vec<f64> = (0..12).map(|k| 2.0 - 0.5 * f64::from(k)).collect();
+        let mut errors = vec![0.0; 12];
+        let finite = profile_from(&arcs, &gradients, &errors, 1.0, 1.0).expect("profile");
+        assert!(finite.standard_error.iter().all(|value| value.is_finite()));
+        errors[11] = 1.0e200;
+        let result = profile_from(&arcs, &gradients, &errors, 1.0, 1.0);
+        assert_eq!(
+            result,
+            Err(FluxError::NonFinite("PAFI profile standard error"))
         );
     }
 
