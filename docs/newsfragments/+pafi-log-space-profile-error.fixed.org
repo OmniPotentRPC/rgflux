@@ -1,0 +1,3 @@
+The free-energy =standard_error= and =barrier_error= are a scaled
+Euclidean norm of the weighted plane uncertainties. A finite uncertainty
+whose square overflows stays finite.

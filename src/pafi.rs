@@ -66,7 +66,8 @@
 //!    trapezoid rule. It divides the absolute disagreement with the end-to-end
 //!    energy change `Delta E_0` by `max(E_unit, |Delta E_0|)`, where `E_unit`
 //!    is one energy unit of the engine, and compares that dimensionless value
-//!    with [`PafiConfig::zero_temperature_tol`]. A mismatch returns
+//!    with the effective tolerance from [`PafiConfig::zero_temperature_tol`].
+//!    A mismatch returns
 //!    [`FluxError::InvalidConfig`] before any sampling.
 //! 4. On each plane the engine is constrained, placed at the anchor, given
 //!    Maxwell-Boltzmann velocities, run for `burn_in_steps`, and then run for
@@ -187,7 +188,7 @@
 //! assert_eq!(profile.free_energy.len(), config.planes);
 //! assert_eq!(profile.free_energy[0], 0.0);
 //! assert!(profile.barrier.is_finite() && profile.barrier_error > 0.0);
-//! assert!(profile.normalized_rate > 0.0);
+//! assert!(profile.normalized_rate.is_some_and(|rate| rate > 0.0));
 //! # Ok::<(), rgflux::FluxError>(())
 //! ```
 //!
@@ -250,17 +251,10 @@ const fn default_zero_temperature_tol(planes: usize) -> f64 {
     leading_term * (1.0 + ZERO_TEMPERATURE_SAFETY_MARGIN)
 }
 
-/// Default [`PafiConfig::zero_temperature_tol`]: the quarter-arc trapezoid
-/// error at [`DEFAULT_PLANES`] (1.29%) plus the safety margin.
-const DEFAULT_ZERO_TEMPERATURE_TOL: f64 = default_zero_temperature_tol(DEFAULT_PLANES);
-
 fn effective_zero_temperature_tol(config: &PafiConfig) -> f64 {
-    let tol = config.zero_temperature_tol;
-    if tol.to_bits() == DEFAULT_ZERO_TEMPERATURE_TOL.to_bits() {
-        default_zero_temperature_tol(config.planes)
-    } else {
-        tol
-    }
+    config
+        .zero_temperature_tol
+        .unwrap_or_else(|| default_zero_temperature_tol(config.planes))
 }
 
 /// Configuration for Projected Average Force Integration (PAFI).
@@ -305,19 +299,20 @@ pub struct PafiConfig {
     /// check is relative when `|Delta E_0| >= E_unit` and otherwise bounds the
     /// absolute discrepancy in engine energy units.
     ///
-    /// The stored default is `2 * (pi^2 / 12) / 8^2`, about `0.0257`, for the
-    /// default 9 planes. If this field retains that default value, changing
-    /// `planes` changes the effective tolerance to
-    /// `2 * (pi^2 / 12) / (planes - 1)^2`. An explicitly different value is
-    /// used unchanged and does not scale with `planes`.
+    /// `None`, the default, sets the effective tolerance to
+    /// `2 * (pi^2 / 12) / (planes - 1)^2`. At the default 9 planes that value
+    /// is about `0.0257`, and changing `planes` scales it with the trapezoid
+    /// error. `Some(value)` uses `value` at every plane count, including when
+    /// `value` equals the 9-plane tolerance.
     ///
     /// The scaling follows the trapezoid error on a quarter-turn circular arc
     /// through a harmonic well. Paths that turn through more than a quarter
     /// circle can need a larger tolerance. Larger values weaken the guard
-    /// against inconsistent forces and tangents. Must be finite and `>= 0`.
+    /// against inconsistent forces and tangents. An explicit value must be
+    /// finite and `>= 0`.
     ///
-    /// Default: `2 * (pi^2 / 12) / 8^2`, about `0.0257`.
-    pub zero_temperature_tol: f64,
+    /// Default: `None`.
+    pub zero_temperature_tol: Option<f64>,
     /// Base of the deterministic per-plane seeds `seed + 4099 * plane + 1000003 * round`
     /// (wrapping).
     ///
@@ -338,7 +333,7 @@ impl Default for PafiConfig {
             time_step: 0.002,
             target_error: None,
             max_rounds: 4,
-            zero_temperature_tol: DEFAULT_ZERO_TEMPERATURE_TOL,
+            zero_temperature_tol: None,
             seed: 1,
             stats: StatsConfig::default(),
         }
@@ -352,7 +347,7 @@ with_setters!(PafiConfig {
     with_time_step => time_step: val f64,
     with_target_error => target_error: opt f64,
     with_max_rounds => max_rounds: val usize,
-    with_zero_temperature_tol => zero_temperature_tol: val f64,
+    with_zero_temperature_tol => zero_temperature_tol: opt f64,
     with_seed => seed: val u64,
     with_stats => stats: val StatsConfig,
 });
@@ -394,21 +389,33 @@ pub struct FreeEnergyProfile {
     pub reactant_frequency: f64,
     /// Gaussian reactant normalization
     /// `Z_R = sqrt(2 pi k_B T) / omega_0`, in units of `s`.
-    pub reactant_partition: f64,
+    ///
+    /// `Some` when [`Self::reactant_log_partition`] has a finite positive
+    /// exponential. `None` when that finite log overflows or underflows.
+    pub reactant_partition: Option<f64>,
     /// Natural logarithm of the reactant normalization,
     /// `ln Z_R = ln(sqrt(2 pi k_B T) / omega_0)`.
     pub reactant_log_partition: f64,
     /// Normalized PAFI rate
     /// `k = sqrt(k_B T / (2 pi)) * exp(-Delta F / k_B T) / Z_R
     ///    = (omega_0 / 2 pi) * exp(-Delta F / k_B T)`.
-    pub normalized_rate: f64,
+    ///
+    /// `Some` when [`Self::normalized_log_rate`] has a finite positive
+    /// exponential. `None` when that finite log overflows or underflows.
+    pub normalized_rate: Option<f64>,
     /// Natural logarithm of [`Self::normalized_rate`],
     /// `ln k = ln(omega_0 / 2 pi) - Delta F / k_B T`.
     /// This stays finite when [`Self::normalized_rate`] underflows.
     pub normalized_log_rate: f64,
-    /// Propagated standard error of [`Self::normalized_rate`]. The reactant
+    /// Propagated standard error of the linear normalized rate. The reactant
     /// Hessian is deterministic, so only [`Self::barrier`] contributes.
-    pub normalized_rate_error: f64,
+    ///
+    /// Holds `exp(normalized_log_rate + ln(sigma))` with
+    /// `sigma = barrier_error / k_B T`. `Some(0.0)` when `sigma == 0`.
+    /// Otherwise `Some` when that exponential is finite and positive.
+    /// `None` when `sigma != 0` and the exponential overflows to infinity,
+    /// underflows to zero, or is not finite (for example non-finite `sigma`).
+    pub normalized_rate_error: Option<f64>,
     /// Largest absolute discrepancy, over the sampled planes, between the
     /// Hermite integral of `dV/ds` and the anchor energy measured from the
     /// first plane. The acceptance check itself stays the trapezoid comparison
@@ -1188,14 +1195,7 @@ fn integrate_profile(
         return Err(FluxError::NonFinite("PAFI integrated free energy"));
     }
     let dividing = quadrature.dividing_plane(gradients, &free_energy);
-    let propagate = |weights: &[f64]| {
-        weights
-            .iter()
-            .zip(gradient_errors)
-            .map(|(weight, sigma)| weight * weight * sigma * sigma)
-            .sum::<f64>()
-            .sqrt()
-    };
+    let propagate = |weights: &[f64]| linear_euclidean_norm(weights, gradient_errors);
     let standard_error: Vec<f64> = quadrature
         .cumulative
         .iter()
@@ -1221,29 +1221,19 @@ fn integrate_profile(
             "PAFI reactant frequency must be finite and positive",
         ));
     }
-    let reactant_log_partition = 0.5 * (TAU * kbt).ln() - reactant_frequency.ln();
+    let reactant_log_partition = 0.5 * (TAU.ln() + kbt.ln()) - reactant_frequency.ln();
     if !reactant_log_partition.is_finite() {
         return Err(FluxError::NonFinite("PAFI reactant log partition"));
     }
-    let reactant_partition = reactant_log_partition.exp();
+    let reactant_partition = finite_exponential(reactant_log_partition);
     let normalized_log_rate = reactant_frequency.ln() - TAU.ln() - barrier / kbt;
     if !normalized_log_rate.is_finite() {
         return Err(FluxError::InvalidConfig(
             "PAFI normalized log rate must be finite",
         ));
     }
-    let normalized_rate = normalized_log_rate.exp();
-    if !normalized_rate.is_finite() || normalized_rate < 0.0 {
-        return Err(FluxError::InvalidConfig(
-            "PAFI normalized rate must be finite",
-        ));
-    }
-    let normalized_rate_error = normalized_rate * barrier_error / kbt;
-    if !normalized_rate_error.is_finite() || normalized_rate_error < 0.0 {
-        return Err(FluxError::InvalidConfig(
-            "PAFI normalized-rate standard error must be finite and non-negative",
-        ));
-    }
+    let normalized_rate = finite_exponential(normalized_log_rate);
+    let normalized_rate_error = linear_rate_error(normalized_log_rate, barrier_error, kbt);
 
     Ok(FreeEnergyProfile {
         arc_lengths: quadrature.arcs.clone(),
@@ -1261,6 +1251,55 @@ fn integrate_profile(
         normalized_rate_error,
         quadrature_residual: 0.0,
     })
+}
+
+/// Exponential of a finite logarithm when the result is a finite positive `f64`.
+///
+/// Overflow to positive infinity and underflow to zero are `None`.
+fn finite_exponential(log_value: f64) -> Option<f64> {
+    let linear = log_value.exp();
+    if linear.is_finite() && linear > 0.0 {
+        Some(linear)
+    } else {
+        None
+    }
+}
+
+/// `sqrt(sum (weight_i * sigma_i)^2)` without forming the squares.
+///
+/// A finite factor above about `1e154` makes `sigma * sigma` overflow. The
+/// scaled norm keeps a finite result whenever the mathematical norm fits in a
+/// `f64`.
+fn linear_euclidean_norm(weights: &[f64], sigmas: &[f64]) -> f64 {
+    let mut scale = 0.0_f64;
+    let mut sum = 0.0_f64;
+    for (&weight, &sigma) in weights.iter().zip(sigmas) {
+        let term = weight.abs() * sigma;
+        if !term.is_finite() {
+            return f64::INFINITY;
+        }
+        if term > scale {
+            sum = 1.0 + sum * (scale / term).powi(2);
+            scale = term;
+        } else if scale > 0.0 {
+            sum += (term / scale).powi(2);
+        }
+    }
+    scale * sum.sqrt()
+}
+
+/// Linear standard error `exp(log_rate) * error / scale`.
+///
+/// The ratio is formed as `ln(error) - ln(scale)` so an intermediate linear
+/// division cannot overflow or underflow. `Some(0.0)` when `error == 0`, even
+/// when `exp(log_rate)` underflows. Otherwise `Some` when the final
+/// exponential is finite and positive. `None` when that exponential
+/// overflows, underflows, or is not finite.
+fn linear_rate_error(log_rate: f64, error: f64, scale: f64) -> Option<f64> {
+    if error == 0.0 {
+        return Some(0.0);
+    }
+    finite_exponential(log_rate + error.ln() - scale.ln())
 }
 
 /// Squared projected reactant frequency `omega_0^2 = 1 / (n^T H^-1 n)`.
@@ -1394,8 +1433,8 @@ fn path_force_relative_error(arcs: &[f64], energies: &[f64], gradients: &[f64]) 
 ///
 /// - `time_step` is not finite and positive, `burn_in_steps` is `0`,
 ///   `sample_steps` is below `2`, `max_rounds` is `0`, `planes` is below `2`,
-///   `zero_temperature_tol` is negative or not finite, or `target_error` is
-///   negative or not finite,
+///   `zero_temperature_tol` is `Some` of a negative or non-finite value, or
+///   `target_error` is negative or not finite,
 /// - `path_images` has fewer than two rows, or two neighbouring images
 ///   coincide in the mass-weighted metric,
 /// - the thermal energy `k_B T` of the engine is not positive,
@@ -1435,7 +1474,9 @@ pub fn pafi_profile<E: DynamicsEngine + ?Sized>(
             "PafiConfig::max_rounds must be at least 1",
         ));
     }
-    if !config.zero_temperature_tol.is_finite() || config.zero_temperature_tol < 0.0 {
+    if let Some(tol) = config.zero_temperature_tol
+        && (!tol.is_finite() || tol < 0.0)
+    {
         return Err(FluxError::InvalidConfig(
             "PafiConfig::zero_temperature_tol must be finite and non-negative",
         ));
@@ -1557,19 +1598,18 @@ mod tests {
         }
     }
 
-    struct InconsistentLinearGradient;
+    #[derive(Clone)]
+    struct InconsistentLinearGradient {
+        gradient: f64,
+        slope: f64,
+    }
 
     impl rgsaddle::PointSurface for InconsistentLinearGradient {
         fn eval(
             &self,
             x: ArrayView1<'_, f64>,
         ) -> Result<(f64, Array1<f64>), rgsaddle::SaddleError> {
-            // The energy rises by 1. A constant gradient of 0.98 leaves a
-            // discrepancy of 0.02. Adding that same shortfall as a slope
-            // recenters the gradient so the trapezoid integral is still 0.98,
-            // and it keeps the reactant curvature positive once the check passes.
-            let shortfall = 0.02;
-            let gradient = (1.0 - shortfall) + shortfall * (x[0] - 0.5);
+            let gradient = self.gradient + self.slope * (x[0] - 0.5);
             Ok((x[0], Array1::from_vec(vec![gradient])))
         }
     }
@@ -1706,8 +1746,10 @@ mod tests {
         assert!(truncation > 0.0);
         assert_abs_diff_eq!(profile.barrier_error, truncation, epsilon = 1.0e-12);
         assert_abs_diff_eq!(
-            profile.normalized_rate_error,
-            profile.normalized_rate * profile.barrier_error,
+            profile
+                .normalized_rate_error
+                .expect("representable rate error"),
+            profile.normalized_rate.expect("representable rate") * profile.barrier_error,
             epsilon = 1.0e-12
         );
         let frequency = 4.0_f64.sqrt();
@@ -1855,16 +1897,15 @@ mod tests {
     #[test]
     fn default_tolerance_accepts_quarter_arc_at_default_planes() {
         let config = PafiConfig::default();
+        let tolerance = effective_zero_temperature_tol(&config);
         let error = quarter_arc_relative_error(33, config.planes);
         assert!(
-            error < config.zero_temperature_tol,
-            "relative error {error} versus default tolerance {}",
-            config.zero_temperature_tol
+            error < tolerance,
+            "relative error {error} versus default tolerance {tolerance}"
         );
         assert!(
-            config.zero_temperature_tol < 2.0 * (1.0 + ZERO_TEMPERATURE_SAFETY_MARGIN) * error,
-            "default tolerance {} is no longer calibrated to {error}",
-            config.zero_temperature_tol
+            tolerance < 2.0 * (1.0 + ZERO_TEMPERATURE_SAFETY_MARGIN) * error,
+            "default tolerance {tolerance} is no longer calibrated to {error}"
         );
 
         let (mut engine, _) = quarter_arc_engine();
@@ -1891,14 +1932,30 @@ mod tests {
         let log_partition = 0.5 * (TAU).ln() - frequency.ln();
         let log_rate = frequency.ln() - TAU.ln() - profile.barrier;
         assert!(profile.barrier > 700.0);
-        assert!(profile.normalized_rate <= f64::MIN_POSITIVE);
+        assert!(profile.normalized_rate.is_none());
         assert_abs_diff_eq!(
             profile.reactant_log_partition,
             log_partition,
             epsilon = f64::EPSILON * log_partition.abs()
         );
         assert_abs_diff_eq!(profile.normalized_log_rate, log_rate, epsilon = 1.0e-9);
-        assert!(profile.reactant_partition.is_finite() && profile.reactant_partition > 0.0);
+        assert!(
+            profile
+                .reactant_partition
+                .is_some_and(|partition| partition.is_finite() && partition > 0.0)
+        );
+    }
+
+    #[test]
+    fn normalized_rate_error_is_none_when_the_linear_value_underflows() {
+        let arcs = [0.0, 1.0, 2.0, 3.0];
+        let gradients = [800.0, 800.0, 800.0, 800.0];
+        let errors = [0.01, 0.01, 0.01, 0.01];
+        let profile = profile_from(&arcs, &gradients, &errors, 1.0, 4.0).expect("profile");
+        assert!(profile.barrier > 700.0);
+        assert!(profile.normalized_rate.is_none());
+        assert!(profile.normalized_rate_error.is_none());
+        assert!(profile.barrier_error > 0.0);
     }
 
     #[test]
@@ -1913,7 +1970,7 @@ mod tests {
         let partition = (TAU * kbt).sqrt() / frequency;
         let rate = frequency / TAU * (-profile.barrier / kbt).exp();
         assert_abs_diff_eq!(
-            profile.reactant_partition,
+            profile.reactant_partition.expect("representable partition"),
             partition,
             epsilon = f64::EPSILON * partition.abs()
         );
@@ -1923,7 +1980,7 @@ mod tests {
             epsilon = 16.0 * f64::EPSILON * partition.ln().abs().max(1.0)
         );
         assert_abs_diff_eq!(
-            profile.normalized_rate,
+            profile.normalized_rate.expect("representable rate"),
             rate,
             epsilon = f64::EPSILON * rate.abs()
         );
@@ -1932,9 +1989,10 @@ mod tests {
             rate.ln(),
             epsilon = 16.0 * f64::EPSILON * rate.ln().abs().max(1.0)
         );
-        let flux = (kbt / TAU).sqrt() * (-profile.barrier / kbt).exp() / profile.reactant_partition;
+        let flux = (kbt / TAU).sqrt() * (-profile.barrier / kbt).exp()
+            / profile.reactant_partition.expect("representable partition");
         assert_abs_diff_eq!(
-            profile.normalized_rate,
+            profile.normalized_rate.expect("representable rate"),
             flux,
             epsilon = f64::EPSILON * rate.abs()
         );
@@ -2035,17 +2093,77 @@ mod tests {
     }
 
     #[test]
+    fn finite_exponential_rejects_linear_overflow_and_underflow() {
+        assert_eq!(finite_exponential(f64::MAX.ln() + 1.0), None);
+        assert_eq!(finite_exponential(f64::from_bits(1).ln() - 1.0), None);
+    }
+
+    #[test]
+    fn linear_rate_error_rejects_underflow_after_error_scaling() {
+        assert_eq!(linear_rate_error(-2401.0, 2400.0, 1.0), None);
+    }
+
+    #[test]
+    fn linear_rate_error_handles_extreme_ratios_in_log_space() {
+        let overflowed_ratio = f64::MAX / f64::MIN_POSITIVE;
+        assert!(overflowed_ratio.is_infinite());
+        let overflow_result = linear_rate_error(-740.0, f64::MAX, f64::MIN_POSITIVE)
+            .expect("log-space ratio remains representable");
+        assert!(overflow_result.is_finite() && overflow_result > 0.0);
+
+        let underflowed_ratio = f64::MIN_POSITIVE / f64::MAX;
+        assert_eq!(underflowed_ratio, 0.0);
+        let underflow_result = linear_rate_error(740.0, f64::MIN_POSITIVE, f64::MAX)
+            .expect("log-space ratio remains representable");
+        assert!(underflow_result.is_finite() && underflow_result > 0.0);
+
+        assert_eq!(
+            linear_rate_error(-1000.0, 0.0, f64::MIN_POSITIVE),
+            Some(0.0)
+        );
+    }
+
+    #[test]
+    fn linear_rate_error_matches_linear_ratio_in_normal_range() {
+        let log_rate = -3.25_f64;
+        let barrier_error = 0.75_f64;
+        let kbt = 1.5_f64;
+        let expected = finite_exponential(log_rate + (barrier_error / kbt).ln());
+        let actual = linear_rate_error(log_rate, barrier_error, kbt);
+        assert_abs_diff_eq!(
+            actual.expect("representable scaled error"),
+            expected.expect("representable linear-ratio error"),
+            epsilon = f64::EPSILON
+        );
+    }
+
+    #[test]
+    fn profile_error_stays_finite_for_an_extreme_plane_uncertainty() {
+        let sigma = 1.0e200_f64;
+        assert!(!(sigma * sigma).is_finite());
+        let profile =
+            profile_from(&[0.0, 1.0], &[2.0, 2.0], &[0.0, sigma], 1.0, 4.0).expect("profile");
+        let expected = 0.5 * sigma;
+        assert_abs_diff_eq!(
+            profile.standard_error[1],
+            expected,
+            epsilon = f64::EPSILON * expected
+        );
+        assert!(profile.normalized_rate_error.is_some());
+    }
+
+    #[test]
     fn a_descending_profile_keeps_the_gaussian_partition() {
         let arcs = [0.0, 1.0, 2.0];
         let gradients = [-1.0, -1.0, -1.0];
         let errors = [0.0, 0.0, 0.0];
-        let curvature = 2.0;
+        let curvature = 2.0_f64;
         let profile = profile_from(&arcs, &gradients, &errors, 1.0, curvature).expect("profile");
         assert_eq!(profile.dividing_index, 0);
         assert_eq!(profile.barrier, 0.0);
         let partition = (TAU / curvature).sqrt();
         assert_abs_diff_eq!(
-            profile.reactant_partition,
+            profile.reactant_partition.expect("representable partition"),
             partition,
             epsilon = f64::EPSILON * partition
         );
@@ -2053,10 +2171,69 @@ mod tests {
     }
 
     #[test]
+    fn reactant_normalization_accepts_maximum_thermal_energy() {
+        let curvature = 2.0_f64;
+        let profile = profile_from(
+            &[0.0, 1.0, 2.0],
+            &[-1.0, -1.0, -1.0],
+            &[0.0, 0.0, 0.0],
+            f64::MAX,
+            curvature,
+        )
+        .expect("profile at maximum thermal energy");
+        let expected_log_partition = 0.5 * (TAU.ln() + f64::MAX.ln()) - curvature.sqrt().ln();
+        assert_abs_diff_eq!(
+            profile.reactant_log_partition,
+            expected_log_partition,
+            epsilon = f64::EPSILON * expected_log_partition.abs()
+        );
+        assert!(
+            profile
+                .reactant_partition
+                .is_some_and(|partition| partition.is_finite() && partition > 0.0)
+        );
+    }
+
+    #[test]
+    fn reactant_normalization_accepts_subnormal_thermal_energy() {
+        let kbt = f64::from_bits(1);
+        assert!(kbt.is_subnormal());
+        let profile = profile_from(
+            &[0.0, 1.0, 2.0],
+            &[-1.0, -1.0, -1.0],
+            &[0.0, 0.0, 0.0],
+            kbt,
+            2.0,
+        )
+        .expect("profile at subnormal thermal energy");
+        assert!(profile.reactant_log_partition.is_finite());
+        assert!(
+            profile
+                .reactant_partition
+                .is_some_and(|partition| partition.is_finite() && partition > 0.0)
+        );
+    }
+
+    #[test]
     fn default_tolerance_scales_with_planes_for_consistency_check() {
+        // A 2% path-force error is already above the old fixed default of 0.01,
+        // so that profile does not tell scaling apart from the fixed default.
+        // The error here is halfway between 0.01 and the scaled tolerance.
+        let planes = 33usize;
+        let scaled = default_zero_temperature_tol(planes);
+        let old_fixed = 0.01_f64;
+        assert!(
+            scaled < old_fixed,
+            "scaled tolerance {scaled} is not stricter than the old fixed default {old_fixed}"
+        );
+        let relative_error = 0.5 * (scaled + old_fixed);
+        let surface = InconsistentLinearGradient {
+            gradient: 1.0 - relative_error,
+            slope: relative_error,
+        };
         let path = Array2::from_shape_vec((2, 1), vec![0.0, 1.0]).expect("shape");
         let mut engine = NativeEngine::new(
-            InconsistentLinearGradient,
+            surface.clone(),
             NativeConfig::default()
                 .with_masses(Array1::from_vec(vec![1.0]))
                 .with_thermostat(ThermostatConfig::default().with_temperature(0.2))
@@ -2064,7 +2241,7 @@ mod tests {
         )
         .expect("engine");
         let config = PafiConfig::default()
-            .with_planes(33)
+            .with_planes(planes)
             .with_burn_in_steps(1)
             .with_sample_steps(2);
         let result = pafi_profile(&mut engine, path.view(), &config);
@@ -2075,38 +2252,72 @@ mod tests {
             ))
         );
 
-        let mut legacy_engine = NativeEngine::new(
-            InconsistentLinearGradient,
+        let mut fixed_engine = NativeEngine::new(
+            surface,
             NativeConfig::default()
                 .with_masses(Array1::from_vec(vec![1.0]))
                 .with_thermostat(ThermostatConfig::default().with_temperature(0.2))
                 .with_seed(23),
         )
         .expect("engine");
-        let legacy_like = PafiConfig::default()
-            .with_planes(33)
-            .with_zero_temperature_tol(0.0257)
+        let fixed_default = PafiConfig::default()
+            .with_planes(planes)
+            .with_zero_temperature_tol(old_fixed)
             .with_burn_in_steps(1)
             .with_sample_steps(2)
             .with_stats(StatsConfig::default().with_min_batches(2));
-        assert!(pafi_profile(&mut legacy_engine, path.view(), &legacy_like).is_ok());
+        assert!(
+            pafi_profile(&mut fixed_engine, path.view(), &fixed_default).is_ok(),
+            "the old fixed default {old_fixed} should accept relative error {relative_error}"
+        );
     }
 
     #[test]
-    fn only_the_exact_default_tolerance_scales_with_planes() {
-        let exact = PafiConfig::default().with_planes(33);
+    fn documented_nine_plane_tolerance_matches_the_effective_default() {
+        let reference = include_str!("../docs/orgmode/reference.org");
+        let row = reference
+            .lines()
+            .find(|line| line.contains("| =zero_temperature_tol= |"))
+            .expect("zero_temperature_tol row");
+        let marker = "\\approx ";
+        let rest = row.split_once(marker).expect("approximate value").1;
+        let numeric: String = rest
+            .chars()
+            .take_while(|ch| ch.is_ascii_digit() || *ch == '.')
+            .collect();
+        let documented: f64 = numeric.parse().expect("documented tolerance");
+        let decimals = numeric.split('.').nth(1).map(str::len).unwrap_or(0);
+        let unit = 10_f64.powi(-(decimals as i32));
+        let effective = effective_zero_temperature_tol(&PafiConfig::default());
+        let difference = (effective - documented).abs();
+        assert!(
+            difference <= 0.5 * unit,
+            "effective {effective} documented {documented} difference {difference}"
+        );
+    }
+
+    #[test]
+    fn explicit_tolerance_equal_to_the_nine_plane_value_stays_fixed() {
+        let planes = 33usize;
+        let nine_plane = default_zero_temperature_tol(DEFAULT_PLANES);
+        let explicit = PafiConfig::default()
+            .with_planes(planes)
+            .with_zero_temperature_tol(nine_plane);
+        assert_eq!(explicit.zero_temperature_tol, Some(nine_plane));
         assert_eq!(
-            effective_zero_temperature_tol(&exact).to_bits(),
-            default_zero_temperature_tol(33).to_bits()
+            effective_zero_temperature_tol(&explicit).to_bits(),
+            nine_plane.to_bits()
+        );
+        assert_ne!(
+            nine_plane.to_bits(),
+            default_zero_temperature_tol(planes).to_bits()
         );
 
-        let next_up = f64::from_bits(DEFAULT_ZERO_TEMPERATURE_TOL.to_bits() + 1);
-        let near = PafiConfig::default()
-            .with_planes(33)
-            .with_zero_temperature_tol(next_up);
+        let unset = PafiConfig::default().with_planes(planes);
+        assert!(unset.zero_temperature_tol.is_none());
         assert_eq!(
-            effective_zero_temperature_tol(&near).to_bits(),
-            next_up.to_bits()
+            effective_zero_temperature_tol(&unset).to_bits(),
+            default_zero_temperature_tol(planes).to_bits()
         );
     }
 

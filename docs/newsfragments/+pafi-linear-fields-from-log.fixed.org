@@ -1,0 +1,10 @@
+=reactant_log_partition= and =normalized_log_rate= stay authoritative
+for every finite value. Callers read =reactant_partition=,
+=normalized_rate=, and =normalized_rate_error= as =Option<f64>=.
+=reactant_partition= and =normalized_rate= are =None= when the
+exponential of that finite log overflows or underflows.
+=normalized_rate_error= holds
+=exp(normalized_log_rate + ln(sigma))= with \(\sigma =\) =barrier_error=
+/k_B T. =Some(0.0)= when \(\sigma = 0\). Otherwise it is =None= only when
+that exponential overflows, underflows, or is not finite. A finite log
+stays on the profile.

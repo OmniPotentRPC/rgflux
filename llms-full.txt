@@ -485,7 +485,14 @@ fn main() -> Result<(), rgflux::FluxError> {
     let analytic = 1.0 + 0.5 * temperature * 1.5_f64.ln();
     assert!(profile.barrier_error > 0.0);
     assert!((profile.barrier - analytic).abs() < 5.0 * profile.barrier_error);
-    assert!(profile.normalized_rate > 0.0 && profile.normalized_rate_error > 0.0);
+    assert!(
+        profile
+            .normalized_rate
+            .is_some_and(|rate| rate > 0.0)
+            && profile
+                .normalized_rate_error
+                .is_some_and(|error| error > 0.0)
+    );
     Ok(())
 }
 ```
@@ -493,7 +500,7 @@ fn main() -> Result<(), rgflux::FluxError> {
 Points to adapt for a real path:
 
 - *Images*: `path_images` has one row per image and one column per degree of freedom, in the units and ordering of the engine. The planes are placed by the spline, not at the images, so the number of images and `planes` are independent.
-- *Planes and tolerance*: The zero-temperature check compares \(\lvert I_T - \Delta E_0\rvert / \max(E_{\mathrm{unit}}, \lvert\Delta E_0\rvert)\) with a dimensionless tolerance. Here \(I_T\) is the trapezoid integral of \(dV/ds\), \(\Delta E_0\) is the endpoint energy change and \(E_{\mathrm{unit}}\) is one energy unit of the engine. The stored default is about 2.6% for 9 planes. While the field retains that value, the effective tolerance scales as \((\text{planes} - 1)^{-2}\) when `planes` changes. A value supplied with `with_zero_temperature_tol` is used unchanged. A sharper path can require a larger explicit tolerance. A failing check returns `FluxError::InvalidConfig` before any sampling.
+- *Planes and tolerance*: The zero-temperature check compares \(\lvert I_T - \Delta E_0\rvert / \max(E_{\mathrm{unit}}, \lvert\Delta E_0\rvert)\) with a dimensionless tolerance. Here \(I_T\) is the trapezoid integral of \(dV/ds\), \(\Delta E_0\) is the endpoint energy change and \(E_{\mathrm{unit}}\) is one energy unit of the engine. `zero_temperature_tol` is `Option<f64>`. `None`, the default, uses \(2 (\pi^2 / 12) / (\text{planes} - 1)^2\), about 2.6% at 9 planes, and scales when `planes` changes. `with_zero_temperature_tol` sets a value used at every plane count, including a value equal to the 9-plane tolerance. A sharper path can require a larger explicit tolerance. A failing check returns `FluxError::InvalidConfig` before any sampling.
 - *Statistical error*: Set `with_target_error(0.01)` and `with_max_rounds(8)` to repeat sampling in rounds of `sample_steps` until `barrier_error` reaches the target. Reaching `max_rounds` first is not an error, so compare `barrier_error` with the target yourself.
 - *Reproducibility*: The seed of plane \(k\) in round \(r\) is `seed + 4099 * k + 1000003 * r`, so a fixed `with_seed` gives the same profile for a deterministic engine.
 - *Engine*: `pafi_profile_dyn` accepts `&mut dyn DynamicsEngine`. The engine is restored on return, with the stochastic stream the only exception.
@@ -795,13 +802,13 @@ Constructors and methods: `HyperplaneConstraint::new(normal, offset)`, `from_dir
 | `time_step` | `f64` | `0.002` | Integration timestep \(\Delta t > 0\) in engine time units |
 | `target_error` | `Option<f64>` | `None` | Optional target standard error on \(\Delta F\) (finite, \(\ge 0\)); `None` runs one round |
 | `max_rounds` | `usize` | `4` | Maximum sampling rounds (\(\ge 1\)); later rounds run only while `target_error` is set and not reached, and missing it is not an error |
-| `zero_temperature_tol` | `f64` | \(2 (\pi^2 / 12) / 8^2 \approx 0.0257\) | Dimensionless tolerance for \(\lvert I_T - \Delta E_0\rvert / \max(E_{\mathrm{unit}}, \lvert\Delta E_0\rvert)\), where both energies use engine energy units and \(E_{\mathrm{unit}}\) is one such unit (finite, \(\ge 0\)); see the scaling note below |
+| `zero_temperature_tol` | `Option<f64>` | `None` | Dimensionless tolerance for \(\lvert I_T - \Delta E_0\rvert / \max(E_{\mathrm{unit}}, \lvert\Delta E_0\rvert)\), where both energies use engine energy units and \(E_{\mathrm{unit}}\) is one such unit. `None` uses \(2 (\pi^2 / 12) / (\text{planes} - 1)^2\) (\(\approx 0.0257\) at 9 planes). `Some(value)` uses that finite value (\(\ge 0\)) at every plane count, including the 9-plane value; see the scaling note below |
 | `seed` | `u64` | `1` | Base of the per-plane seeds `seed + 4099 * plane + 1000003 * round` (wrapping) |
 | `stats` | `StatsConfig` | `StatsConfig::default()` | Batch-means settings for the per-plane force series |
 
 Here \(I_T\) is the trapezoid integral of \(dV/ds\) over the plane anchors and \(\Delta E_0\) is the endpoint energy change. The ratio is relative to \(\lvert\Delta E_0\rvert\) at or above one engine energy unit and bounds the absolute discrepancy below that scale.
 
-The value stored by `PafiConfig::default()` is the 9-plane value shown in the table. While the field retains that value, the effective tolerance is \(2 (\pi^2 / 12) / (\text{planes} - 1)^2\), so changing `planes` scales the tolerance with the trapezoid error. An explicitly different value is used unchanged. The scaling follows a quarter-turn circular arc through a harmonic well. A path that turns further can need a larger explicit tolerance.
+`None`, the value stored by `PafiConfig::default()`, sets the effective tolerance to \(2 (\pi^2 / 12) / (\text{planes} - 1)^2\). At the default 9 planes that is the \(\approx 0.0257\) in the table, and changing `planes` scales the tolerance with the trapezoid error. `Some(value)` uses `value` at every plane count, including a value equal to the 9-plane tolerance. The scaling follows a quarter-turn circular arc through a harmonic well. A path that turns further can need a larger explicit tolerance.
 
 ### `pafi::FreeEnergyProfile`
 
@@ -809,17 +816,17 @@ The value stored by `PafiConfig::default()` is the 9-plane value shown in the ta
 |---+---+---|
 | `arc_lengths` | `Vec<f64>` | Plane coordinates \(s_k\): the mass-weighted chord-length parameter of the spline, from 0 at the first image to the total path length at the last, at equal spacing. Not scaled to \([0, 1]\) |
 | `free_energy` | `Vec<f64>` | \(F(s_k) - F(s_0)\) by cubic Hermite quadrature of the plane means; the first entry is 0. With two planes the derivative correction cancels and the rule is the trapezoid rule. With three planes it is exact for a quadratic gradient. With four or more planes it is exact for a cubic gradient |
-| `standard_error` | `Vec<f64>` | Standard error of `free_energy`: batch-means plane-force error through the Hermite weights, combined by hypot with the absolute Hermite-minus-trapezoid difference on the same nodes; the first entry is 0 |
+| `standard_error` | `Vec<f64>` | Standard error of `free_energy`: batch-means plane-force error through the Hermite weights, combined by hypot with the absolute Hermite-minus-trapezoid difference on the same nodes; the first entry is 0. The weighted uncertainty norm is scaled to avoid overflow from finite plane errors |
 | `barrier` | `f64` | \(\Delta F\), the global maximum of the Hermite interpolant, which can exceed every sampled value |
 | `barrier_error` | `f64` | Standard error of `barrier`: the same combination at `s*` |
 | `dividing_index` | `usize` | First plane with the highest sampled free energy. The interpolant maximum recorded in `dividing_arc` can lie on a different interval |
 | `dividing_arc` | `f64` | Arc length \(s^*\) of the global maximum of the Hermite interpolant |
 | `reactant_frequency` | `f64` | \(\omega_0 = ( \mathbf{n}^\top \mathbf{H}^{-1} \mathbf{n} )^{-1/2}\) from the mass-weighted Hessian at the first image, in inverse engine time |
-| `reactant_partition` | `f64` | \(Z_R = \sqrt{2\pi k_{\mathrm{B}}T} / \omega_0\), in units of \(s\) |
+| `reactant_partition` | `Option<f64>` | \(Z_R = \sqrt{2\pi k_{\mathrm{B}}T} / \omega_0\), in units of \(s\). `Some` when its exponential is finite and positive; otherwise `None` |
 | `reactant_log_partition` | `f64` | \(\ln Z_R = \tfrac{1}{2}\ln(2\pi k_{\mathrm{B}}T) - \ln \omega_0\) |
-| `normalized_rate` | `f64` | \(k = (\omega_0 / 2\pi) \exp(-\Delta F / k_{\mathrm{B}}T)\) in inverse engine time |
-| `normalized_log_rate` | `f64` | \(\ln k = \ln \omega_0 - \ln(2\pi) - \Delta F / k_{\mathrm{B}}T\), finite when the exponential in `normalized_rate` underflows |
-| `normalized_rate_error` | `f64` | Delta-method standard error \(k\,\sigma_{\Delta F} / k_{\mathrm{B}}T\). \(Z_R\) is a property of the reactant Hessian, so its sampling sensitivity is zero |
+| `normalized_rate` | `Option<f64>` | \(k = (\omega_0 / 2\pi) \exp(-\Delta F / k_{\mathrm{B}}T)\) in inverse engine time. `Some` when its exponential is finite and positive; otherwise `None` |
+| `normalized_log_rate` | `f64` | \(\ln k = \ln \omega_0 - \ln(2\pi) - \Delta F / k_{\mathrm{B}}T\), including when the linear rate underflows |
+| `normalized_rate_error` | `Option<f64>` | Delta-method standard error \(k\,\sigma_{\Delta F} / k_{\mathrm{B}}T\), i.e. `exp(normalized_log_rate + ln(sigma))` with \(\sigma =\) `barrier_error` \(/ k_{\mathrm{B}}T\). `Some(0.0)` when \(\sigma = 0\). Otherwise `Some` when that exponential is finite and positive. `None` when \(\sigma \neq 0\) and it overflows, underflows, or is not finite. \(Z_R\) is a property of the reactant Hessian, so its sampling sensitivity is zero |
 | `quadrature_residual` | `f64` | Largest absolute gap between the Hermite integral of \(dV/ds\) and the endpoint energy change. The acceptance check remains the trapezoid comparison in `PafiConfig::zero_temperature_tol` |
 
 ### `network::NetworkConfig` and `RateTableConfig`
@@ -1800,7 +1807,7 @@ The seed of plane \(k\) in round \(r\) is `seed + 4099 * k + 1000003 * r` (wrapp
 
 The numerator and denominator in step 3 are energies in the engine's energy units, so their ratio and `zero_temperature_tol` are dimensionless. For \(\lvert\Delta E_0\rvert \ge E_{\mathrm{unit}}\) the check is relative to the endpoint energy change. Below one energy unit it instead bounds the absolute discrepancy to the effective tolerance times one engine energy unit.
 
-The value stored by `PafiConfig::default()` is \(2 (\pi^2 / 12) / 8^2 \approx 0.0257\), the value for the default 9 planes. When the field retains that value, changing `planes` makes the effective tolerance \(2 (\pi^2 / 12) / (\text{planes} - 1)^2\). An explicitly different value is used unchanged and does not scale with `planes`. This scaling follows the trapezoid error on a quarter-turn circular arc through a harmonic well, \(\pi^2 / (12 (\text{planes} - 1)^2)\). A path that turns through more than a quarter circle can need a larger explicit tolerance, which also weakens the guard against inconsistent forces and tangents.
+`None`, the value stored by `PafiConfig::default()`, makes the effective tolerance \(2 (\pi^2 / 12) / (\text{planes} - 1)^2\), which is \(2 (\pi^2 / 12) / 8^2 \approx 0.0257\) at the default 9 planes. Changing `planes` scales that tolerance. An explicit value passed to `with_zero_temperature_tol` is the tolerance at every plane count, including when it equals the 9-plane value. This scaling follows the trapezoid error on a quarter-turn circular arc through a harmonic well, \(\pi^2 / (12 (\text{planes} - 1)^2)\). A path that turns through more than a quarter circle can need a larger explicit tolerance, which also weakens the guard against inconsistent forces and tangents.
 
 ### Assumptions, units, and engine wiring
 

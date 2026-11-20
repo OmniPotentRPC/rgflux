@@ -5,7 +5,10 @@ use rgflux::engine::native::{NativeConfig, NativeEngine};
 use rgflux::pafi::{PafiConfig, pafi_profile};
 use rgflux::stats::StatsConfig;
 
-struct InconsistentLinearGradient;
+struct InconsistentLinearGradient {
+    gradient: f64,
+    slope: f64,
+}
 
 impl rgsaddle::PointSurface for InconsistentLinearGradient {
     fn eval(&self, x: ArrayView1<'_, f64>) -> Result<(f64, Array1<f64>), rgsaddle::SaddleError> {
@@ -13,8 +16,7 @@ impl rgsaddle::PointSurface for InconsistentLinearGradient {
         // discrepancy of 0.02. Adding that same shortfall as a slope
         // recenters the gradient so the trapezoid integral is still 0.98,
         // and it keeps the reactant curvature positive once the check passes.
-        let shortfall = 0.02;
-        let gradient = (1.0 - shortfall) + shortfall * (x[0] - 0.5);
+        let gradient = self.gradient + self.slope * (x[0] - 0.5);
         Ok((x[0], Array1::from_vec(vec![gradient])))
     }
 }
@@ -23,7 +25,10 @@ impl rgsaddle::PointSurface for InconsistentLinearGradient {
 fn default_tolerance_scales_with_planes_for_consistency_check() {
     let path = Array2::from_shape_vec((2, 1), vec![0.0, 1.0]).expect("shape");
     let mut engine = NativeEngine::new(
-        InconsistentLinearGradient,
+        InconsistentLinearGradient {
+            gradient: 0.98,
+            slope: 0.02,
+        },
         NativeConfig::default()
             .with_masses(Array1::from_vec(vec![1.0]))
             .with_thermostat(ThermostatConfig::default().with_temperature(0.2))
@@ -43,7 +48,10 @@ fn default_tolerance_scales_with_planes_for_consistency_check() {
     );
 
     let mut legacy_engine = NativeEngine::new(
-        InconsistentLinearGradient,
+        InconsistentLinearGradient {
+            gradient: 0.98,
+            slope: 0.02,
+        },
         NativeConfig::default()
             .with_masses(Array1::from_vec(vec![1.0]))
             .with_thermostat(ThermostatConfig::default().with_temperature(0.2))
@@ -57,4 +65,40 @@ fn default_tolerance_scales_with_planes_for_consistency_check() {
         .with_sample_steps(2)
         .with_stats(StatsConfig::default().with_min_batches(2));
     assert!(pafi_profile(&mut legacy_engine, path.view(), &legacy_like).is_ok());
+}
+
+#[test]
+fn explicit_nine_plane_tolerance_is_not_scaled_with_planes() {
+    let path = Array2::from_shape_vec((2, 1), vec![0.0, 1.0]).expect("shape");
+    let nine_plane_tol = 2.0 * (std::f64::consts::PI.powi(2) / 12.0) / 64.0;
+    let config = |tol: Option<f64>| {
+        PafiConfig::default()
+            .with_planes(33)
+            .with_zero_temperature_tol(tol)
+            .with_burn_in_steps(1)
+            .with_sample_steps(2)
+            .with_stats(StatsConfig::default().with_min_batches(2))
+    };
+    let run = |config: &PafiConfig| {
+        let mut engine = NativeEngine::new(
+            InconsistentLinearGradient {
+                gradient: 0.98,
+                slope: 0.02,
+            },
+            NativeConfig::default()
+                .with_masses(Array1::from_vec(vec![1.0]))
+                .with_thermostat(ThermostatConfig::default().with_temperature(0.2))
+                .with_seed(23),
+        )
+        .expect("engine");
+        pafi_profile(&mut engine, path.view(), config)
+    };
+
+    assert!(run(&config(Some(nine_plane_tol))).is_ok());
+    assert_eq!(
+        run(&config(None)),
+        Err(FluxError::InvalidConfig(
+            "PAFI zero-temperature path-force quadrature exceeds tolerance"
+        ))
+    );
 }

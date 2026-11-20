@@ -143,7 +143,25 @@ fn reference_pafi_defaults_match_the_code() {
         "=max_rounds=",
         format!("=usize= | ={}=", defaults.max_rounds).as_str(),
     );
-    assert_row_contains(&pafi_rows, "=zero_temperature_tol=", "\\approx");
+    assert_row_contains(
+        &pafi_rows,
+        "=zero_temperature_tol=",
+        "=Option<f64>= | =None=",
+    );
+    assert!(defaults.zero_temperature_tol.is_none());
+    let tolerance_row = pafi_rows
+        .iter()
+        .find(|row| row.contains("=zero_temperature_tol="))
+        .expect("zero_temperature_tol row");
+    let (documented, tolerance) = documented_approximate_value(tolerance_row);
+    let intervals = (defaults.planes - 1) as f64;
+    let effective =
+        2.0 * (std::f64::consts::PI * std::f64::consts::PI / 12.0) / (intervals * intervals);
+    let difference = (effective - documented).abs();
+    assert!(
+        difference <= tolerance,
+        "effective default {effective} disagrees with documented {documented} by {difference}, above {tolerance}",
+    );
     assert_row_contains(
         &pafi_rows,
         "=seed=",
@@ -186,6 +204,30 @@ fn extract_pafi_reference_rows(reference: &str) -> Vec<String> {
         }
     }
     rows
+}
+
+fn documented_approximate_value(row: &str) -> (f64, f64) {
+    let marker = "\\approx ";
+    let start = row
+        .find(marker)
+        .unwrap_or_else(|| panic!("row has no approximate value:\n{row}"));
+    let rest = &row[start + marker.len()..];
+    let mut end = 0usize;
+    for (index, ch) in rest.char_indices() {
+        if ch.is_ascii_digit() || ch == '.' {
+            end = index + ch.len_utf8();
+        } else {
+            break;
+        }
+    }
+    assert!(end > 0, "approximate value is empty:\n{row}");
+    let numeric = &rest[..end];
+    let value = numeric
+        .parse::<f64>()
+        .unwrap_or_else(|_| panic!("could not parse `{numeric}` from:\n{row}"));
+    let decimals = numeric.split('.').nth(1).map(str::len).unwrap_or(0);
+    let unit = 10_f64.powi(-(decimals as i32));
+    (value, 0.5 * unit)
 }
 
 fn assert_row_contains(rows: &[String], field: &str, fragment: &str) {
@@ -432,7 +474,12 @@ fn howto_pafi_widening_well_example_runs() -> Result<(), FluxError> {
     let analytic = 1.0 + 0.5 * temperature * 1.5_f64.ln();
     assert!(profile.barrier_error > 0.0);
     assert!((profile.barrier - analytic).abs() < 5.0 * profile.barrier_error);
-    assert!(profile.normalized_rate > 0.0 && profile.normalized_rate_error > 0.0);
+    assert!(
+        profile.normalized_rate.is_some_and(|rate| rate > 0.0)
+            && profile
+                .normalized_rate_error
+                .is_some_and(|error| error > 0.0)
+    );
     Ok(())
 }
 
