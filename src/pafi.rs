@@ -3009,7 +3009,7 @@ mod tests {
     }
 
     #[test]
-    fn deep_well_linear_error_does_not_collapse() {
+    fn underflowing_linear_rate_is_none_while_its_error_stays_zero() {
         let arcs = [0.0, 1.0, 2.0, 3.0];
         let gradients = [-800.0, -800.0, 800.0, 820.0];
         let errors = [0.2, 0.2, 0.2, 0.2];
@@ -3166,18 +3166,6 @@ mod tests {
         let expected = (profile.normalized_log_rate + ln_sigma).exp();
         assert_relative_close(expected, 5.26e-156, FAR_BELOW_RANGE_RATE_ERROR_TOLERANCE);
         assert_relative_close(reported, expected, NORMALIZED_RATE_ERROR_RELATIVE_TOLERANCE);
-    }
-
-    #[test]
-    fn normalized_rate_error_survives_linear_underflow() {
-        let arcs = [0.0, 1.0, 2.0, 3.0];
-        let gradients = [-800.0, -800.0, 800.0, 820.0];
-        let errors = [0.2, 0.2, 0.2, 0.2];
-        let profile = profile_from(&arcs, &gradients, &errors, 1.0, 4.0).expect("profile");
-        assert!(profile.normalized_log_rate.is_finite());
-        assert_eq!(profile.normalized_log_rate.exp(), 0.0);
-        assert!(profile.normalized_rate.is_none());
-        assert_eq!(profile.normalized_rate_error, Some(0.0));
     }
 
     #[test]
