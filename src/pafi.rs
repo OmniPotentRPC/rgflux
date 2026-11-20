@@ -72,13 +72,16 @@
 //!    is one energy unit of the engine, and compares that dimensionless value
 //!    with the effective tolerance from [`PafiConfig::zero_temperature_tol`].
 //!    A mismatch returns [`FluxError::InvalidConfig`] before any sampling.
-//! 4. The first image is certified as a reactant minimum before any
-//!    sampling (`dof <= 128`): its forces must be finite, and the
-//!    mass-weighted Hessian must be positive definite once eigenvalues on the
-//!    zero-mode floor are set aside. The Hessian products are central
-//!    differences whose step is a fixed fraction of the displacement, so a
-//!    translation of every coordinate leaves the Hessian unchanged. `omega_0`
-//!    is then solved by conjugate gradients on those products.
+//! 4. The first image is checked as a reactant minimum before any sampling.
+//!    Its forces must be finite. At `dof <= 128`, the mass-weighted Hessian
+//!    must also be positive definite once eigenvalues on the zero-mode floor
+//!    are set aside; above that limit dense certification is skipped and
+//!    [`FreeEnergyProfile::reactant_hessian_certified`] is `false`. The
+//!    projected curvature must remain positive at every size. Hessian products
+//!    are central differences whose step is a fixed fraction of the
+//!    displacement, so a translation of every coordinate leaves the Hessian
+//!    unchanged. `omega_0` is then solved by conjugate gradients on those
+//!    products.
 //! 5. On each plane the engine is constrained, placed at the anchor, given
 //!    Maxwell-Boltzmann velocities, run for `burn_in_steps`, and then run for
 //!    `sample_steps` steps that each record
@@ -114,13 +117,13 @@
 //! - Each plane equilibrates within `burn_in_steps`. The samples start at the
 //!   anchor, so a plane whose thermal centre lies far from its anchor needs a
 //!   long burn-in.
-//! - The first image is the reactant minimum (`dof <= 128`). The call checks
-//!   that the forces are finite and that the mass-weighted Hessian is positive
-//!   definite there, excluding zero modes, and reports the projected frequency. A failing
-//!   check, or a non-positive curvature along the path normal, makes that
-//!   frequency undefined and the call fails. A profile whose maximum is the
-//!   first sample has an empty reactant interval, so `Z_R` is undefined and
-//!   the call fails.
+//! - The first image is the reactant minimum. The call checks that its forces
+//!   are finite and, at `dof <= 128`, that the mass-weighted Hessian is positive
+//!   definite there after excluding zero modes. Above that limit the dense
+//!   check is skipped. At every size, a non-positive curvature along the path
+//!   normal makes the projected frequency undefined and the call fails. A
+//!   profile whose maximum is the first sample has an empty reactant interval,
+//!   so `Z_R` is undefined and the call fails.
 //!
 //! ## Units
 //!
@@ -403,6 +406,12 @@ pub struct FreeEnergyProfile {
     /// mass-weighted reactant Hessian `H` and the unit mass-weighted path
     /// normal `n` at the first image.
     pub reactant_frequency: f64,
+    /// Whether the full mass-weighted reactant Hessian was certified positive
+    /// definite off its zero modes by the dense eigensolver. This is `false`
+    /// when the coordinate count exceeds 128 and dense certification is
+    /// skipped; finite forces and positive projected curvature are still
+    /// required.
+    pub reactant_hessian_certified: bool,
     /// Reactant partition, when its finite logarithm has a representable
     /// positive exponential.
     pub reactant_partition: Option<f64>,
@@ -766,7 +775,7 @@ fn reactant_zero_mode_floor() -> f64 {
 }
 
 /// `rgsaddle::exact_eigh` uses cyclic Jacobi through this dimension when the
-/// `faer` feature is off. A larger reactant is rejected instead of panicking.
+/// `faer` feature is off. Dense certification is skipped above this limit.
 const REACTANT_HESSIAN_EIGEN_LIMIT: usize = 128;
 
 /// Cubic Hermite quadrature of the plane mean forces.
@@ -1560,6 +1569,7 @@ fn integrate_profile(
     gradient_errors: &[f64],
     kbt: f64,
     reactant_curvature: f64,
+    reactant_hessian_certified: bool,
 ) -> Result<FreeEnergyProfile, FluxError> {
     let n = quadrature.len();
     if gradients.len() != n || gradient_errors.len() != n {
@@ -1680,6 +1690,7 @@ fn integrate_profile(
         dividing_index: dividing.index,
         dividing_arc: dividing.arc,
         reactant_frequency,
+        reactant_hessian_certified,
         reactant_partition,
         reactant_log_partition,
         normalized_rate,
@@ -1758,25 +1769,28 @@ fn mass_weighted_hessian<E: DynamicsEngine + ?Sized>(
     Ok(hessian)
 }
 
-/// Reject a first image whose reactant Hessian is not positive definite off
-/// the zero modes.
+/// Check the first image and report whether its full Hessian was certified.
 ///
 /// The forces at `origin` must be finite, and for `dof <= 128`
 /// ([`REACTANT_HESSIAN_EIGEN_LIMIT`]) the mass-weighted Hessian is
 /// diagonalized with [`rgsaddle::exact_eigh`]. Eigenvalues no larger than
 /// [`reactant_zero_mode_floor`] times `1 +` the stiffest curvature are zero
 /// modes. Every other eigenvalue must be positive, and at least one positive
-/// eigenvalue must remain.
+/// eigenvalue must remain. Above the limit, finite forces are the cheap check
+/// here and positive projected curvature is checked by [`reactant_curvature`].
 fn ensure_reactant_minimum<E: DynamicsEngine + ?Sized>(
     engine: &mut E,
     origin: ArrayView1<'_, f64>,
-) -> Result<(), FluxError> {
+) -> Result<bool, FluxError> {
     engine.set_positions(origin)?;
     let (_, forces) = engine.energy_and_forces()?;
     for force in forces.iter().copied() {
         if !force.is_finite() {
             return Err(FluxError::NonFinite("PAFI reactant force"));
         }
+    }
+    if origin.len() > REACTANT_HESSIAN_EIGEN_LIMIT {
+        return Ok(false);
     }
     let root_mass = engine.masses().mapv(f64::sqrt);
     let hessian = mass_weighted_hessian(engine, origin, root_mass.view())?;
@@ -1806,7 +1820,7 @@ fn ensure_reactant_minimum<E: DynamicsEngine + ?Sized>(
             "PAFI reactant Hessian has no positive curvature off the zero modes",
         ));
     }
-    Ok(())
+    Ok(true)
 }
 
 /// Squared projected reactant frequency `omega_0^2 = 1 / (n^T H^-1 n)`.
@@ -1910,7 +1924,7 @@ fn path_force_relative_error(arcs: &[f64], energies: &[f64], gradients: &[f64]) 
 /// - the thermal energy `k_B T` of the engine is not positive,
 /// - the zero-temperature check of [`PafiConfig::zero_temperature_tol`] fails,
 /// - a plane normal degenerates, the mass-weighted Hessian at the first image
-///   (`dof <= 128`) is not positive definite once zero modes are excluded,
+///   is not positive definite once zero modes are excluded when `dof <= 128`,
 ///   the reactant curvature along the first path normal is not finite and
 ///   positive, or the dividing segment has zero width.
 ///
@@ -2007,7 +2021,8 @@ pub fn pafi_profile<E: DynamicsEngine + ?Sized>(
             }
             quadrature_residual = quadrature_residual.max(discrepancy);
         }
-        ensure_reactant_minimum(engine, geometries[0].anchor.view())?;
+        let reactant_hessian_certified =
+            ensure_reactant_minimum(engine, geometries[0].anchor.view())?;
         let curvature = reactant_curvature(engine, &geometries[0])?;
 
         let mut plane_samples = vec![Vec::new(); geometries.len()];
@@ -2026,7 +2041,14 @@ pub fn pafi_profile<E: DynamicsEngine + ?Sized>(
                 .iter()
                 .map(|estimate| estimate.standard_error)
                 .collect();
-            let mut profile = integrate_profile(&quadrature, &gradients, &errors, kbt, curvature)?;
+            let mut profile = integrate_profile(
+                &quadrature,
+                &gradients,
+                &errors,
+                kbt,
+                curvature,
+                reactant_hessian_certified,
+            )?;
             profile.quadrature_residual = quadrature_residual;
             let target_reached = match config.target_error {
                 Some(target) => profile.barrier_error <= target,
@@ -2212,7 +2234,7 @@ mod tests {
         curvature: f64,
     ) -> Result<FreeEnergyProfile, FluxError> {
         let quadrature = Quadrature::new(arcs)?;
-        integrate_profile(&quadrature, gradients, errors, kbt, curvature)
+        integrate_profile(&quadrature, gradients, errors, kbt, curvature, true)
     }
 
     #[test]
