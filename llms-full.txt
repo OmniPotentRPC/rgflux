@@ -508,7 +508,7 @@ use rgflux::engine::native::{NativeConfig, NativeEngine};
 use rgflux::engine::{HyperplaneConstraint, ThermostatConfig};
 use rgflux::hyperplane::{HyperplaneConfig, sample_hyperplane};
 use rgflux::kappa::bennett_chandler::{ShootingConfig, shoot_bennett_chandler};
-use rgflux::kappa::kramers_transmission_coefficient;
+use rgflux::kappa::{KappaConfig, kramers_transmission_coefficient};
 
 struct SeparableDoubleWell2D;
 
@@ -554,7 +554,11 @@ fn main() -> Result<(), rgflux::FluxError> {
         .with_steps(120)
         .with_time_step(0.05)
         .with_antithetic(true)
-        .with_commit_checkpoints(64)
+        .with_kappa(
+            KappaConfig::default()
+                .with_early_commitment(true)
+                .with_commit_checkpoints(64),
+        )
         .with_seed(99);
     let bc = shoot_bennett_chandler(
         &mut engine,
@@ -569,7 +573,7 @@ fn main() -> Result<(), rgflux::FluxError> {
 }
 ```
 
-Here `with_commit_checkpoints(64)` sets `KappaConfig::commit_checkpoints` on `ShootingConfig::kappa` so that a half-trajectory ends once 64 consecutive steps (\(64 \times 0.05 = 3.2 > 1 / \lambda_+ \approx 1.65\)) agree on a committed side and copies that side into the remaining checkpoints of \(\kappa(t)\). Passing `with_commit_checkpoints(0)` disables early commitment stopping and integrates every half to `steps`.
+Early commitment is off by default, so without the `with_kappa` line every half is integrated to `steps`. Here `KappaConfig::with_early_commitment(true)` turns it on and `with_commit_checkpoints(64)` sets `KappaConfig::commit_checkpoints` on `ShootingConfig::kappa` so that a half-trajectory ends once 64 consecutive steps (\(64 \times 0.05 = 3.2 > 1 / \lambda_+ \approx 1.65\)) agree on a committed side and copies that side into the remaining checkpoints of \(\kappa(t)\). `ShootingConfig::with_commit_checkpoints` alone only sets the window and does not enable early commitment.
 
 ## Wrap an `rgmin` objective with `EindirSurface`
 
@@ -608,8 +612,8 @@ fn main() -> Result<(), rgflux::FluxError> {
 |---+---+---|
 | `engine` | `DynamicsEngine` trait, `ForceSurface`, `EindirSurface`, `HyperplaneConstraint`, `ThermostatConfig`, `SurfaceVelocityPolicy`, `StepReport`, `native` BAOAB/RATTLE backend, optional direct `lammpc` backend, `rgpot` static PES wrapper, and `rgpot-session` MD session skeleton (`openmm`, `nblib`, `lammps`) | Implemented (`native`, `lammpc`, `rgpot`) and `rgpot-session` skeleton |
 | `stats` | Batch means, effective sample size `n_eff`, and stationarity diagnostics | Implemented; spline-propagated profile covariance helpers are not yet implemented |
-| `kappa::bennett_chandler` | Engine-free reactive-flux estimator and `DynamicsEngine` trajectory shooter | Implemented (including `KappaConfig::commit_checkpoints` early-commitment stopping) |
-| `kappa` | Kramers analytical barrier-recrossing factor and Bennett-Chandler surface shooting | `kramers_transmission_coefficient` and the trajectory shooter are implemented; after `commit_checkpoints` consecutive samples on one side, each half-trajectory stops and that committed side fills its remaining checkpoints, so later recrossings do not change `kappa(t)` |
+| `kappa::bennett_chandler` | Engine-free reactive-flux estimator and `DynamicsEngine` trajectory shooter | Implemented (including opt-in `KappaConfig::early_commitment` stopping, off by default) |
+| `kappa` | Kramers analytical barrier-recrossing factor and Bennett-Chandler surface shooting | `kramers_transmission_coefficient` and the trajectory shooter are implemented; every half-trajectory runs to `steps` unless `KappaConfig::early_commitment` is enabled, in which case, after `commit_checkpoints` consecutive samples on one side, the half stops and that committed side fills its remaining checkpoints, so later recrossings do not change `kappa(t)` |
 | `hyperplane` | Constrained hyperplane sampling (`sample_hyperplane`) and zero-variance control variates | Mean constraint force and configuration retention implemented; the in-plane virial, torque, and control variates are not yet implemented |
 | `pafi` | Projected Average Force Integration along reaction paths (`PafiConfig`, `FreeEnergyProfile`, `pafi_profile`, `pafi_profile_dyn`) | Implemented: mass-metric spline planes with not-a-knot ends, zero-temperature trapezoid path-force check, burn-in and batch-means sampling per plane, adaptive rounds to a target error, cubic Hermite free-energy profile, global interpolant maximum, projected-frequency reactant partition, barrier, and normalized rate with propagated errors; the engine is restored on return |
 | `ohtst` | OH-TST with a fixed hyperplane normal (`optimize_hyperplane`) | Implemented for a fixed normal with `rgsaddle::flux_mass`; normal optimization is not yet implemented |
@@ -728,7 +732,8 @@ Constructors and methods: `HyperplaneConstraint::new(normal, offset)`, `from_dir
 
 | Field | Type | Default | Constraint / Meaning |
 |---+---+---+---|
-| `commit_checkpoints` | `usize` | `4` (`DEFAULT_COMMIT_CHECKPOINTS`) | Consecutive basin-commitment checkpoints on a committed side (\(s < 0\) or \(s > 0\)) required to stop a half-trajectory and copy that side into later checkpoints (\(\le \text{steps}\); `0` runs every half to `steps`) |
+| `early_commitment` | `bool` | `false` | Stop each half-trajectory once `commit_checkpoints` consecutive checkpoints agree on a committed side and copy that side into every later checkpoint of \(\kappa(t)\). When `false`, `commit_checkpoints` is ignored and not validated, and every half runs to `steps`, as before this option existed |
+| `commit_checkpoints` | `usize` | `4` (`DEFAULT_COMMIT_CHECKPOINTS`) | Consecutive checkpoints on a committed side (\(s < 0\) or \(s > 0\)) required to stop a half-trajectory. Read only when `early_commitment` is `true`, in which case it must satisfy \(\le\) `steps` (`0` runs every half to `steps`) |
 | `quench_force_tol` | `f64` | `0.001` | Reserved force tolerance for endpoint-quench classifiers; the Bennett-Chandler shooter commits from consecutive signed-side checkpoints and does not read this field |
 | `quench_max_steps` | `usize` | `2_000` | Reserved step limit for endpoint-quench classifiers; the Bennett-Chandler shooter commits from consecutive signed-side checkpoints and does not read this field |
 
@@ -744,7 +749,7 @@ Constructors and methods: `HyperplaneConstraint::new(normal, offset)`, `from_dir
 | `ShootingConfig` | `antithetic` | `bool` | `true` | Shoot antithetic \((+\mathbf{v}, -\mathbf{v})\) pairs from each configuration |
 | `ShootingConfig` | `seed` | `u64` | `1` | Deterministic base PRNG seed |
 | `ShootingConfig` | `estimator` | `BennettChandlerConfig` | `BennettChandlerConfig::default()` | Plateau estimator configuration |
-| `ShootingConfig` | `kappa` | `KappaConfig` | `KappaConfig::default()` | Basin-commitment configuration (`commit_checkpoints <` steps=; also settable via `ShootingConfig::with_commit_checkpoints`) |
+| `ShootingConfig` | `kappa` | `KappaConfig` | `KappaConfig::default()` | Basin-commitment configuration; early commitment is off unless `KappaConfig::early_commitment` is set. `ShootingConfig::with_commit_checkpoints` sets the window only and does not enable it |
 
 ### `hyperplane::HyperplaneConfig`
 
@@ -1408,9 +1413,11 @@ The generated block is authoritative. Run
 - `rgflux::kappa::KappaConfig`
 - `rgflux::kappa::KappaConfig::commit_checkpoints`
 - `rgflux::kappa::KappaConfig::default`
+- `rgflux::kappa::KappaConfig::early_commitment`
 - `rgflux::kappa::KappaConfig::quench_force_tol`
 - `rgflux::kappa::KappaConfig::quench_max_steps`
 - `rgflux::kappa::KappaConfig::with_commit_checkpoints`
+- `rgflux::kappa::KappaConfig::with_early_commitment`
 - `rgflux::kappa::KappaConfig::with_quench_force_tol`
 - `rgflux::kappa::KappaConfig::with_quench_max_steps`
 - `rgflux::kappa::ReactiveTrajectory`
@@ -1450,6 +1457,7 @@ The generated block is authoritative. Run
 - `rgflux::kappa::bennett_chandler::DEFAULT_SHOOTING_TIME_STEP`
 - `rgflux::kappa::bennett_chandler::KappaConfig`
 - `rgflux::kappa::bennett_chandler::KappaConfig::commit_checkpoints`
+- `rgflux::kappa::bennett_chandler::KappaConfig::early_commitment`
 - `rgflux::kappa::bennett_chandler::KappaConfig::quench_force_tol`
 - `rgflux::kappa::bennett_chandler::KappaConfig::quench_max_steps`
 - `rgflux::kappa::bennett_chandler::ReactiveTrajectory`
@@ -1836,7 +1844,7 @@ Transition state theory overcounts the true transition rate whenever trajectorie
 \]
 
 - `kappa::bennett_chandler::estimate_bennett_chandler` is completely engine-free: it evaluates \(\kappa(t)\) at every step over recorded `ReactiveTrajectory` slices, tests stationarity across the plateau window \([\lfloor f_{\mathrm{start}} T \rfloor, \lceil f_{\mathrm{end}} T \rceil)\) combining temporal batch-means variance with paired trajectory-ensemble early-minus-late shift variance, and computes the plateau standard error from linearized ratio influence values (automatically pairing antithetic \((+\mathbf{v}, -\mathbf{v})\) shots into even batch widths). Values of \(\kappa(t)\) and the plateau are never clamped into \([0, 1]\).
-- `kappa::bennett_chandler::shoot_reactive_trajectories` and `shoot_bennett_chandler` clear any active hyperplane constraint on a `DynamicsEngine`, shoot trajectories (including antithetic pairs with independent Langevin noise streams when `ShootingConfig::antithetic` is `true`) from dividing-surface configurations retained by `sample_hyperplane`, restore the engine's constraint, and reduce the ensemble via `estimate_bennett_chandler`. Each half-trajectory stops once `KappaConfig::commit_checkpoints` (configured on `ShootingConfig::kappa` or via `ShootingConfig::with_commit_checkpoints`, default `4`, must satisfy \(\text{commit\_checkpoints} \le \text{steps}\)) consecutive checkpoints agree on a committed side (\(s < 0\) for `Side::Reactant` or \(s > 0\) for `Side::Product`; \(s = 0\) on the plane resets the streak), copying that side into every remaining checkpoint of \(\kappa(t)\) so slow returns from a shallow well do not flip a committed shot. Setting `commit_checkpoints = 0` runs every half to `ShootingConfig::steps`. The commitment window must outlast the time a trajectory lingers at the barrier top (\(\sim 1 / \lambda_+\)): a shorter window commits trajectories that recross later and raises \(\kappa\).
+- `kappa::bennett_chandler::shoot_reactive_trajectories` and `shoot_bennett_chandler` clear any active hyperplane constraint on a `DynamicsEngine`, shoot trajectories (including antithetic pairs with independent Langevin noise streams when `ShootingConfig::antithetic` is `true`) from dividing-surface configurations retained by `sample_hyperplane`, restore the engine's constraint, and reduce the ensemble via `estimate_bennett_chandler`. By default every half-trajectory runs to `ShootingConfig::steps`. Setting `KappaConfig::early_commitment` to `true` (through `ShootingConfig::kappa`) turns on early commitment: each half-trajectory then stops once `KappaConfig::commit_checkpoints` (default `4`, settable through `ShootingConfig::with_commit_checkpoints` and required to satisfy \(\text{commit\_checkpoints} \le \text{steps}\)) consecutive checkpoints agree on a committed side (\(s < 0\) for `Side::Reactant` or \(s > 0\) for `Side::Product`; \(s = 0\) on the plane resets the streak), copying that side into every remaining checkpoint of \(\kappa(t)\) so slow returns from a shallow well do not flip a committed shot. With early commitment off the window is ignored, and with a window of `0` every half still runs to `steps`. The commitment window must outlast the time a trajectory lingers at the barrier top (\(\sim 1 / \lambda_+\)): a shorter window commits trajectories that recross later and raises \(\kappa\), which is why the option is off by default.
 - `kappa::kramers_transmission_coefficient` evaluates Kramers' analytical spatial-diffusion barrier-recrossing factor across a parabolic barrier of unstable frequency \(\omega_b > 0\) under Langevin friction \(\gamma \ge 0\) cite:`kramersBrownianMotion1940`:
 
   \[

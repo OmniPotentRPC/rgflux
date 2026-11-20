@@ -176,10 +176,16 @@ fn reference_kappa_and_shooting_defaults_match_the_code() {
     let kappa_defaults = KappaConfig::default();
     let shooting_defaults = ShootingConfig::default();
     let kappa_rows = extract_section_rows(reference, "** =kappa::KappaConfig=");
-    assert_eq!(kappa_rows.len(), 3, "expected all KappaConfig rows");
+    assert_eq!(kappa_rows.len(), 4, "expected all KappaConfig rows");
+    assert!(!kappa_defaults.early_commitment);
     assert_row_contains(
         &kappa_rows,
-        "=commit_checkpoints=",
+        "| =early_commitment= |",
+        format!("=bool= | ={}=", kappa_defaults.early_commitment).as_str(),
+    );
+    assert_row_contains(
+        &kappa_rows,
+        "| =commit_checkpoints= |",
         format!("=usize= | ={}=", kappa_defaults.commit_checkpoints).as_str(),
     );
     assert_row_contains(
@@ -528,7 +534,11 @@ fn howto_bennett_chandler_shooting_example_runs() -> Result<(), FluxError> {
         .with_steps(120)
         .with_time_step(0.05)
         .with_antithetic(true)
-        .with_commit_checkpoints(64)
+        .with_kappa(
+            KappaConfig::default()
+                .with_early_commitment(true)
+                .with_commit_checkpoints(64),
+        )
         .with_seed(99);
     let bc = shoot_bennett_chandler(
         &mut engine,
