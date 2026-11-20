@@ -1118,6 +1118,36 @@ The generated block is authoritative. Run
 - `rgflux::ThermostatConfig::noise`
 - `rgflux::ThermostatConfig::temperature`
 
+#### `cu_reference`
+
+- `rgflux::cu_reference`
+- `rgflux::cu_reference::CAMPAIGN_UNAVAILABLE`
+- `rgflux::cu_reference::MobilityComparison`
+- `rgflux::cu_reference::MobilityComparison::lattice_angstrom`
+- `rgflux::cu_reference::MobilityComparison::ours_a2_per_ps`
+- `rgflux::cu_reference::MobilityComparison::ratio`
+- `rgflux::cu_reference::MobilityComparison::reference_a2_per_ps`
+- `rgflux::cu_reference::MobilityComparison::temperature_k`
+- `rgflux::cu_reference::NptLatticeRecord`
+- `rgflux::cu_reference::NptLatticeRecord::lattice_angstrom`
+- `rgflux::cu_reference::NptLatticeRecord::temperature_k`
+- `rgflux::cu_reference::PublishedMobility`
+- `rgflux::cu_reference::PublishedMobility::coordination`
+- `rgflux::cu_reference::PublishedMobility::doi`
+- `rgflux::cu_reference::PublishedMobility::equation`
+- `rgflux::cu_reference::PublishedMobility::ln_m0_sigma`
+- `rgflux::cu_reference::PublishedMobility::m0_a2_per_ps`
+- `rgflux::cu_reference::PublishedMobility::m0_unit`
+- `rgflux::cu_reference::PublishedMobility::qm_ev`
+- `rgflux::cu_reference::PublishedMobility::qm_sigma_ev`
+- `rgflux::cu_reference::PublishedMobility::qm_unit`
+- `rgflux::cu_reference::PublishedMobility::table`
+- `rgflux::cu_reference::cu_vacancy_comparison`
+- `rgflux::cu_reference::mobility_a2_per_ps`
+- `rgflux::cu_reference::published_copper_mobility`
+- `rgflux::cu_reference::published_mobility_a2_per_ps`
+- `rgflux::cu_reference::run_npt_lattice`
+
 #### `engine`
 
 - `rgflux::engine`
