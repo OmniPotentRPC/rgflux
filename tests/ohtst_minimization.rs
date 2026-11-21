@@ -23,22 +23,26 @@ fn plateau_engine(top: f64) -> Scripted {
 }
 
 #[test]
-fn minimization_budget_is_eight_updates_per_outer_step() {
+fn minimization_budget_is_eight_iterations_per_outer_step() {
     let config = quiet().with_max_outer_steps(1);
-    // Seven unit descents and the stationary check use all eight iterations.
-    let err = error(&mut plateau_engine(7.0), &plane(&[1.0], 7.0), &config);
+    // A linear rise has no curvature, so every L-BFGS step follows the force
+    // at the translation cap: eight steps of 0.25 reach 2 and not 2.25.
+    let err = error(&mut plateau_engine(2.0), &plane(&[1.0], 2.0), &config);
     assert_eq!(
         err,
         invalid("OH-TST dividing surface must lie above the reactant minimum")
     );
-    let err = error(&mut plateau_engine(8.0), &plane(&[1.0], 8.0), &config);
+    let err = error(&mut plateau_engine(2.25), &plane(&[1.0], 2.25), &config);
     assert_eq!(
         err,
-        invalid("OH-TST reactant minimization exceeded its iteration budget")
+        FluxError::ReactantNotRelaxed {
+            fmax: 1.0,
+            tolerance: config.reactant_fmax,
+        }
     );
     let err = error(
-        &mut plateau_engine(8.0),
-        &plane(&[1.0], 8.0),
+        &mut plateau_engine(2.25),
+        &plane(&[1.0], 2.25),
         &config.with_max_outer_steps(2),
     );
     assert_eq!(

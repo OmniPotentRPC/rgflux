@@ -21,13 +21,16 @@
 //! Given a unit seed hyperplane `sigma(x) = n · x - c_0 = 0`, [`optimize_hyperplane`]
 //! executes four stages:
 //!
-//! 1. **Reactant relaxation**: Clears any active constraint and descends from
-//!    the engine's current positions by backtracking line search along `F(x)`
-//!    (up to `8 * max_outer_steps` updates) until `max_i |F_i| <= reactant_fmax`
-//!    and the directional slope `-n · F` rises across `x_min` (`s_min = n · x_min`,
-//!    `V_min = V(x_min)`). Stationary maxima or plateaus along `n` are escaped
-//!    by stepping `-max_translation * n`. A descent that stalls above the
-//!    tolerance returns [`FluxError::ReactantNotRelaxed`].
+//! 1. **Reactant relaxation**: Clears any active constraint and relaxes the
+//!    engine's current positions with [`rgmin::Lbfgs`] (the eOn step capped at
+//!    `max_translation` per atom, up to `8 * max_outer_steps` iterations)
+//!    until `max_i |F_i| <= reactant_fmax`. A start already within the
+//!    tolerance is not moved. The minimum must also have a directional slope
+//!    `-n · F` that rises across `x_min` (`s_min = n · x_min`,
+//!    `V_min = V(x_min)`); stationary maxima or plateaus along `n` are escaped
+//!    by stepping `-max_translation * n` and relaxing again, up to
+//!    `8 * max_outer_steps` times. A relaxation that ends above the tolerance
+//!    returns [`FluxError::ReactantNotRelaxed`].
 //! 2. **Dividing-surface placement**: If the seed point `x_min + (c_0 - s_min) n`
 //!    already has vanishing normal slope (`|-n · F| <= SERIES_FLAT_TOL`) and
 //!    `V(x_seed) > V_min`, `c^* = c_0` is kept. Otherwise, the offset walks from
@@ -156,6 +159,7 @@ use std::f64::consts::TAU;
 
 use ndarray::{Array1, ArrayView1};
 use rgmin::vecops::dot;
+use rgmin::{GradNorm, Lbfgs};
 use rgsaddle::flux_mass as saddle_flux_mass;
 
 use crate::engine::{DynamicsEngine, EngineSnapshot, HyperplaneConstraint};
@@ -184,7 +188,9 @@ pub struct OhtstConfig {
     ///
     /// Default: `3`.
     pub patience: usize,
-    /// Trust-region cap on normal translation per step and curvature probe step (`> 0`).
+    /// Trust-region cap on normal translation per step and curvature probe
+    /// step, and the per-atom displacement cap of the reactant L-BFGS step
+    /// (`> 0`).
     ///
     /// Default: `0.25`.
     pub max_translation: f64,
@@ -309,12 +315,12 @@ pub struct OhtstEstimate {
 ///
 /// - [`FluxError::InvalidConfig`] when a [`OhtstConfig`] field violates its
 ///   bounds, thermal energy `k_B * T <= 0`, the flux-mass metric from
-///   [`rgsaddle::flux_mass`] is non-finite or non-positive, reactant
-///   minimization exhausts its budget, no stationary dividing surface with
-///   positive barrier is found along `seed_plane.normal`, or the sampled
-///   reactant curvature `κ <= 0`.
-/// - [`FluxError::ReactantNotRelaxed`] when reactant minimization stops with
-///   `max_i |F_i| > reactant_fmax`.
+///   [`rgsaddle::flux_mass`] is non-finite or non-positive, no reactant
+///   minimum along `seed_plane.normal` is found within the escape budget, no
+///   stationary dividing surface with positive barrier is found along
+///   `seed_plane.normal`, or the sampled reactant curvature `κ <= 0`.
+/// - [`FluxError::ReactantNotRelaxed`] when a reactant relaxation stops, on
+///   its iteration budget or otherwise, with `max_i |F_i| > reactant_fmax`.
 /// - [`FluxError::Shape`] when `seed_plane.normal.len()` does not match
 ///   `engine.dof()` or `engine.masses().len()`.
 /// - [`FluxError::NonFinite`] when the evaluated rate or standard error
@@ -526,64 +532,86 @@ fn reactant_minimum<E: DynamicsEngine + ?Sized>(
     seed_plane: &HyperplaneConstraint,
     config: &OhtstConfig,
 ) -> Result<Array1<f64>, FluxError> {
-    let normal = seed_plane.normal.clone();
-    // Allow several minimization updates per dividing-surface search iteration.
-    const MINIMIZATION_BUDGET_FACTOR: usize = 8;
-    let limit = config
-        .max_outer_steps
-        .saturating_mul(MINIMIZATION_BUDGET_FACTOR);
-    for _ in 0..limit {
+    let normal = seed_plane.normal.view();
+    for _ in 0..minimization_budget(config) {
+        relax(engine, config)?;
         let position = engine.positions().to_owned();
-        let (energy, force) = engine.energy_and_forces()?;
-        let fmax = max_force(force.view());
-        if fmax <= config.reactant_fmax {
-            let confined = slope_rises_through(
-                engine,
-                position.view(),
-                normal.view(),
-                config.max_translation,
-            )?;
-            if confined {
-                return Ok(engine.positions().to_owned());
-            }
-            displace(engine, normal.view(), -config.max_translation)?;
-            continue;
+        if slope_rises_through(engine, position.view(), normal, config.max_translation)? {
+            return Ok(position);
         }
-        if !descend_once(engine, energy, force.view())? {
-            return Err(FluxError::ReactantNotRelaxed {
-                fmax,
-                tolerance: config.reactant_fmax,
-            });
-        }
+        displace(engine, normal, -config.max_translation)?;
     }
     Err(FluxError::InvalidConfig(
         "OH-TST reactant minimization exceeded its iteration budget",
     ))
 }
 
-fn descend_once<E: DynamicsEngine + ?Sized>(
-    engine: &mut E,
-    energy: f64,
-    force: ArrayView1<'_, f64>,
-) -> Result<bool, FluxError> {
-    // Start with a full force-vector displacement before backtracking.
-    const INITIAL_LINE_SEARCH_STEP: f64 = 1.0;
-    // Twenty-four halvings span the useful binary64 step range for this search.
-    const MAX_LINE_SEARCH_HALVINGS: usize = 24;
+/// Iterations of one descent, and descents of one reactant search.
+fn minimization_budget(config: &OhtstConfig) -> usize {
+    // Allow several minimization updates per dividing-surface search iteration.
+    const MINIMIZATION_BUDGET_FACTOR: usize = 8;
+    config
+        .max_outer_steps
+        .saturating_mul(MINIMIZATION_BUDGET_FACTOR)
+}
 
-    let start = engine.positions().to_owned();
-    let mut step = INITIAL_LINE_SEARCH_STEP;
-    for _ in 0..MAX_LINE_SEARCH_HALVINGS {
-        let trial = shifted(start.view(), force, step);
-        engine.set_positions(trial.view())?;
-        let (trial_energy, _) = engine.energy_and_forces()?;
-        if trial_energy < energy {
-            return Ok(true);
-        }
-        step *= 0.5;
+/// Relax the engine positions with the rgmin L-BFGS solver until
+/// `max_i |F_i| <= reactant_fmax`, leave the engine there, and return that
+/// force. A start already within the tolerance is not moved.
+///
+/// The eOn step of [`Lbfgs`] takes no line search and compares no energies,
+/// so rounding in the energy near the minimum cannot stall it.
+fn relax<E: DynamicsEngine + ?Sized>(
+    engine: &mut E,
+    config: &OhtstConfig,
+) -> Result<f64, FluxError> {
+    let (_, force) = engine.energy_and_forces()?;
+    let initial = max_force(force.view());
+    if initial <= config.reactant_fmax {
+        return Ok(initial);
     }
-    engine.set_positions(start.view())?;
-    Ok(false)
+    let start = engine.positions().to_owned();
+    let mut solver = Lbfgs::builder()
+        .capped(config.max_translation)
+        .tolerance(config.reactant_fmax)
+        .norm(GradNorm::Infinity)
+        .build();
+    let mut failure = None;
+    let (_, relaxed, _) =
+        solver.minimize(
+            start.view(),
+            minimization_budget(config),
+            |x| match energy_and_gradient(engine, x) {
+                Ok(value) => Some(value),
+                Err(err) => {
+                    failure = Some(err);
+                    None
+                }
+            },
+        );
+    if let Some(err) = failure {
+        return Err(err);
+    }
+    engine.set_positions(relaxed.view())?;
+    let (_, force) = engine.energy_and_forces()?;
+    let fmax = max_force(force.view());
+    if fmax <= config.reactant_fmax {
+        Ok(fmax)
+    } else {
+        Err(FluxError::ReactantNotRelaxed {
+            fmax,
+            tolerance: config.reactant_fmax,
+        })
+    }
+}
+
+fn energy_and_gradient<E: DynamicsEngine + ?Sized>(
+    engine: &mut E,
+    positions: ArrayView1<'_, f64>,
+) -> Result<(f64, Array1<f64>), FluxError> {
+    engine.set_positions(positions)?;
+    let (energy, force) = engine.energy_and_forces()?;
+    Ok((energy, force.mapv_into(|component| -component)))
 }
 
 /// Whether the slope along `normal` rises through `point`, so that `point` is

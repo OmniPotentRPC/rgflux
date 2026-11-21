@@ -267,7 +267,7 @@ fn optimize_hyperplane_restores_engine_when_the_search_fails() -> Result<(), Flu
         &OhtstConfig::default().with_max_outer_steps(1).with_seed(5),
     )
     .unwrap_err();
-    assert!(matches!(err, FluxError::InvalidConfig(_)));
+    assert!(matches!(err, FluxError::ReactantNotRelaxed { .. }));
     assert_eq!(engine_state(&engine), before);
     Ok(())
 }
@@ -311,7 +311,10 @@ fn optimize_hyperplane_preserves_operation_error_when_restore_fails() -> Result<
     .unwrap_err();
     assert_eq!(
         err,
-        FluxError::InvalidConfig("OH-TST reactant minimization exceeded its iteration budget")
+        FluxError::ReactantNotRelaxed {
+            fmax: 1.0,
+            tolerance: OhtstConfig::default().reactant_fmax,
+        }
     );
     Ok(())
 }

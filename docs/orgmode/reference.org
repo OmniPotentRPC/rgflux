@@ -161,9 +161,9 @@ Constructors and methods: =HyperplaneConstraint::new(normal, offset)=, =from_dir
 
 | Field | Type | Default | Constraint / Meaning |
 |---+---+---+---|
-| =max_outer_steps= | =usize= | =32= | Maximum bracketing / outer steps (\(\ge 1\)); reactant minimization budget is \(8 \times \text{max\_outer\_steps}\) |
+| =max_outer_steps= | =usize= | =32= | Maximum bracketing / outer steps (\(\ge 1\)); each reactant relaxation runs at most \(8 \times \text{max\_outer\_steps}\) =rgmin::Lbfgs= iterations, and the reactant search makes at most \(8 \times \text{max\_outer\_steps}\) relaxations |
 | =patience= | =usize= | =3= | Consecutive accepted planes within gradient noise (reserved for variational normal optimization) |
-| =max_translation= | =f64= | =0.25= | Step size for dividing-surface bracketing and upper cap on curvature probe distance \(\delta\) (\(> 0\)) |
+| =max_translation= | =f64= | =0.25= | Step size for dividing-surface bracketing, upper cap on curvature probe distance \(\delta\), and per-atom displacement cap of the reactant L-BFGS step (\(> 0\)) |
 | =max_rotation= | =f64= | =0.25= | Trust-region cap on normal rotation angle in radians (\(\ge 0\)) |
 | =min_overlap= | =f64= | =0.03= | Minimum two-state BAR overlap before warning (reserved for variational normal optimization) |
 | =use_mbar= | =bool= | =true= | Combine reversible work across plane nodes with MBAR (reserved for variational normal optimization) |
