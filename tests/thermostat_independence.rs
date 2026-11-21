@@ -69,7 +69,13 @@ const HARMONIC_CHECKS: usize = 9;
 const WIDENING_CHECKS: usize = 19;
 const TILTED_CHECKS: usize = 8;
 
-const _: () = assert!(HARMONIC_CHECKS + WIDENING_CHECKS + TILTED_CHECKS == FAMILY_SIZE);
+#[test]
+fn family_size_matches_the_statistical_checks() {
+    assert_eq!(
+        HARMONIC_CHECKS + WIDENING_CHECKS + TILTED_CHECKS,
+        FAMILY_SIZE
+    );
+}
 
 /// Counts the statistical assertions a test makes, so the family size that
 /// sets [`Z_CRIT`] is checked and not assumed.
