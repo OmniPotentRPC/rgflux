@@ -228,6 +228,13 @@ pub fn quiet() -> OhtstConfig {
     OhtstConfig::default().with_seed(3)
 }
 
+/// [`quiet`] with the reactant located well inside [`RELATIVE`]. The scripted
+/// constraint force is exact about the true minimum, so a reactant `ε` away
+/// moves the curvature by `ε / δ` over a probe of length `δ`.
+pub fn analytic() -> OhtstConfig {
+    quiet().with_reactant_fmax(1.0e-12)
+}
+
 pub fn estimate(
     engine: &mut Scripted,
     seed: &HyperplaneConstraint,

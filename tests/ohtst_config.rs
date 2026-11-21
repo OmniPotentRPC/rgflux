@@ -134,6 +134,40 @@ fn validate_config_rejects_unusable_time_steps() {
 }
 
 #[test]
+fn default_reactant_force_tolerance_is_the_rgmin_lbfgs_tolerance() {
+    let config = OhtstConfig::default();
+    assert_eq!(config.reactant_fmax, 1.0e-6);
+    assert_eq!(config.reactant_fmax, rgmin::Lbfgs::default().gtol);
+}
+
+#[test]
+fn reactant_force_tolerance_setter_writes_its_field() {
+    let config = OhtstConfig::default().with_reactant_fmax(3.5e-9);
+    assert_eq!(config.reactant_fmax, 3.5e-9);
+    assert_eq!(
+        config.with_reactant_fmax(1.0e-6),
+        OhtstConfig::default(),
+        "the setter touches no other field"
+    );
+}
+
+#[test]
+fn validate_config_rejects_unusable_reactant_force_tolerances() {
+    let message = "OhtstConfig::reactant_fmax must be finite and positive";
+    for bad in [
+        0.0,
+        -0.0,
+        -1.0e-6,
+        f64::NAN,
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+    ] {
+        assert_eq!(rejected(quiet().with_reactant_fmax(bad)), invalid(message));
+    }
+    accepted(quiet().with_reactant_fmax(f64::MIN_POSITIVE));
+}
+
+#[test]
 fn seed_plane_must_be_a_unit_plane_in_the_engine_dimension() {
     let mut engine = well_engine(-HALF_WIDTH);
     let mut bent = plane(&[1.0], 0.0);

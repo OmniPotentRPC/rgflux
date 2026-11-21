@@ -23,10 +23,11 @@
 //!
 //! 1. **Reactant relaxation**: Clears any active constraint and descends from
 //!    the engine's current positions by backtracking line search along `F(x)`
-//!    (up to `8 * max_outer_steps` updates) until `max_i |F_i| <= SERIES_FLAT_TOL`
+//!    (up to `8 * max_outer_steps` updates) until `max_i |F_i| <= reactant_fmax`
 //!    and the directional slope `-n · F` rises across `x_min` (`s_min = n · x_min`,
 //!    `V_min = V(x_min)`). Stationary maxima or plateaus along `n` are escaped
-//!    by stepping `-max_translation * n`.
+//!    by stepping `-max_translation * n`. A descent that stalls above the
+//!    tolerance returns [`FluxError::ReactantNotRelaxed`].
 //! 2. **Dividing-surface placement**: If the seed point `x_min + (c_0 - s_min) n`
 //!    already has vanishing normal slope (`|-n · F| <= SERIES_FLAT_TOL`) and
 //!    `V(x_seed) > V_min`, `c^* = c_0` is kept. Otherwise, the offset walks from
@@ -56,6 +57,18 @@
 //! - Positive barrier `ΔV > 0` above the reactant minimum and positive harmonic
 //!   reactant curvature `κ > 0` at the probe offset `c_probe`.
 //! - Strictly positive thermal energy `k_B * T > 0` and masses `m_i > 0`.
+//!
+//! ## Tolerances
+//!
+//! The reactant is a physical minimum: it is accepted once its largest force
+//! component is at most [`OhtstConfig::reactant_fmax`]. Forces near a relaxed
+//! minimum carry rounding noise that grows with the system size and the
+//! coordinate magnitude, so a fixed multiple of machine epsilon is not a
+//! reachable force criterion. [`SERIES_FLAT_TOL`] is kept where the
+//! comparison is between binary64 numbers of known scale: the bisection
+//! stops when the bracket is `SERIES_FLAT_TOL * (1 + hi)` wide, and a seed
+//! is used verbatim only when its normal slope is zero to that precision.
+//! Neither can fail on rounding; a seed with a larger slope is bisected.
 //!
 //! ## Units
 //!
@@ -153,8 +166,9 @@ use crate::stats::{SERIES_FLAT_TOL, StatsConfig};
 /// Configuration for fixed-normal hyperplane placement and OH-TST rate evaluation.
 ///
 /// [`optimize_hyperplane`] reads [`Self::max_outer_steps`],
-/// [`Self::max_translation`], [`Self::seed`], [`Self::stats`] and the
-/// curvature-sample fields from [`Self::burn_in_steps`] on, and checks
+/// [`Self::max_translation`], [`Self::seed`], [`Self::stats`],
+/// [`Self::reactant_fmax`] and the curvature-sample fields from
+/// [`Self::burn_in_steps`] to [`Self::time_step`], and checks
 /// [`Self::max_rotation`]. [`Self::patience`], [`Self::min_overlap`] and
 /// [`Self::use_mbar`] belong to the variational normal optimization and are
 /// not read by the fixed-normal evaluation.
@@ -218,6 +232,19 @@ pub struct OhtstConfig {
     ///
     /// Default: `0.01`.
     pub time_step: f64,
+    /// Physical force tolerance on the reactant minimum, in the engine force
+    /// unit (eV/Å in metal units; finite and `> 0`).
+    ///
+    /// The reactant is a minimum once its largest absolute force component
+    /// `max_i |F_i|` is at most this value. The absolute separation from the
+    /// exact minimum is then about `reactant_fmax / κ`, so the default moves
+    /// the curvature `κ` inferred over a probe of length `δ` by a relative
+    /// `reactant_fmax / (κ δ)` and the barrier by about
+    /// `reactant_fmax² / (2 κ)`.
+    ///
+    /// Default: `1e-6`, the gradient tolerance of [`rgmin::Lbfgs::default`]
+    /// on the same infinity norm.
+    pub reactant_fmax: f64,
 }
 
 impl Default for OhtstConfig {
@@ -236,6 +263,7 @@ impl Default for OhtstConfig {
             sample_step_factor: 64,
             retention_stride: 16,
             time_step: 0.01,
+            reactant_fmax: 1.0e-6,
         }
     }
 }
@@ -254,6 +282,7 @@ with_setters!(OhtstConfig {
     with_sample_step_factor => sample_step_factor: val usize,
     with_retention_stride => retention_stride: val usize,
     with_time_step => time_step: val f64,
+    with_reactant_fmax => reactant_fmax: val f64,
 });
 
 /// Fixed-normal OH-TST rate estimate and dividing hyperplane.
@@ -281,9 +310,11 @@ pub struct OhtstEstimate {
 /// - [`FluxError::InvalidConfig`] when a [`OhtstConfig`] field violates its
 ///   bounds, thermal energy `k_B * T <= 0`, the flux-mass metric from
 ///   [`rgsaddle::flux_mass`] is non-finite or non-positive, reactant
-///   minimization stalls or exhausts its budget, no stationary dividing
-///   surface with positive barrier is found along `seed_plane.normal`, or the
-///   sampled reactant curvature `κ <= 0`.
+///   minimization exhausts its budget, no stationary dividing surface with
+///   positive barrier is found along `seed_plane.normal`, or the sampled
+///   reactant curvature `κ <= 0`.
+/// - [`FluxError::ReactantNotRelaxed`] when reactant minimization stops with
+///   `max_i |F_i| > reactant_fmax`.
 /// - [`FluxError::Shape`] when `seed_plane.normal.len()` does not match
 ///   `engine.dof()` or `engine.masses().len()`.
 /// - [`FluxError::NonFinite`] when the evaluated rate or standard error
@@ -337,6 +368,11 @@ fn validate_config(config: &OhtstConfig) -> Result<(), FluxError> {
     if !config.time_step.is_finite() || config.time_step <= 0.0 {
         return Err(FluxError::InvalidConfig(
             "OhtstConfig::time_step must be finite and positive",
+        ));
+    }
+    if !config.reactant_fmax.is_finite() || config.reactant_fmax <= 0.0 {
+        return Err(FluxError::InvalidConfig(
+            "OhtstConfig::reactant_fmax must be finite and positive",
         ));
     }
     Ok(())
@@ -499,7 +535,8 @@ fn reactant_minimum<E: DynamicsEngine + ?Sized>(
     for _ in 0..limit {
         let position = engine.positions().to_owned();
         let (energy, force) = engine.energy_and_forces()?;
-        if force_is_stationary(force.view()) {
+        let fmax = max_force(force.view());
+        if fmax <= config.reactant_fmax {
             let confined = slope_rises_through(
                 engine,
                 position.view(),
@@ -513,9 +550,10 @@ fn reactant_minimum<E: DynamicsEngine + ?Sized>(
             continue;
         }
         if !descend_once(engine, energy, force.view())? {
-            return Err(FluxError::InvalidConfig(
-                "OH-TST reactant minimization stalled before the force vanished",
-            ));
+            return Err(FluxError::ReactantNotRelaxed {
+                fmax,
+                tolerance: config.reactant_fmax,
+            });
         }
     }
     Err(FluxError::InvalidConfig(
@@ -592,11 +630,15 @@ fn shifted(origin: ArrayView1<'_, f64>, direction: ArrayView1<'_, f64>, scale: f
     out
 }
 
-fn force_is_stationary(force: ArrayView1<'_, f64>) -> bool {
-    let peak = force
+/// Largest absolute force component, or infinity when any component is not
+/// finite, so that no tolerance accepts a broken force.
+fn max_force(force: ArrayView1<'_, f64>) -> f64 {
+    force
         .iter()
-        .fold(0.0_f64, |peak, component| peak.max(component.abs()));
-    peak <= SERIES_FLAT_TOL
+        .try_fold(0.0_f64, |peak, component| {
+            component.is_finite().then(|| peak.max(component.abs()))
+        })
+        .unwrap_or(f64::INFINITY)
 }
 
 fn slope_vanishes(slope: f64) -> bool {

@@ -788,6 +788,9 @@ Constructors and methods: `HyperplaneConstraint::new(normal, offset)`, `from_dir
 | `sample_step_factor` | `usize` | `64` | Multiplier on `max_outer_steps` for curvature-sample length (\(\max(\text{max\_outer\_steps} \times \text{sample\_step\_factor}, \text{min\_sample\_steps})\)) |
 | `retention_stride` | `usize` | `16` | Steps between retained configurations in the curvature sample (\(\ge 1\)) |
 | `time_step` | `f64` | `0.01` | Integration timestep \(\Delta t > 0\) for the curvature sample |
+| `reactant_fmax` | `f64` | `1e-6` | Physical force tolerance on the reactant minimum, finite and \(> 0\), in the engine force unit (eV/Å in metal units). The reactant is a minimum once \(\max_i \lvert F_i \rvert\) is at most this value. The default is the gradient tolerance of `rgmin::Lbfgs::default()` on the same infinity norm; a non-finite or non-positive value returns `FluxError::InvalidConfig` |
+
+A reactant located to `reactant_fmax` lies about \(\varepsilon = \text{reactant\_fmax} / \kappa\) from the exact minimum. The curvature inferred over a probe of length \(\delta\) then moves by a relative \(\varepsilon / \delta\) and the barrier by about \(\kappa \varepsilon^2 / 2\). At the default and \(\kappa = 1\) eV/Å², \(\delta = 0.25\) Å, these are \(4 \times 10^{-6}\) and \(5 \times 10^{-13}\) eV. The force criterion does not use `stats::SERIES_FLAT_TOL`: forces at a relaxed minimum carry rounding noise that grows with the atom count and the coordinate magnitude. `SERIES_FLAT_TOL` remains the bisection bracket width and the precision to which a seed's normal slope must vanish for the seed to be used verbatim.
 
 ### `ffs::FfsConfig`
 
@@ -960,6 +963,7 @@ field set is listed above.
 | `NonFinite` | `&'static str` | `NaN` or infinite input, energy, force, rate, or intermediate value |
 | `InvalidConfig` | `&'static str` | Configuration parameter or physical invariant out of domain |
 | `ConstraintViolation` | `residual`, `tolerance` | Relative hyperplane residual after SHAKE projection exceeds `HYPERPLANE_PROJECTION_TOL` |
+| `ReactantNotRelaxed` | `fmax`, `tolerance` | An OH-TST reactant minimum has \(\max_i \lvert F_i \rvert\) above `OhtstConfig::reactant_fmax` |
 | `SurfaceRejection` | `max_attempts` | `SurfaceVelocityPolicy::RejectRedraw` exhausted `max_attempts` |
 | `Surface` | `String` | Potential energy surface callback failure or converted `rgsaddle::SaddleError` |
 | `BackendUnavailable` | `&'static str` | Unlinked external MD session call on `RgpotSessionEngine` or unsupported unconstrained Langevin / constrained NVE mode in `LammpcEngine` |
@@ -1066,6 +1070,9 @@ The generated block is authoritative. Run
 - `rgflux::FluxError::NonStationaryPlateau::drift_slope`
 - `rgflux::FluxError::NonStationaryPlateau::max_z_score`
 - `rgflux::FluxError::NonStationaryPlateau::z_score`
+- `rgflux::FluxError::ReactantNotRelaxed`
+- `rgflux::FluxError::ReactantNotRelaxed::fmax`
+- `rgflux::FluxError::ReactantNotRelaxed::tolerance`
 - `rgflux::FluxError::Shape`
 - `rgflux::FluxError::Shape::context`
 - `rgflux::FluxError::Shape::expected`
@@ -1342,6 +1349,9 @@ The generated block is authoritative. Run
 - `rgflux::error::FluxError::NonStationaryPlateau::drift_slope`
 - `rgflux::error::FluxError::NonStationaryPlateau::max_z_score`
 - `rgflux::error::FluxError::NonStationaryPlateau::z_score`
+- `rgflux::error::FluxError::ReactantNotRelaxed`
+- `rgflux::error::FluxError::ReactantNotRelaxed::fmax`
+- `rgflux::error::FluxError::ReactantNotRelaxed::tolerance`
 - `rgflux::error::FluxError::Shape`
 - `rgflux::error::FluxError::Shape::context`
 - `rgflux::error::FluxError::Shape::expected`
@@ -1546,6 +1556,7 @@ The generated block is authoritative. Run
 - `rgflux::ohtst::OhtstConfig::min_overlap`
 - `rgflux::ohtst::OhtstConfig::min_sample_steps`
 - `rgflux::ohtst::OhtstConfig::patience`
+- `rgflux::ohtst::OhtstConfig::reactant_fmax`
 - `rgflux::ohtst::OhtstConfig::retention_stride`
 - `rgflux::ohtst::OhtstConfig::sample_step_factor`
 - `rgflux::ohtst::OhtstConfig::seed`
@@ -1559,6 +1570,7 @@ The generated block is authoritative. Run
 - `rgflux::ohtst::OhtstConfig::with_min_overlap`
 - `rgflux::ohtst::OhtstConfig::with_min_sample_steps`
 - `rgflux::ohtst::OhtstConfig::with_patience`
+- `rgflux::ohtst::OhtstConfig::with_reactant_fmax`
 - `rgflux::ohtst::OhtstConfig::with_retention_stride`
 - `rgflux::ohtst::OhtstConfig::with_sample_step_factor`
 - `rgflux::ohtst::OhtstConfig::with_seed`
@@ -1728,7 +1740,7 @@ where \(\mu\) is the effective directional flux mass along \(\mathbf{n}\), evalu
 
 `ohtst::optimize_hyperplane` holds the seed normal \(\mathbf{n}\) fixed and determines the stationary dividing hyperplane offset \(c^\ddagger\) and harmonic hyperplanar TST rate cite:`vineyardFrequencyFactors1957,johannessonOptimizationHyperplanar2001`:
 
-1. *Reactant relaxation*: Clears any active constraint and relaxes from the engine's starting coordinates by backtracking line search along \(\mathbf{F}(\mathbf{x})\) (up to \(8 \times \text{max\_outer\_steps}\) updates) until \(\max_i |F_i| \le \text{SERIES\_FLAT\_TOL}\) and the directional slope \(-\mathbf{n} \cdot \mathbf{F}\) rises through \(\mathbf{x}_{\min}\) (\(s_{\min} = \mathbf{n} \cdot \mathbf{x}_{\min}\), \(V_{\min} = V(\mathbf{x}_{\min})\)). Stationary maxima or flat ledges are escaped by stepping \(-\text{max\_translation}\,\mathbf{n}\).
+1. *Reactant relaxation*: Clears any active constraint and relaxes from the engine's starting coordinates by backtracking line search along \(\mathbf{F}(\mathbf{x})\) (up to \(8 \times \text{max\_outer\_steps}\) updates) until \(\max_i |F_i| \le \text{reactant\_fmax}\) and the directional slope \(-\mathbf{n} \cdot \mathbf{F}\) rises through \(\mathbf{x}_{\min}\) (\(s_{\min} = \mathbf{n} \cdot \mathbf{x}_{\min}\), \(V_{\min} = V(\mathbf{x}_{\min})\)). Stationary maxima or flat ledges are escaped by stepping \(-\text{max\_translation}\,\mathbf{n}\). A descent that stalls above `reactant_fmax` returns `FluxError::ReactantNotRelaxed` with the measured force; there is no fallback rate.
 2. *Dividing-surface bracketing and bisection*: If the seed point \(\mathbf{x}_{\min} + (c_0 - s_{\min})\mathbf{n}\) already satisfies \(|-\mathbf{n} \cdot \mathbf{F}| \le \text{SERIES\_FLAT\_TOL}\) and \(V > V_{\min}\), \(c^\ddagger = c_0\) is accepted directly. Otherwise, the offset marches from \(s_{\min}\) in direction \(\mathrm{sign}(c_0 - s_{\min})\) (\(+1\) when \(c_0 \ge s_{\min}\)) in increments of `max_translation` (up to `max_outer_steps`) until the directional slope changes sign, then bisects the bracket \([c_{\mathrm{lo}}, c_{\mathrm{hi}}]\) to tolerance \(\text{SERIES\_FLAT\_TOL}\,(1 + c_{\mathrm{hi}})\) to obtain \(c^\ddagger\) and static barrier \(\Delta V = V^\ddagger - V_{\min} > 0\).
 3. *Reactant curvature probing*: Places a parallel probe plane at signed offset \(c_{\mathrm{probe}} = s_{\min} + \mathrm{sign}(c^\ddagger - s_{\min})\,\delta\) with \(\delta = \min(\text{max\_translation}, \tfrac{1}{2}|c^\ddagger - s_{\min}|)\), calls `sample_hyperplane` for \(\max(\text{max\_outer\_steps} \times \text{sample\_step\_factor}, \text{min\_sample\_steps})\) steps, and infers the reactant curvature along \(\mathbf{n}\):
 

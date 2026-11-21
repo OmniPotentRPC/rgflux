@@ -2,6 +2,7 @@
 
 use ndarray::Array1;
 
+use rgflux::FluxError;
 use rgflux::engine::DynamicsEngine;
 use rgflux::stats::SERIES_FLAT_TOL;
 
@@ -47,7 +48,7 @@ fn minimization_budget_is_eight_updates_per_outer_step() {
 }
 
 #[test]
-fn minimization_stalls_when_no_step_lowers_the_energy() {
+fn a_force_that_never_relaxes_is_refused_with_its_size() {
     let mut engine = Scripted::new(
         vec![0.0],
         vec![1.0],
@@ -56,7 +57,10 @@ fn minimization_stalls_when_no_step_lowers_the_energy() {
     );
     assert_eq!(
         error(&mut engine, &plane(&[1.0], 0.0), &quiet()),
-        invalid("OH-TST reactant minimization stalled before the force vanished")
+        FluxError::ReactantNotRelaxed {
+            fmax: 1.0,
+            tolerance: quiet().reactant_fmax,
+        }
     );
     assert_eq!(
         engine.positions[0], 0.0,
@@ -67,7 +71,7 @@ fn minimization_stalls_when_no_step_lowers_the_energy() {
 #[test]
 fn minimization_backtracks_past_an_overshooting_step() {
     let mut engine = well_engine(-1.3 * HALF_WIDTH);
-    let found = estimate(&mut engine, &plane(&[1.0], 0.0), &quiet());
+    let found = estimate(&mut engine, &plane(&[1.0], 0.0), &analytic());
     assert_close(
         found.rate,
         harmonic_rate(CURVATURE, 1.0, BARRIER, THERMAL),
@@ -88,7 +92,7 @@ fn minimization_leaves_a_maximum_toward_smaller_coordinates() {
         well(HALF_WIDTH),
         harmonic_force(CURVATURE, -HALF_WIDTH),
     );
-    let found = estimate(&mut engine, &plane(&[1.0], 0.0), &quiet());
+    let found = estimate(&mut engine, &plane(&[1.0], 0.0), &analytic());
     assert_close(
         found.rate,
         harmonic_rate(CURVATURE, 1.0, BARRIER, THERMAL),

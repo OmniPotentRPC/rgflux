@@ -57,6 +57,17 @@ pub enum FluxError {
         tolerance: f64,
     },
 
+    /// A reactant minimum did not meet its physical force tolerance.
+    #[error(
+        "reactant minimum is not relaxed: max force component {fmax:.4e} exceeds tolerance {tolerance:.4e}"
+    )]
+    ReactantNotRelaxed {
+        /// Measured or declared largest absolute force component `max_i |F_i|`.
+        fmax: f64,
+        /// Configured force tolerance.
+        tolerance: f64,
+    },
+
     /// Dividing-surface velocity rejection sampling exhausted its redraw budget.
     #[error("dividing-surface velocity rejection exceeded {max_attempts} attempts")]
     SurfaceRejection {
