@@ -70,7 +70,7 @@ where \(\mu\) is the effective directional flux mass along \(\mathbf{n}\), evalu
    \kappa = \frac{\langle \lambda \rangle_{c_{\mathrm{probe}}}}{c_{\mathrm{probe}} - s_{\min}} > 0.
    \]
 
-   Because \(\langle \lambda \rangle\) carries the sign of \(c_{\mathrm{probe}} - s_{\min}\), dividing by the signed separation yields \(\kappa > 0\) on either side of the reactant minimum. This probe is a canonical expectation, so =optimize_hyperplane= requires \(\gamma > 0\) and rejects NVE dynamics with =FluxError::InvalidConfig=.
+   Because \(\langle \lambda \rangle\) carries the sign of \(c_{\mathrm{probe}} - s_{\min}\), dividing by the signed separation yields \(\kappa > 0\) on either side of the reactant minimum. This probe is a canonical expectation from =sample_hyperplane=, so =optimize_hyperplane= requires Langevin friction \(\gamma > 0\) and returns =FluxError::InvalidConfig= when \(\gamma = 0\), before it snapshots the engine or starts the reactant search. NVE would sample an energy shell rather than \(\langle \lambda \rangle\).
 4. *Rate and delta-method uncertainty*: With flux mass \(\mu = (\sum_i n_i^2 / m_i)^{-1}\) from =rgsaddle::flux_mass= (mapping a normal/mass length mismatch to =FluxError::Shape= and a non-finite or non-positive metric to =FluxError::InvalidConfig=) and angular frequency \(\omega = \sqrt{\kappa / \mu}\), the fixed-normal OH-TST rate and its first-order delta-method standard error are
 
    \[
@@ -84,7 +84,7 @@ The reactant tolerance is physical: forces at a relaxed minimum carry rounding n
 ** Assumptions and scope
 
 - Single dominant reaction channel along the fixed unit normal \(\mathbf{n}\); positive barrier \(\Delta V > 0\) and locally harmonic reactant well (\(\kappa > 0\)) at the probe offset \(c_{\mathrm{probe}}\).
-- Positive thermal energy \(k_{\mathrm{B}} T > 0\) and strictly positive masses \(m_i > 0\).
+- Positive thermal energy \(k_{\mathrm{B}} T > 0\), Langevin friction \(\gamma > 0\), and strictly positive masses \(m_i > 0\). Zero friction is NVE, and =optimize_hyperplane= returns =FluxError::InvalidConfig= before the search.
 - =hyperplane::sample_hyperplane= and fixed-normal =ohtst::optimize_hyperplane= are implemented; the in-plane virial, rotational torque \(\partial A / \partial \mathbf{n}\), Assaraf-Caffarel / Stein zero-variance control variates @@rst::cite:`assarafZeroVariance1999`@@, two-state BAR / multi-state MBAR reversible work @@rst::cite:`bennettEfficientEstimation1976,shirtsStatisticallyOptimal2008`@@, and Riemannian trust-region normal optimization (=patience=, =min_overlap=, =use_mbar=) are not yet implemented.
 
 ** Engine wiring

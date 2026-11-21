@@ -279,7 +279,7 @@ Here \(I_T\) is the trapezoid integral of \(dV/ds\) over the plane anchors and \
 | =stats::effective_sample_size= | Sample slice | Geyer \(n_{\mathrm{eff}}\); equations and runnable example in =howto.org= |
 | =stats::check_stationarity= | Sample slice and =StatsConfig= | =StationarityReport=; Geweke equation and runnable example in =howto.org= |
 | =hyperplane::sample_hyperplane= | Mutable engine, plane, and =HyperplaneConfig= | =HyperplaneSample=; constrained mean-force guide in =howto.org= |
-| =ohtst::optimize_hyperplane= | Mutable engine, seed plane, and =OhtstConfig= | =OhtstEstimate=; harmonic rate guide in =howto.org= |
+| =ohtst::optimize_hyperplane= | Mutable engine, seed plane, and =OhtstConfig= | =OhtstEstimate=; =gamma = 0= returns =FluxError::InvalidConfig= before the search; harmonic rate guide in =howto.org= |
 | =ohtst::relax_reactant= | Mutable engine and =OhtstConfig= | =ReactantMinimum= relaxed by =rgmin::Lbfgs= to =reactant_fmax=; the engine is restored. =FluxError::ReactantNotRelaxed= when the relaxation ends above the tolerance; shared-reactant guide in =howto.org= |
 | =ohtst::optimize_hyperplane_from_minimum= | Mutable engine, seed plane, =ReactantMinimum=, and =OhtstConfig= | =OhtstEstimate= from the supplied minimum without relaxing it. =FluxError::ReactantNotRelaxed= when the declared force, checked before the engine is touched, or the force the engine measures there exceeds =reactant_fmax=; =FluxError::InvalidConfig= when the declared force is negative or not finite, or the minimum is not a minimum along the seed normal |
 | =ffs::forward_flux_rate= | Mutable engine, order parameter, and =FfsConfig= | =FfsEstimate=; direct FFS guide in =howto.org= |

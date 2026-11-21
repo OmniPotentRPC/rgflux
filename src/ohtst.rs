@@ -61,7 +61,9 @@
 //!   reactant curvature `κ > 0` at the probe offset `c_probe`.
 //! - Strictly positive thermal energy `k_B * T > 0` and masses `m_i > 0`.
 //! - Positive Langevin friction `gamma > 0`, because the curvature probe is a
-//!   canonical constrained-force expectation.
+//!   canonical constrained-force expectation. `gamma == 0` (NVE) makes
+//!   [`optimize_hyperplane`] return [`FluxError::InvalidConfig`] before the
+//!   engine is snapshotted or the search starts.
 //!
 //! ## Tolerances
 //!
@@ -383,11 +385,15 @@ fn relaxed_reactant<E: DynamicsEngine + ?Sized>(
 /// surface. Otherwise the offset walks along the normal to the first
 /// normal-force zero. The reactant curvature is `κ = ⟨λ⟩ / δ` from a
 /// constrained sample a distance `δ` from the minimum toward that surface.
+/// That sample is a canonical average, so `gamma == 0` (NVE) returns
+/// [`FluxError::InvalidConfig`] before the engine is snapshotted or the
+/// search starts.
 ///
 /// # Errors
 ///
 /// - [`FluxError::InvalidConfig`] when a [`OhtstConfig`] field violates its
-///   bounds, thermostat friction is `0`, thermal energy `k_B * T <= 0`, the
+///   bounds, the engine thermostat friction is `0` (NVE dynamics, which does
+///   not sample the canonical ensemble), thermal energy `k_B * T <= 0`, the
 ///   flux-mass metric from [`rgsaddle::flux_mass`] is non-finite or
 ///   non-positive, no reactant minimum along `seed_plane.normal` is found
 ///   within the escape budget, no
@@ -414,6 +420,7 @@ pub fn optimize_hyperplane<E: DynamicsEngine + ?Sized>(
             context: "OH-TST seed plane",
         });
     }
+    engine.thermostat().require_canonical_sampling()?;
     let snapshot = EngineSnapshot::capture(engine);
     let result = evaluate_harmonic_rate(engine, seed_plane, None, config);
     snapshot.restore_result(engine, result)
