@@ -41,7 +41,12 @@
 //! curved increment differences.
 //!
 //! Seeds: `PAFI_SEED_OFFSET` shifts every seed by a multiple of a large odd
-//! constant, so a sweep over offsets draws independent suites.
+//! constant, so a sweep over offsets draws distinct reproducible suites. PAFI
+//! seeds plane `k` of round `r` with `seed + 4099 k + 1000003 r`, so two
+//! profiles given the same seed sample identical noise on every plane they
+//! share. A bound that sums the variances of two profiles, such as
+//! [`end_plane_disagreement_cap`], describes independent profiles, and a sweep
+//! of it must give each profile its own stream with [`independent_seed`].
 //!
 //! Sweeps: [`offset_sweep`] draws a capped quantity at a fixed list of
 //! offsets and [`assert_sweep_within_budget`] requires the empirical failure
@@ -202,6 +207,24 @@ pub fn assert_sweep_within_budget(name: &str, labels: &[&str], report: &SweepRep
             "{name} sweep {label}: empirical failure rate {rate:.6e} exceeds {ASSERTION_ALPHA:.6e}"
         );
     }
+}
+
+/// SplitMix64 finalizer, a bijection on `u64` with full avalanche.
+fn splitmix64(value: u64) -> u64 {
+    let mut z = value.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^ (z >> 31)
+}
+
+/// Seed of the random stream labelled `stream` that belongs to `base`.
+///
+/// Distinct labels give seeds that are unrelated at the scale of PAFI's
+/// per-plane and per-round increments, so profiles drawn from them are
+/// independent. Using one seed for two profiles instead makes them share the
+/// noise of every plane they have in common.
+pub fn independent_seed(base: u64, stream: u64) -> u64 {
+    splitmix64(splitmix64(base) ^ splitmix64(stream.wrapping_add(1)))
 }
 
 /// Deterministic seed for suite offset `PAFI_SEED_OFFSET` (default zero).
@@ -893,6 +916,34 @@ fn increment_variance(rows: &[Vec<f64>], variances: &[f64], node: usize) -> f64 
         total += weight * weight * variance;
     }
     total
+}
+
+/// Predicted mean and variance of the difference between the short and the long
+/// curved profile at every increment `1..CURVED_PLANES`, for independently
+/// seeded profiles.
+///
+/// The variance is the sum of the two increment variances, the quantity
+/// [`end_plane_disagreement_cap`] bounds. It is the variance of the difference
+/// only when the two profiles use independent random streams: draws that share
+/// per-plane seeds are positively correlated and have a much smaller
+/// variance.
+pub fn end_plane_difference_prediction() -> Vec<(f64, f64)> {
+    let short = curved_plane_table(CURVED_PLANES, 0.0);
+    let spacing = -PI * 0.5 / ((CURVED_PLANES - 1) as f64);
+    let long = curved_plane_table(CURVED_PLANES + 1, spacing);
+    let short_rows = cumulative_weight_rows(&short.arcs);
+    let long_rows = cumulative_weight_rows(&long.arcs);
+    (1..CURVED_PLANES)
+        .map(|node| {
+            let short_increment = node_value(&short_rows, &short.means, node)
+                - node_value(&short_rows, &short.means, node - 1);
+            let long_increment = node_value(&long_rows, &long.means, node)
+                - node_value(&long_rows, &long.means, node - 1);
+            let variance = increment_variance(&short_rows, &short.variances, node)
+                + increment_variance(&long_rows, &long.variances, node);
+            (short_increment - long_increment, variance)
+        })
+        .collect()
 }
 
 fn end_plane_union(
