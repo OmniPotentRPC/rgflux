@@ -73,6 +73,15 @@
 //! is used verbatim only when its normal slope is zero to that precision.
 //! Neither can fail on rounding; a seed with a larger slope is bisected.
 //!
+//! ## Relaxing once for several exits
+//!
+//! [`relax_reactant`] runs stage 1 alone and returns a [`ReactantMinimum`]
+//! with the force measured at it. [`optimize_hyperplane_from_minimum`] runs
+//! stages 2 to 4 from a supplied minimum, relaxed here or by another code,
+//! after checking its declared and measured force against
+//! [`OhtstConfig::reactant_fmax`] and its confinement along the seed normal.
+//! A minimum that fails a check is refused; no other rate is substituted.
+//!
 //! ## Units
 //!
 //! - `seed_plane.offset` and `OhtstConfig::max_translation` have length unit `[L]`.
@@ -303,6 +312,68 @@ pub struct OhtstEstimate {
     pub standard_error: f64,
 }
 
+/// Relaxed reactant minimum and the force measured there.
+///
+/// [`relax_reactant`] returns one; a caller with its own relaxation builds one
+/// with [`ReactantMinimum::new`] and passes it to
+/// [`optimize_hyperplane_from_minimum`], once for every exit of the basin.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct ReactantMinimum {
+    /// Reactant coordinates, one per engine degree of freedom.
+    pub positions: Array1<f64>,
+    /// Largest absolute force component `max_i |F_i|` at [`Self::positions`],
+    /// in the engine force unit (finite and `>= 0`).
+    pub fmax: f64,
+}
+
+impl ReactantMinimum {
+    /// Reactant coordinates and the largest absolute force component measured
+    /// there. A per-atom force norm is also accepted, since it bounds every
+    /// component from above.
+    #[must_use]
+    pub fn new(positions: Array1<f64>, fmax: f64) -> Self {
+        Self { positions, fmax }
+    }
+}
+
+/// Relax the engine's current positions to an OH-TST reactant minimum.
+///
+/// Clears any active constraint and runs the reactant relaxation of
+/// [`optimize_hyperplane`]: [`rgmin::Lbfgs`] with the eOn step capped at
+/// [`OhtstConfig::max_translation`] per atom, for at most
+/// `8 * max_outer_steps` iterations, until `max_i |F_i|` is at most
+/// [`OhtstConfig::reactant_fmax`]. A start already within the tolerance is
+/// returned as it is. The engine is restored before returning, so the result
+/// can serve every exit of the basin through
+/// [`optimize_hyperplane_from_minimum`].
+///
+/// # Errors
+///
+/// - [`FluxError::InvalidConfig`] when a [`OhtstConfig`] field violates its
+///   bounds.
+/// - [`FluxError::ReactantNotRelaxed`] when the relaxation stops, on its
+///   iteration budget or otherwise, with `max_i |F_i| > reactant_fmax`.
+/// - Any [`FluxError`] propagated by `engine`.
+pub fn relax_reactant<E: DynamicsEngine + ?Sized>(
+    engine: &mut E,
+    config: &OhtstConfig,
+) -> Result<ReactantMinimum, FluxError> {
+    validate_config(config)?;
+    let snapshot = EngineSnapshot::capture(engine);
+    let result = relaxed_reactant(engine, config);
+    snapshot.restore_result(engine, result)
+}
+
+fn relaxed_reactant<E: DynamicsEngine + ?Sized>(
+    engine: &mut E,
+    config: &OhtstConfig,
+) -> Result<ReactantMinimum, FluxError> {
+    engine.set_constraint(None)?;
+    let fmax = relax(engine, config)?;
+    Ok(ReactantMinimum::new(engine.positions().to_owned(), fmax))
+}
+
 /// Optimize the offset of `seed_plane` and return the harmonic OH-TST rate.
 ///
 /// The normal is held at the seed. A seed whose normal force already vanishes,
@@ -341,8 +412,119 @@ pub fn optimize_hyperplane<E: DynamicsEngine + ?Sized>(
         });
     }
     let snapshot = EngineSnapshot::capture(engine);
-    let result = evaluate_harmonic_rate(engine, seed_plane, config);
+    let result = evaluate_harmonic_rate(engine, seed_plane, None, config);
     snapshot.restore_result(engine, result)
+}
+
+/// [`optimize_hyperplane`] from a reactant minimum the caller has relaxed.
+///
+/// No relaxation runs. The minimum is accepted when its declared
+/// [`ReactantMinimum::fmax`] and the largest force component the engine
+/// measures at [`ReactantMinimum::positions`] are both at most
+/// [`OhtstConfig::reactant_fmax`], and the slope along `seed_plane.normal`
+/// rises through it. Otherwise the call fails; it never relaxes the reactant
+/// itself or falls back to another rate. The rest of the evaluation, and the
+/// restoration of the engine, are those of [`optimize_hyperplane`].
+///
+/// # Errors
+///
+/// - [`FluxError::ReactantNotRelaxed`] when the declared or the measured
+///   `max_i |F_i|` exceeds `reactant_fmax`; the declared value is checked
+///   first, before the engine is touched.
+/// - [`FluxError::InvalidConfig`] when [`ReactantMinimum::fmax`] is not finite
+///   or is negative, or when the minimum is not a minimum along
+///   `seed_plane.normal`.
+/// - [`FluxError::Shape`] when [`ReactantMinimum::positions`] does not have
+///   `engine.dof()` entries.
+/// - [`FluxError::NonFinite`] when a supplied coordinate is not finite.
+/// - Every other error of [`optimize_hyperplane`], except those of its
+///   reactant relaxation.
+///
+/// # Example
+///
+/// ```rust
+/// use ndarray::{Array1, ArrayView1};
+/// use rgflux::engine::native::{NativeConfig, NativeEngine};
+/// use rgflux::engine::{DynamicsEngine, HyperplaneConstraint, ThermostatConfig};
+/// use rgflux::ohtst::{OhtstConfig, optimize_hyperplane_from_minimum, relax_reactant};
+///
+/// struct DoubleWell1D;
+/// impl rgsaddle::PointSurface for DoubleWell1D {
+///     fn eval(&self, x: ArrayView1<f64>) -> Result<(f64, Array1<f64>), rgsaddle::SaddleError> {
+///         let w = x[0] * x[0] - 1.0;
+///         Ok((0.25 * w * w, Array1::from_vec(vec![x[0] * w])))
+///     }
+/// }
+///
+/// let cfg = NativeConfig::default()
+///     .with_masses(Array1::from_vec(vec![1.0]))
+///     .with_thermostat(ThermostatConfig::default().with_gamma(1.0).with_temperature(0.1))
+///     .with_seed(17);
+/// let mut engine = NativeEngine::new(DoubleWell1D, cfg)?;
+/// engine.set_positions(Array1::from_vec(vec![-0.7]).view())?;
+///
+/// let ohtst_cfg = OhtstConfig::default()
+///     .with_burn_in_steps(32)
+///     .with_min_sample_steps(64)
+///     .with_sample_step_factor(2)
+///     .with_seed(17);
+/// let reactant = relax_reactant(&mut engine, &ohtst_cfg)?;
+/// assert!(reactant.fmax <= ohtst_cfg.reactant_fmax);
+/// assert_eq!(engine.positions()[0], -0.7);
+///
+/// let seed = HyperplaneConstraint::from_direction(Array1::from_vec(vec![1.0]).view(), 0.0)?;
+/// let est = optimize_hyperplane_from_minimum(&mut engine, &seed, &reactant, &ohtst_cfg)?;
+/// assert!(est.rate > 0.0 && est.rate.is_finite());
+/// # Ok::<(), rgflux::FluxError>(())
+/// ```
+pub fn optimize_hyperplane_from_minimum<E: DynamicsEngine + ?Sized>(
+    engine: &mut E,
+    seed_plane: &HyperplaneConstraint,
+    reactant: &ReactantMinimum,
+    config: &OhtstConfig,
+) -> Result<OhtstEstimate, FluxError> {
+    validate_config(config)?;
+    seed_plane.validate()?;
+    if seed_plane.normal.len() != engine.dof() {
+        return Err(FluxError::Shape {
+            expected: engine.dof(),
+            got: seed_plane.normal.len(),
+            context: "OH-TST seed plane",
+        });
+    }
+    validate_reactant(reactant, engine.dof(), config)?;
+    let snapshot = EngineSnapshot::capture(engine);
+    let result = evaluate_harmonic_rate(engine, seed_plane, Some(reactant), config);
+    snapshot.restore_result(engine, result)
+}
+
+fn validate_reactant(
+    reactant: &ReactantMinimum,
+    dof: usize,
+    config: &OhtstConfig,
+) -> Result<(), FluxError> {
+    if reactant.positions.len() != dof {
+        return Err(FluxError::Shape {
+            expected: dof,
+            got: reactant.positions.len(),
+            context: "OH-TST reactant minimum",
+        });
+    }
+    if reactant.positions.iter().any(|value| !value.is_finite()) {
+        return Err(FluxError::NonFinite("OH-TST reactant minimum positions"));
+    }
+    if !reactant.fmax.is_finite() || reactant.fmax < 0.0 {
+        return Err(FluxError::InvalidConfig(
+            "ReactantMinimum::fmax must be finite and non-negative",
+        ));
+    }
+    if reactant.fmax > config.reactant_fmax {
+        return Err(FluxError::ReactantNotRelaxed {
+            fmax: reactant.fmax,
+            tolerance: config.reactant_fmax,
+        });
+    }
+    Ok(())
 }
 
 fn validate_config(config: &OhtstConfig) -> Result<(), FluxError> {
@@ -387,6 +569,7 @@ fn validate_config(config: &OhtstConfig) -> Result<(), FluxError> {
 fn evaluate_harmonic_rate<E: DynamicsEngine + ?Sized>(
     engine: &mut E,
     seed_plane: &HyperplaneConstraint,
+    supplied: Option<&ReactantMinimum>,
     config: &OhtstConfig,
 ) -> Result<OhtstEstimate, FluxError> {
     let kt = engine.thermostat().thermal_energy()?;
@@ -398,7 +581,10 @@ fn evaluate_harmonic_rate<E: DynamicsEngine + ?Sized>(
     let mu = flux_mass(seed_plane.normal.view(), engine.masses())?;
     engine.set_constraint(None)?;
 
-    let minimum = reactant_minimum(engine, seed_plane, config)?;
+    let minimum = match supplied {
+        Some(reactant) => supplied_minimum(engine, seed_plane, reactant, config)?,
+        None => reactant_minimum(engine, seed_plane, config)?,
+    };
     engine.set_positions(minimum.view())?;
     let (energy_min, _) = engine.energy_and_forces()?;
 
@@ -544,6 +730,31 @@ fn reactant_minimum<E: DynamicsEngine + ?Sized>(
     Err(FluxError::InvalidConfig(
         "OH-TST reactant minimization exceeded its iteration budget",
     ))
+}
+
+fn supplied_minimum<E: DynamicsEngine + ?Sized>(
+    engine: &mut E,
+    seed_plane: &HyperplaneConstraint,
+    reactant: &ReactantMinimum,
+    config: &OhtstConfig,
+) -> Result<Array1<f64>, FluxError> {
+    engine.set_positions(reactant.positions.view())?;
+    let (_, force) = engine.energy_and_forces()?;
+    let fmax = max_force(force.view());
+    if fmax > config.reactant_fmax {
+        return Err(FluxError::ReactantNotRelaxed {
+            fmax,
+            tolerance: config.reactant_fmax,
+        });
+    }
+    let position = engine.positions().to_owned();
+    let normal = seed_plane.normal.view();
+    if !slope_rises_through(engine, position.view(), normal, config.max_translation)? {
+        return Err(FluxError::InvalidConfig(
+            "OH-TST reactant minimum is not a minimum along the seed normal",
+        ));
+    }
+    Ok(position)
 }
 
 /// Iterations of one descent, and descents of one reactant search.

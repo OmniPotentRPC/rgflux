@@ -370,6 +370,74 @@ fn main() -> Result<(), rgflux::FluxError> {
 }
 ```
 
+### Relax a reactant once and evaluate every exit
+
+The reactant is a minimum once its largest force component \(\max_i \lvert F_i \rvert\) is at most `OhtstConfig::reactant_fmax` (default \(10^{-6}\) in the engine force unit, eV/Å in metal units). `ohtst::relax_reactant` relaxes the engine's positions with `rgmin::Lbfgs` to that tolerance, restores the engine, and returns a `ReactantMinimum` holding the coordinates and the measured force. `ohtst::optimize_hyperplane_from_minimum` takes that minimum, or one relaxed by another code, and evaluates one exit without relaxing again, so a basin with several exits is relaxed once. A supplied minimum is refused with `FluxError::ReactantNotRelaxed` when its declared force or the force the engine measures there exceeds `reactant_fmax`; there is no fallback rate:
+
+```rust
+use ndarray::{Array1, ArrayView1};
+use rgflux::engine::native::{NativeConfig, NativeEngine};
+use rgflux::engine::{DynamicsEngine, HyperplaneConstraint, ThermostatConfig};
+use rgflux::ohtst::{
+    OhtstConfig, ReactantMinimum, optimize_hyperplane_from_minimum, relax_reactant,
+};
+
+// Independent double wells along x and y: the reactant at (-1, -1) has one
+// exit over each barrier.
+struct TwoExitWell;
+
+impl rgsaddle::PointSurface for TwoExitWell {
+    fn eval(&self, r: ArrayView1<f64>) -> Result<(f64, Array1<f64>), rgsaddle::SaddleError> {
+        let (wx, wy) = (r[0] * r[0] - 1.0, r[1] * r[1] - 1.0);
+        Ok((
+            0.25 * (wx * wx + wy * wy),
+            Array1::from_vec(vec![r[0] * wx, r[1] * wy]),
+        ))
+    }
+}
+
+fn main() -> Result<(), rgflux::FluxError> {
+    let mut engine = NativeEngine::new(
+        TwoExitWell,
+        NativeConfig::default()
+            .with_masses(Array1::from_vec(vec![1.0, 1.0]))
+            .with_thermostat(
+                ThermostatConfig::default()
+                    .with_gamma(1.0)
+                    .with_temperature(0.1),
+            )
+            .with_seed(7),
+    )?;
+    engine.set_positions(Array1::from_vec(vec![-0.8, -1.3]).view())?;
+    let cfg = OhtstConfig::default()
+        .with_reactant_fmax(1e-8)
+        .with_burn_in_steps(64)
+        .with_min_sample_steps(128)
+        .with_sample_step_factor(8)
+        .with_seed(7);
+
+    let reactant = relax_reactant(&mut engine, &cfg)?;
+    assert!(reactant.fmax <= 1e-8);
+    for direction in [[1.0, 0.0], [0.0, 1.0]] {
+        let exit =
+            HyperplaneConstraint::from_direction(Array1::from_vec(direction.to_vec()).view(), 0.0)?;
+        let est = optimize_hyperplane_from_minimum(&mut engine, &exit, &reactant, &cfg)?;
+        assert!(est.rate > 0.0 && est.standard_error.is_finite());
+    }
+
+    // A minimum relaxed elsewhere, with the force measured there.
+    let exit = HyperplaneConstraint::from_direction(Array1::from_vec(vec![1.0, 0.0]).view(), 0.0)?;
+    let external = ReactantMinimum::new(Array1::from_vec(vec![-1.0, -1.0]), 0.0);
+    assert!(optimize_hyperplane_from_minimum(&mut engine, &exit, &external, &cfg).is_ok());
+    let loose = ReactantMinimum::new(Array1::from_vec(vec![-1.0, -1.0]), 1e-3);
+    assert!(matches!(
+        optimize_hyperplane_from_minimum(&mut engine, &exit, &loose, &cfg),
+        Err(rgflux::FluxError::ReactantNotRelaxed { .. })
+    ));
+    Ok(())
+}
+```
+
 ## Compute a transition rate with direct Forward Flux Sampling (FFS)
 
 Initialize the engine inside reactant basin \(A\) (\(\lambda(\mathbf{x}_0) \le \lambda_0\)) with positive Langevin friction \(\gamma > 0\), specify strictly increasing interfaces \(\lambda_0 < \lambda_1 < \dots < \lambda_n\) in `FfsConfig`, and pass an order-parameter closure \(\lambda(\mathbf{x})\) to `ffs::forward_flux_rate` cite:`goswamiEfficientExploration2025,allenSamplingRareSwitching2005,allenSimulatingRareEvents2006,allenForwardFluxEfficiency2006,allenForwardFluxReview2009`:
@@ -625,7 +693,7 @@ fn main() -> Result<(), rgflux::FluxError> {
 | `kappa` | Kramers analytical barrier-recrossing factor and Bennett-Chandler surface shooting | `kramers_transmission_coefficient` and the trajectory shooter are implemented; fixed-length shooting is the default, while opt-in early commitment requires consecutive samples beyond an explicit signed-distance threshold |
 | `hyperplane` | Constrained hyperplane sampling (`sample_hyperplane`) and zero-variance control variates | Mean constraint force and configuration retention implemented; the in-plane virial, torque, and control variates are not yet implemented |
 | `pafi` | Projected Average Force Integration along reaction paths (`PafiConfig`, `FreeEnergyProfile`, `pafi_profile`, `pafi_profile_dyn`) | Implemented: mass-metric spline planes with not-a-knot ends, zero-temperature trapezoid path-force check, burn-in and batch-means sampling per plane, adaptive rounds to a target error, cubic Hermite free-energy profile, global interpolant maximum, projected-frequency reactant partition, barrier, and normalized rate with propagated errors; the engine is restored on return |
-| `ohtst` | OH-TST with a fixed hyperplane normal (`optimize_hyperplane`) | Implemented for a fixed normal with `rgsaddle::flux_mass`; normal optimization is not yet implemented |
+| `ohtst` | OH-TST with a fixed hyperplane normal (`optimize_hyperplane`, `optimize_hyperplane_from_minimum`) and reactant relaxation (`relax_reactant`) | Implemented for a fixed normal with `rgsaddle::flux_mass`; normal optimization is not yet implemented |
 | `ffs` | Forward Flux Sampling across ordered interfaces (`forward_flux_rate`) | Implemented: flux collection, staged trials, and uncertainty propagation. Exit restores positions, velocities, the periodic cell, the thermostat, and the constraint; the stochastic stream is left where the run put it |
 | `network` | Symmetry-resolved rate networks and kinetic Monte Carlo rate tables (`NetworkConfig`, `RateTableConfig`, `RateEdge`, `build_rate_table`) | `RateEdge::new` and configuration types implemented; `build_rate_table` is not yet implemented |
 | `error` | Shared `FluxError` enum and `From<rgsaddle::SaddleError>` conversion | Implemented |
@@ -636,7 +704,7 @@ fn main() -> Result<(), rgflux::FluxError> {
 | API area | Reference entry | Method guide and theory |
 |---+---+---|
 | `pafi` | This page, `PafiConfig`, `FreeEnergyProfile`, functions, and generated inventory | `howto.org`, /Compute a free-energy profile, barrier and rate along a reaction path/; `explanation.org`, /Projected Average Force Integration (PAFI)/ |
-| `ohtst` | This page, `OhtstConfig`, `OhtstEstimate`, and generated inventory | `howto.org`, /Place a fixed-normal OH-TST dividing hyperplane and evaluate the rate/; `explanation.org`, /Holonomic hyperplane sampling and fixed-normal OH-TST/ |
+| `ohtst` | This page, `OhtstConfig`, `OhtstEstimate`, `ReactantMinimum`, and generated inventory | `howto.org`, /Place a fixed-normal OH-TST dividing hyperplane and evaluate the rate/; `explanation.org`, /Holonomic hyperplane sampling and fixed-normal OH-TST/ |
 | `hyperplane` | This page, `HyperplaneConfig`, `HyperplaneSample`, and generated inventory | `howto.org`, /Sample holonomic hyperplane mean forces and configurations/; `explanation.org`, /Holonomic hyperplane sampling and fixed-normal OH-TST/ |
 | `ffs` | This page, `FfsConfig`, `FfsEstimate`, and generated inventory | `howto.org`, /Compute a transition rate with direct Forward Flux Sampling/; `explanation.org`, /Forward Flux Sampling (FFS)/ |
 | `network` | This page, network configuration, edge and function entries, and generated inventory | `howto.org`, /Assemble a rate-network edge and kMC configuration/; `explanation.org`, /Kinetic rate networks (network)/ |
@@ -875,7 +943,8 @@ Here \(I_T\) is the trapezoid integral of \(dV/ds\) over the plane anchors and \
 | `kappa::bennett_chandler::Side::committed_from_signed_distance` | `(signed_distance) -> Option<Side>` | Classifies \(s < 0\) as `Some(Side::Reactant)`, \(s > 0\) as `Some(Side::Product)`, and \(s = 0\) on the dividing plane as `None` |
 | `kappa::bennett_chandler::BennettChandlerEstimate` | `kappa_t`, `plateau`, `standard_error`, `n_eff`, `plateau_window`, `stationarity`, `positive_flux_count` | Output of `estimate_bennett_chandler` and `shoot_bennett_chandler` |
 | `hyperplane::HyperplaneSample` | `plane`, `mean_force`, `standard_error`, `configurations` | Output of `hyperplane::sample_hyperplane(engine, plane, config)` |
-| `ohtst::OhtstEstimate` | `plane`, `rate`, `standard_error` | Output of `ohtst::optimize_hyperplane(engine, seed_plane, config)` |
+| `ohtst::OhtstEstimate` | `plane`, `rate`, `standard_error` | Output of `ohtst::optimize_hyperplane(engine, seed_plane, config)` and `ohtst::optimize_hyperplane_from_minimum(engine, seed_plane, reactant, config)` |
+| `ohtst::ReactantMinimum` | `positions`, `fmax` (`ReactantMinimum::new(positions, fmax)`) | Relaxed reactant coordinates, one per engine degree of freedom, and the largest absolute force component \(\max_i \lvert F_i \rvert\) measured there (finite, \(\ge 0\)); output of `ohtst::relax_reactant` and input of `ohtst::optimize_hyperplane_from_minimum`. A per-atom force norm may be declared instead, since it bounds every component |
 | `ffs::FfsEstimate` | `initial_flux`, `interface_probabilities`, `rate`, `standard_error` | Output of `ffs::forward_flux_rate(engine, order_param, config)` |
 | `pafi::FreeEnergyProfile` | `arc_lengths`, `free_energy`, `standard_error`, `barrier`, `barrier_error`, `dividing_index`, `dividing_arc`, `reactant_frequency`, `reactant_partition`, `reactant_log_partition`, `normalized_rate`, `normalized_log_rate`, `normalized_rate_error`, `quadrature_residual` | Output of `pafi::pafi_profile(engine, path_images, config)` and `pafi::pafi_profile_dyn(engine, path_images, config)`; see the field table in the configuration section |
 | `pafi::IntegralEstimate` | `values`, `error` | Cumulative mean-force integral from the first node, with the per-node truncation taken from the integration rule; the first entry of each is 0 |
@@ -893,6 +962,8 @@ Here \(I_T\) is the trapezoid integral of \(dV/ds\) over the plane anchors and \
 | `stats::check_stationarity` | Sample slice and `StatsConfig` | `StationarityReport`; Geweke equation and runnable example in `howto.org` |
 | `hyperplane::sample_hyperplane` | Mutable engine, plane, and `HyperplaneConfig` | `HyperplaneSample`; constrained mean-force guide in `howto.org` |
 | `ohtst::optimize_hyperplane` | Mutable engine, seed plane, and `OhtstConfig` | `OhtstEstimate`; harmonic rate guide in `howto.org` |
+| `ohtst::relax_reactant` | Mutable engine and `OhtstConfig` | `ReactantMinimum` relaxed by `rgmin::Lbfgs` to `reactant_fmax`; the engine is restored. `FluxError::ReactantNotRelaxed` when the relaxation ends above the tolerance; shared-reactant guide in `howto.org` |
+| `ohtst::optimize_hyperplane_from_minimum` | Mutable engine, seed plane, `ReactantMinimum`, and `OhtstConfig` | `OhtstEstimate` from the supplied minimum without relaxing it. `FluxError::ReactantNotRelaxed` when the declared force, checked before the engine is touched, or the force the engine measures there exceeds `reactant_fmax`; `FluxError::InvalidConfig` when the declared force is negative or not finite, or the minimum is not a minimum along the seed normal |
 | `ffs::forward_flux_rate` | Mutable engine, order parameter, and `FfsConfig` | `FfsEstimate`; direct FFS guide in `howto.org` |
 | `pafi::pafi_profile` | Mutable engine, path image matrix, and `PafiConfig` | `FreeEnergyProfile`; PAFI guide in `howto.org` |
 | `pafi::pafi_profile_dyn` | Mutable `dyn DynamicsEngine`, path image matrix, and `PafiConfig` | Trait-object form of `pafi_profile` with identical estimator and restoration semantics |
@@ -1581,7 +1652,13 @@ The generated block is authoritative. Run
 - `rgflux::ohtst::OhtstEstimate::plane`
 - `rgflux::ohtst::OhtstEstimate::rate`
 - `rgflux::ohtst::OhtstEstimate::standard_error`
+- `rgflux::ohtst::ReactantMinimum`
+- `rgflux::ohtst::ReactantMinimum::fmax`
+- `rgflux::ohtst::ReactantMinimum::new`
+- `rgflux::ohtst::ReactantMinimum::positions`
 - `rgflux::ohtst::optimize_hyperplane`
+- `rgflux::ohtst::optimize_hyperplane_from_minimum`
+- `rgflux::ohtst::relax_reactant`
 
 #### `pafi`
 
@@ -1754,6 +1831,10 @@ where \(\mu\) is the effective directional flux mass along \(\mathbf{n}\), evalu
    \[
    k_{\mathrm{OHTST}} = \frac{1}{2\pi}\sqrt{\frac{\kappa}{\mu}}\,\exp\!\left(-\frac{\Delta V}{k_{\mathrm{B}} T}\right), \qquad \sigma_{k_{\mathrm{OHTST}}} = k_{\mathrm{OHTST}}\,\frac{\sigma_\lambda}{2\,\lvert\langle \lambda \rangle\rvert}.
    \]
+
+`ohtst::relax_reactant` runs stage 1 alone and returns a `ReactantMinimum` with the force measured at it. `ohtst::optimize_hyperplane_from_minimum` runs stages 2 to 4 from a supplied minimum, relaxed by `relax_reactant` or by another code, after checking that its declared and measured \(\max_i |F_i|\) are at most `reactant_fmax` and that the directional slope rises through it. A basin with several exits is then relaxed once. A minimum that fails a check is refused with `FluxError::ReactantNotRelaxed` or `FluxError::InvalidConfig`; no other rate estimate is substituted.
+
+The reactant tolerance is physical: forces at a relaxed minimum carry rounding noise that grows with the atom count and the coordinate magnitude, so a fixed multiple of machine epsilon is not a reachable force criterion. `stats::SERIES_FLAT_TOL` is kept for the bisection bracket width and for the verbatim-seed shortcut in stage 2, which compare binary64 numbers of known scale and cannot fail on rounding.
 
 ### Assumptions and scope
 

@@ -77,6 +77,10 @@ where \(\mu\) is the effective directional flux mass along \(\mathbf{n}\), evalu
    k_{\mathrm{OHTST}} = \frac{1}{2\pi}\sqrt{\frac{\kappa}{\mu}}\,\exp\!\left(-\frac{\Delta V}{k_{\mathrm{B}} T}\right), \qquad \sigma_{k_{\mathrm{OHTST}}} = k_{\mathrm{OHTST}}\,\frac{\sigma_\lambda}{2\,\lvert\langle \lambda \rangle\rvert}.
    \]
 
+=ohtst::relax_reactant= runs stage 1 alone and returns a =ReactantMinimum= with the force measured at it. =ohtst::optimize_hyperplane_from_minimum= runs stages 2 to 4 from a supplied minimum, relaxed by =relax_reactant= or by another code, after checking that its declared and measured \(\max_i |F_i|\) are at most =reactant_fmax= and that the directional slope rises through it. A basin with several exits is then relaxed once. A minimum that fails a check is refused with =FluxError::ReactantNotRelaxed= or =FluxError::InvalidConfig=; no other rate estimate is substituted.
+
+The reactant tolerance is physical: forces at a relaxed minimum carry rounding noise that grows with the atom count and the coordinate magnitude, so a fixed multiple of machine epsilon is not a reachable force criterion. =stats::SERIES_FLAT_TOL= is kept for the bisection bracket width and for the verbatim-seed shortcut in stage 2, which compare binary64 numbers of known scale and cannot fail on rounding.
+
 ** Assumptions and scope
 
 - Single dominant reaction channel along the fixed unit normal \(\mathbf{n}\); positive barrier \(\Delta V > 0\) and locally harmonic reactant well (\(\kappa > 0\)) at the probe offset \(c_{\mathrm{probe}}\).

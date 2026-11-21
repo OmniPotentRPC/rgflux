@@ -12,7 +12,10 @@ use rgflux::kappa::bennett_chandler::{
     shoot_bennett_chandler,
 };
 use rgflux::kappa::{KappaConfig, kramers_transmission_coefficient};
-use rgflux::ohtst::{OhtstConfig, optimize_hyperplane};
+use rgflux::ohtst::{
+    OhtstConfig, ReactantMinimum, optimize_hyperplane, optimize_hyperplane_from_minimum,
+    relax_reactant,
+};
 use rgflux::pafi::{PafiConfig, pafi_profile};
 use rgflux::stats::StatsConfig;
 use std::fs;
@@ -46,7 +49,7 @@ fn org_guide_rust_blocks_compile_and_run() {
 
     let howto = include_str!("../docs/orgmode/howto.org");
     let howto_blocks = extract_rust_blocks(howto);
-    assert_eq!(howto_blocks.len(), 8, "howto.org has 8 Rust blocks");
+    assert_eq!(howto_blocks.len(), 9, "howto.org has 9 Rust blocks");
     run_extracted_blocks("howto", &howto_blocks);
 }
 
@@ -428,6 +431,59 @@ fn howto_ohtst_oblique_example_runs() -> Result<(), FluxError> {
     let est = optimize_hyperplane(&mut engine, &seed_plane, &cfg)?;
     assert!(est.plane.offset.abs() < 1e-12);
     assert!(est.rate > 0.0 && est.standard_error.is_finite());
+    Ok(())
+}
+
+#[test]
+fn howto_ohtst_shared_reactant_example_runs() -> Result<(), FluxError> {
+    struct TwoExitWell;
+
+    impl rgsaddle::PointSurface for TwoExitWell {
+        fn eval(&self, r: ArrayView1<f64>) -> Result<(f64, Array1<f64>), rgsaddle::SaddleError> {
+            let (wx, wy) = (r[0] * r[0] - 1.0, r[1] * r[1] - 1.0);
+            Ok((
+                0.25 * (wx * wx + wy * wy),
+                Array1::from_vec(vec![r[0] * wx, r[1] * wy]),
+            ))
+        }
+    }
+
+    let mut engine = NativeEngine::new(
+        TwoExitWell,
+        NativeConfig::default()
+            .with_masses(Array1::from_vec(vec![1.0, 1.0]))
+            .with_thermostat(
+                ThermostatConfig::default()
+                    .with_gamma(1.0)
+                    .with_temperature(0.1),
+            )
+            .with_seed(7),
+    )?;
+    engine.set_positions(Array1::from_vec(vec![-0.8, -1.3]).view())?;
+    let cfg = OhtstConfig::default()
+        .with_reactant_fmax(1e-8)
+        .with_burn_in_steps(64)
+        .with_min_sample_steps(128)
+        .with_sample_step_factor(8)
+        .with_seed(7);
+
+    let reactant = relax_reactant(&mut engine, &cfg)?;
+    assert!(reactant.fmax <= 1e-8);
+    for direction in [[1.0, 0.0], [0.0, 1.0]] {
+        let exit =
+            HyperplaneConstraint::from_direction(Array1::from_vec(direction.to_vec()).view(), 0.0)?;
+        let est = optimize_hyperplane_from_minimum(&mut engine, &exit, &reactant, &cfg)?;
+        assert!(est.rate > 0.0 && est.standard_error.is_finite());
+    }
+
+    let exit = HyperplaneConstraint::from_direction(Array1::from_vec(vec![1.0, 0.0]).view(), 0.0)?;
+    let external = ReactantMinimum::new(Array1::from_vec(vec![-1.0, -1.0]), 0.0);
+    assert!(optimize_hyperplane_from_minimum(&mut engine, &exit, &external, &cfg).is_ok());
+    let loose = ReactantMinimum::new(Array1::from_vec(vec![-1.0, -1.0]), 1e-3);
+    assert!(matches!(
+        optimize_hyperplane_from_minimum(&mut engine, &exit, &loose, &cfg),
+        Err(FluxError::ReactantNotRelaxed { .. })
+    ));
     Ok(())
 }
 
