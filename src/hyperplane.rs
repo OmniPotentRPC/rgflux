@@ -33,7 +33,9 @@
 //! - The hyperplane normal `n` has unit Euclidean norm (`||n||_2 = 1` within
 //!   [`crate::engine::UNIT_NORMAL_TOL`]) and length matching `engine.dof()`.
 //! - The constrained Markov chain reaches stationarity within `burn_in_steps`
-//!   at positive thermal energy `k_B * T` and friction `gamma > 0`.
+//!   at positive thermal energy `k_B * T` and friction `gamma > 0`. The call
+//!   enforces `gamma > 0`: NVE dynamics samples an energy shell, not the
+//!   canonical ensemble, and returns [`crate::FluxError::InvalidConfig`].
 //! - Every constrained [`crate::engine::DynamicsEngine::step`] call populates
 //!   [`crate::engine::StepReport::constraint_force`] with a finite `Some(lambda)`.
 //!
@@ -213,8 +215,9 @@ pub struct HyperplaneSample {
 /// # Errors
 ///
 /// - [`FluxError::InvalidConfig`] when `retention_stride == 0`, `sample_steps < 2`,
-///   `time_step <= 0` or non-finite, or [`crate::engine::StepReport::constraint_force`]
-///   is `None`.
+///   `time_step <= 0` or non-finite, the engine thermostat has `gamma == 0`
+///   (NVE dynamics, which does not sample the canonical ensemble) or invalid
+///   parameters, or [`crate::engine::StepReport::constraint_force`] is `None`.
 /// - [`FluxError::Shape`] when `plane.normal.len() != engine.dof()`.
 /// - [`FluxError::NonFinite`] when a sampled constraint force is NaN or infinite.
 /// - Any [`FluxError`] propagated by `engine` during setup, stepping, or snapshot
@@ -246,6 +249,8 @@ pub fn sample_hyperplane<E: DynamicsEngine + ?Sized>(
             context: "hyperplane dimension",
         });
     }
+
+    engine.thermostat().require_canonical_sampling()?;
 
     let snapshot = EngineSnapshot::capture(engine);
 

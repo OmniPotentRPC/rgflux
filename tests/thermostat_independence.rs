@@ -1,75 +1,176 @@
-//! Thermostat and constraint-algorithm independence of the constrained
-//! observables.
+//! Constrained mean forces and PAFI profiles against the Langevin friction.
 //!
-//! The native engine has one thermostat, white-noise Langevin integrated with
-//! BAOAB. There is no GLE and no coloured-noise thermostat, so a second
-//! thermostat family cannot be run through this code. The independence check
-//! therefore varies the Langevin friction `gamma` over a factor of twenty,
-//! from `0.3` (weakly damped, inertial) to `6.0` (strongly damped), and it
-//! crosses every friction with both constraint algorithms the engine offers,
-//! RATTLE and SHAKE. The constrained mean force, the free-degree kinetic
-//! temperature and the PAFI barrier and rate are equilibrium quantities, so
-//! every setting must reproduce the same exact value, and the estimates at
-//! different settings must agree with each other within their combined
-//! statistical error.
+//! The native engine has one thermostat family: white-noise Langevin with
+//! friction `gamma > 0`, with `gamma == 0` giving NVE dynamics. There is no
+//! second thermostat algorithm, so "independent of the thermostat" is tested
+//! over what exists:
 //!
-//! Each test also runs negative controls: the same estimates are compared
-//! with the exact value evaluated at a deliberately wrong temperature, and
-//! the comparison must fail. That shows the checks can tell temperatures
-//! apart.
+//! - the friction, over a factor of sixteen (`0.5`, `2`, `8`),
+//! - the constraint scheme, RATTLE or SHAKE, which change how the plane is
+//!   enforced and not what is sampled,
+//! - the temperature, where the reference moves with `k_B T` and the same
+//!   estimator has to follow it,
+//! - the NVE choice, `gamma == 0`. NVE samples an energy shell started at the
+//!   anchor and not the canonical ensemble, so `sample_hyperplane` and
+//!   `pafi_profile` must refuse it. Before that check they accepted it and
+//!   returned a biased number; every test below asserts the refusal.
 //!
-//! All runs are seeded and use no wall-clock or thread state, so the results
-//! are reproducible. The file runs in under half a minute under the test
-//! profile.
+//! What the references are:
+//!
+//! - Harmonic plane: `dF/dc = c / (n^T K^-1 n)`, exact for a quadratic
+//!   potential and independent of the masses.
+//! - Widening well: the mean force on the plane `x` is
+//!   `-4x(1 - x^2) + k_B T / (4 k(x))` with `k(x) = 1.5 + 0.5x`. The barrier
+//!   target is the Hermite integral of that force on the sampled planes, the
+//!   expectation of the PAFI estimator, so quadrature error does not enter.
+//!   The rate target is the estimator's own formula,
+//!   `(omega_0 / 2 pi) exp(-Delta F / k_B T)`, with `omega_0^2 = 8` the
+//!   curvature of `(1 - x^2)^2` at `x = -1`. It is the harmonic-reactant
+//!   rate that PAFI documents. It is not the exact rate of the anharmonic
+//!   one-dimensional reduction, because the reactant partition function is
+//!   replaced by a Gaussian.
+//! - Tilted plane: on `s = 0` the multiplier has mean `k_B T / (4 k(0))`, and
+//!   with one holonomic constraint in two coordinates `2 KE / k_B T = 1`.
+//!
+//! Statistics: seeds are fixed (shift them with `PAFI_SEED_OFFSET`). Each
+//! statistical assertion is a two sided `|x - target| <= Z * SE` check with
+//! `SE` from 40 batch means, so `Z` is the Student `t` quantile at 39
+//! degrees of freedom and level `alpha / (2 m)`, with suite level
+//! `alpha = 1/1000` split by Bonferroni over the `m = FAMILY_SIZE` checks
+//! counted by [`Checks`]. Two estimates from independent seeds agree when
+//! `|a - b| <= Z * hypot(SE_a, SE_b)`. Power is asserted as well: the value
+//! a wrong answer would give must lie outside the band, so a result that only
+//! passes because its error bar is wide fails. Those values are zero force
+//! for the two planes, `2` for the kinetic temperature (the coordinate count
+//! before imposing one holonomic constraint), and the zero-temperature
+//! barrier `1` for the widening well.
+
+mod pafi_support;
 
 use ndarray::{Array1, Array2, ArrayView1};
+use pafi_support::{block_stats, seed};
+use rgflux::FluxError;
 use rgflux::engine::native::{ConstraintProjection, NativeConfig, NativeEngine};
-use rgflux::engine::{DynamicsEngine, EindirSurface, HyperplaneConstraint, ThermostatConfig};
-use rgflux::pafi::{PafiConfig, pafi_profile};
-use rgflux::stats::{StatsConfig, batch_means};
+use rgflux::engine::{DynamicsEngine, HyperplaneConstraint, ThermostatConfig};
+use rgflux::hyperplane::{HyperplaneConfig, sample_hyperplane};
+use rgflux::pafi::{HermiteIntegral, MeanForceIntegral, PafiConfig, pafi_profile};
+use rgflux::stats::batch_means;
 
-/// Friction coefficients spanning a factor of twenty.
-const GAMMAS: [f64; 3] = [0.3, 1.6, 6.0];
+/// Statistical assertions over the three tests.
+const FAMILY_SIZE: usize = 36;
 
-/// Constraint algorithms crossed with every friction.
-const PROJECTIONS: [ConstraintProjection; 2] =
-    [ConstraintProjection::Rattle, ConstraintProjection::Shake];
+/// Two sided Student `t` quantile `t_{39, 1 - alpha / (2 m)}` with
+/// `alpha = 1/1000` and `m = 36`, so `1 - alpha / (2 m) = 1 - 1/72000`.
+const Z_CRIT: f64 = 4.746_483;
 
-/// Largest accepted deviation, in standard errors, from the exact value and
-/// between two independent settings.
-const Z_LIMIT: f64 = 3.0;
+const FRICTIONS: [f64; 3] = [0.5, 2.0, 8.0];
 
-#[derive(Clone, Copy, Debug)]
-struct Estimate {
-    mean: f64,
-    error: f64,
+const HARMONIC_CHECKS: usize = 9;
+const WIDENING_CHECKS: usize = 19;
+const TILTED_CHECKS: usize = 8;
+
+#[test]
+fn family_size_matches_the_statistical_checks() {
+    assert_eq!(
+        HARMONIC_CHECKS + WIDENING_CHECKS + TILTED_CHECKS,
+        FAMILY_SIZE
+    );
 }
 
-#[derive(Clone, Copy, Debug)]
-struct Setting {
-    gamma: f64,
-    projection: ConstraintProjection,
-    index: usize,
+/// Counts the statistical assertions a test makes, so the family size that
+/// sets [`Z_CRIT`] is checked and not assumed.
+struct Checks {
+    name: &'static str,
+    expected: usize,
+    done: usize,
 }
 
-impl Setting {
-    fn label(&self) -> String {
-        format!("gamma={} {:?}", self.gamma, self.projection)
-    }
-}
-
-fn settings() -> Vec<Setting> {
-    let mut all = Vec::new();
-    for gamma in GAMMAS {
-        for projection in PROJECTIONS {
-            all.push(Setting {
-                gamma,
-                projection,
-                index: all.len(),
-            });
+impl Checks {
+    fn new(name: &'static str, expected: usize) -> Self {
+        Self {
+            name,
+            expected,
+            done: 0,
         }
     }
-    all
+
+    /// `|estimate - target| <= Z * se`, and, when a `rival` is given, the
+    /// rival lies outside the same band. The rival is the value a wrong
+    /// answer would give, so a standard error too wide to tell them apart
+    /// fails.
+    fn covers(&mut self, label: &str, estimate: f64, se: f64, target: f64, rival: Option<f64>) {
+        self.done += 1;
+        assert!(se.is_finite() && se > 0.0, "{label}: bad se {se}");
+        let z = (estimate - target).abs() / se;
+        eprintln!("{label}: {estimate:.6e} se={se:.3e} target={target:.6e} z={z:.2}");
+        assert!(
+            z <= Z_CRIT,
+            "{label}: {estimate:.6e} +- {se:.3e} versus {target:.6e} gives z={z:.2} > {Z_CRIT}"
+        );
+        if let Some(rival) = rival {
+            let z_rival = (estimate - rival).abs() / se;
+            eprintln!("{label}: rival={rival:.6e} z={z_rival:.2}");
+            assert!(
+                z_rival > Z_CRIT,
+                "{label}: the band {estimate:.6e} +- {Z_CRIT} * {se:.3e} cannot exclude {rival:.6e}"
+            );
+        }
+    }
+
+    /// Two independent estimates agree within `Z * hypot(se_a, se_b)`.
+    fn agree(&mut self, label: &str, a: (f64, f64), b: (f64, f64)) {
+        self.done += 1;
+        let spread = a.1.hypot(b.1);
+        let z = (a.0 - b.0).abs() / spread;
+        eprintln!("{label}: {:.6e} vs {:.6e} z={z:.2}", a.0, b.0);
+        assert!(
+            z <= Z_CRIT,
+            "{label}: {:.6e} and {:.6e} differ by z={z:.2} > {Z_CRIT}",
+            a.0,
+            b.0
+        );
+    }
+
+    /// `rival` lies outside `estimate +- Z * se`.
+    fn excludes(&mut self, label: &str, estimate: f64, se: f64, rival: f64) {
+        self.done += 1;
+        let z = (estimate - rival).abs() / se;
+        eprintln!("{label}: {estimate:.6e} se={se:.3e} rival={rival:.6e} z={z:.2}");
+        assert!(
+            z > Z_CRIT,
+            "{label}: the band {estimate:.6e} +- {Z_CRIT} * {se:.3e} cannot exclude {rival:.6e}"
+        );
+    }
+
+    fn finish(self) {
+        assert_eq!(
+            self.done, self.expected,
+            "{}: the family size no longer matches the statistical assertions made",
+            self.name
+        );
+    }
+}
+
+/// NVE (`gamma == 0`) has to be refused. `outcome` describes what a call
+/// returned if it was accepted.
+fn assert_nve_refused(label: &str, outcome: Result<String, FluxError>) {
+    match outcome {
+        Err(FluxError::InvalidConfig(message)) => {
+            assert!(
+                message.contains("gamma"),
+                "{label}: unrelated error {message}"
+            );
+        }
+        Err(other) => panic!("{label}: expected InvalidConfig, got {other}"),
+        Ok(result) => panic!(
+            "{label}: gamma == 0 is NVE and does not sample the canonical ensemble, \
+             yet it was accepted and returned {result}"
+        ),
+    }
+}
+
+fn unit_masses() -> Array1<f64> {
+    Array1::from_vec(vec![1.0, 1.0])
 }
 
 struct TiltedWidening {
@@ -93,394 +194,405 @@ impl rgsaddle::PointSurface for TiltedWidening {
     }
 }
 
-fn exact_widening_force(s: f64, kbt: f64) -> f64 {
-    let well = 1.0 - s * s;
-    let kappa = 1.5 + 0.5 * s;
-    -4.0 * s * well + 0.25 * kbt / kappa
+struct WideningWell;
+
+impl rgsaddle::PointSurface for WideningWell {
+    fn eval(&self, r: ArrayView1<f64>) -> Result<(f64, Array1<f64>), rgsaddle::SaddleError> {
+        let (x, y) = (r[0], r[1]);
+        let well = 1.0 - x * x;
+        let kappa = 1.5 + 0.5 * x;
+        Ok((
+            well * well + 0.5 * kappa * y * y,
+            Array1::from_vec(vec![-4.0 * x * well + 0.25 * y * y, kappa * y]),
+        ))
+    }
 }
 
-fn thermostat(gamma: f64, temperature: f64) -> ThermostatConfig {
+struct Harmonic {
+    k: [f64; 2],
+}
+
+impl rgsaddle::PointSurface for Harmonic {
+    fn eval(&self, x: ArrayView1<f64>) -> Result<(f64, Array1<f64>), rgsaddle::SaddleError> {
+        Ok((
+            0.5 * (self.k[0] * x[0] * x[0] + self.k[1] * x[1] * x[1]),
+            Array1::from_vec(vec![self.k[0] * x[0], self.k[1] * x[1]]),
+        ))
+    }
+}
+
+fn thermostat(gamma: f64, kbt: f64) -> ThermostatConfig {
     ThermostatConfig::default()
         .with_gamma(gamma)
-        .with_temperature(temperature)
+        .with_temperature(kbt)
 }
 
-/// Seed for the `index`-th setting of an observable, distinct for every
-/// setting so the runs are statistically independent.
-fn seed_for(base: u64, index: usize) -> u64 {
-    base + 1_000 * (index as u64 + 1)
-}
+#[test]
+fn harmonic_plane_force_and_fluctuations_follow_friction_and_temperature() {
+    const K: [f64; 2] = [2.2, 0.7];
+    const OFFSET: f64 = -0.4;
+    const KBT: f64 = 0.5;
+    const SAMPLES: usize = 40_000;
+    let plane =
+        HyperplaneConstraint::from_direction(Array1::from_vec(vec![5.0, 12.0]).view(), OFFSET)
+            .expect("5-12-13 unit normal");
+    let (n1, n2) = (plane.normal[0], plane.normal[1]);
+    let exact = OFFSET / (n1 * n1 / K[0] + n2 * n2 / K[1]);
 
-fn mean_error(series: &[f64]) -> Estimate {
-    let est = batch_means(series, &StatsConfig::default()).expect("batch means");
-    Estimate {
-        mean: est.mean,
-        error: est.standard_error,
+    let tangent = [-n2, n1];
+    let conditional_mean = {
+        let denominator = n1 * n1 / K[0] + n2 * n2 / K[1];
+        let x = [
+            OFFSET * n1 / K[0] / denominator,
+            OFFSET * n2 / K[1] / denominator,
+        ];
+        tangent[0] * x[0] + tangent[1] * x[1]
+    };
+    let tangent_stiffness = tangent[0] * tangent[0] * K[0] + tangent[1] * tangent[1] * K[1];
+
+    let run = |gamma: f64,
+               kbt: f64,
+               projection: ConstraintProjection,
+               base: u64|
+     -> ((f64, f64), (f64, f64)) {
+        let run_seed = seed(base);
+        let config = NativeConfig::default()
+            .with_masses(Array1::from_vec(vec![1.3, 0.8]))
+            .with_thermostat(thermostat(gamma, kbt))
+            .with_projection(projection)
+            .with_seed(run_seed);
+        let mut engine = NativeEngine::new(Harmonic { k: K }, config).expect("engine");
+        let sampling = HyperplaneConfig::default()
+            .with_burn_in_steps(2_000)
+            .with_sample_steps(SAMPLES)
+            .with_retention_stride(1)
+            .with_time_step(0.02)
+            .with_seed(run_seed)
+            .with_stats(block_stats(SAMPLES));
+        let sample = sample_hyperplane(&mut engine, &plane, &sampling).expect("sample");
+        let squared_tangent_displacements: Vec<f64> = sample
+            .configurations
+            .rows()
+            .into_iter()
+            .map(|position| {
+                let coordinate = tangent[0] * position[0] + tangent[1] * position[1];
+                (coordinate - conditional_mean).powi(2)
+            })
+            .collect();
+        let fluctuation =
+            batch_means(&squared_tangent_displacements, &block_stats(SAMPLES)).expect("variance");
+        (
+            (sample.mean_force, sample.standard_error),
+            (fluctuation.mean, fluctuation.standard_error),
+        )
+    };
+
+    let mut checks = Checks::new("harmonic", HARMONIC_CHECKS);
+    let slow = run(FRICTIONS[0], KBT, ConstraintProjection::Rattle, 101);
+    let middle = run(FRICTIONS[1], KBT, ConstraintProjection::Rattle, 102);
+    let fast = run(FRICTIONS[2], KBT, ConstraintProjection::Rattle, 103);
+    let shake = run(FRICTIONS[1], KBT, ConstraintProjection::Shake, 104);
+    for (label, estimate) in [
+        ("gamma 0.5 rattle", slow.0),
+        ("gamma 2 rattle", middle.0),
+        ("gamma 8 rattle", fast.0),
+        ("gamma 2 shake", shake.0),
+    ] {
+        checks.covers(label, estimate.0, estimate.1, exact, Some(0.0));
     }
+    checks.agree("gamma 0.5 vs 2", slow.0, middle.0);
+    checks.agree("gamma 8 vs 2", fast.0, middle.0);
+    checks.agree("shake vs rattle", shake.0, middle.0);
+
+    const LOW_KBT: f64 = 0.2;
+    let low_temperature = run(FRICTIONS[1], LOW_KBT, ConstraintProjection::Rattle, 106);
+    let variance = KBT / tangent_stiffness;
+    let low_variance = LOW_KBT / tangent_stiffness;
+    checks.covers(
+        "kT 0.5 tangent variance",
+        middle.1.0,
+        middle.1.1,
+        variance,
+        Some(low_variance),
+    );
+    checks.covers(
+        "kT 0.2 tangent variance",
+        low_temperature.1.0,
+        low_temperature.1.1,
+        low_variance,
+        Some(variance),
+    );
+    checks.finish();
+
+    let nve_config = NativeConfig::default()
+        .with_masses(Array1::from_vec(vec![1.3, 0.8]))
+        .with_thermostat(thermostat(0.0, KBT))
+        .with_seed(seed(105));
+    let mut nve = NativeEngine::new(Harmonic { k: K }, nve_config).expect("engine");
+    let sampling = HyperplaneConfig::default()
+        .with_burn_in_steps(2_000)
+        .with_sample_steps(SAMPLES)
+        .with_time_step(0.02)
+        .with_seed(seed(105))
+        .with_stats(block_stats(SAMPLES));
+    assert_nve_refused(
+        "sample_hyperplane",
+        sample_hyperplane(&mut nve, &plane, &sampling).map(|sample| {
+            format!(
+                "mean_force {:.4} +- {:.4} against the canonical {exact:.4}",
+                sample.mean_force, sample.standard_error
+            )
+        }),
+    );
 }
 
-/// Check that every estimate matches `exact` and that all pairs agree.
+const WIDENING_PLANES: usize = 21;
+const WIDENING_BURN_IN: usize = 1_000;
+const WIDENING_SAMPLES: usize = 16_000;
+const WIDENING_TIME_STEP: f64 = 0.02;
+const REACTANT_OMEGA_SQUARED: f64 = 8.0;
+
+fn widening_mean_force(x: f64, kbt: f64) -> f64 {
+    -4.0 * x * (1.0 - x * x) + 0.25 * kbt / (1.5 + 0.5 * x)
+}
+
+/// Hermite integral of the exact mean force over the sampled planes: the
+/// expectation of the PAFI barrier on a path from `x = -1` to `x = 0`.
+fn widening_expected_barrier(kbt: f64) -> f64 {
+    let arcs: Vec<f64> = (0..WIDENING_PLANES)
+        .map(|i| i as f64 / (WIDENING_PLANES - 1) as f64)
+        .collect();
+    let gradients: Vec<f64> = arcs
+        .iter()
+        .map(|arc| widening_mean_force(-1.0 + arc, kbt))
+        .collect();
+    HermiteIntegral
+        .cumulative(&arcs, &gradients)
+        .expect("hermite")
+        .values[WIDENING_PLANES - 1]
+}
+
+/// Rate of the one-dimensional reduction with the dividing plane at `x = 0`
+/// and the reactant partition function integrated, not replaced by a
+/// Gaussian: `sqrt(k_B T / 2 pi) exp(-Delta F / k_B T) / Z_R` with
+/// `Z_R = int exp(-(F(x) - F(-1)) / k_B T) dx` over `x < 0`.
 ///
-/// `bias_bound` is a deterministic discretization bound shared by every
-/// setting. It widens the comparison with `exact` only, because it cancels in
-/// the comparison between two settings.
-fn check_independent(
-    label: &str,
-    estimates: &[Estimate],
-    exact: f64,
-    bias_bound: f64,
-    quiet: bool,
-) -> Result<(), String> {
-    let all = settings();
-    assert_eq!(estimates.len(), all.len());
-    for (setting, est) in all.iter().zip(estimates) {
-        if !(est.error > 0.0 && est.error.is_finite()) {
-            return Err(format!(
-                "{label}: {} has no usable error {}",
-                setting.label(),
-                est.error
-            ));
-        }
-        let z = (est.mean - exact) / est.error.hypot(bias_bound);
-        if !quiet {
-            eprintln!(
-                "diag {label} {} mean={:.6e} se={:.3e} exact={exact:.6e} z={z:.2}",
-                setting.label(),
-                est.mean,
-                est.error
-            );
-        }
-        if z.abs() > Z_LIMIT {
-            return Err(format!(
-                "{label}: {} mean {} exact {exact} se {} z {z:.2}",
-                setting.label(),
-                est.mean,
-                est.error
-            ));
-        }
+/// `F(x) = (1 - x^2)^2 + (k_B T / 2) ln(1.5 + 0.5x)` is normalizable for
+/// `x > -3`; the weight there is below `exp(-60)`, so the integral starts at
+/// `-2.9`. Simpson's rule on `1_000` intervals is far below the statistical
+/// error.
+fn widening_reduced_rate(kbt: f64, barrier: f64) -> f64 {
+    let free_energy = |x: f64| (1.0 - x * x).powi(2) + 0.5 * kbt * (1.5 + 0.5 * x).ln();
+    let reference = free_energy(-1.0);
+    let (lo, hi, intervals) = (-2.9_f64, 0.0_f64, 1_000_usize);
+    let h = (hi - lo) / intervals as f64;
+    let mut sum = 0.0;
+    for i in 0..=intervals {
+        let x = lo + h * i as f64;
+        let weight = if i == 0 || i == intervals {
+            1.0
+        } else if i % 2 == 1 {
+            4.0
+        } else {
+            2.0
+        };
+        sum += weight * (-(free_energy(x) - reference) / kbt).exp();
     }
-    for i in 0..estimates.len() {
-        for j in (i + 1)..estimates.len() {
-            let (a, b) = (estimates[i], estimates[j]);
-            let z = (a.mean - b.mean) / a.error.hypot(b.error);
-            if !quiet {
-                eprintln!(
-                    "diag {label} {} vs {} difference z={z:.2}",
-                    all[i].label(),
-                    all[j].label()
+    let reactant_partition = sum * h / 3.0;
+    (kbt / std::f64::consts::TAU).sqrt() * (-barrier / kbt).exp() / reactant_partition
+}
+
+fn widening_path() -> Array2<f64> {
+    let mut path = Array2::zeros((WIDENING_PLANES, 2));
+    for i in 0..WIDENING_PLANES {
+        path[[i, 0]] = -1.0 + i as f64 / (WIDENING_PLANES - 1) as f64;
+    }
+    path
+}
+
+fn widening_profile(
+    gamma: f64,
+    kbt: f64,
+    base: u64,
+) -> Result<rgflux::pafi::FreeEnergyProfile, FluxError> {
+    let run_seed = seed(base);
+    let config = PafiConfig::default()
+        .with_planes(WIDENING_PLANES)
+        .with_burn_in_steps(WIDENING_BURN_IN)
+        .with_sample_steps(WIDENING_SAMPLES)
+        .with_time_step(WIDENING_TIME_STEP)
+        .with_stats(block_stats(WIDENING_SAMPLES))
+        .with_seed(run_seed);
+    let mut engine = NativeEngine::new(
+        WideningWell,
+        NativeConfig::default()
+            .with_masses(unit_masses())
+            .with_thermostat(thermostat(gamma, kbt))
+            .with_seed(run_seed),
+    )
+    .expect("engine");
+    pafi_profile(&mut engine, widening_path().view(), &config)
+}
+
+#[test]
+fn widening_well_barrier_and_rate_are_independent_of_friction() {
+    let mut checks = Checks::new("widening", WIDENING_CHECKS);
+    let zero_temperature_barrier = 1.0;
+    let mut barriers = Vec::new();
+    for (index, (kbt, base)) in [(0.2, 200_u64), (0.35, 300)].into_iter().enumerate() {
+        let target = widening_expected_barrier(kbt);
+        let target_rate =
+            REACTANT_OMEGA_SQUARED.sqrt() / std::f64::consts::TAU * (-target / kbt).exp();
+        let reduced = widening_reduced_rate(kbt, target);
+        assert!(
+            (1.02..1.12).contains(&(target_rate / reduced)),
+            "kT {kbt}: the Gaussian-reactant rate {target_rate:.4e} must sit a few percent above \
+             the integrated-partition rate {reduced:.4e}"
+        );
+        for (slot, gamma) in FRICTIONS.into_iter().enumerate() {
+            let profile =
+                widening_profile(gamma, kbt, base + slot as u64).expect("widening profile");
+            let label = format!("kT {kbt} gamma {gamma}");
+            assert!(
+                (profile.reactant_frequency - REACTANT_OMEGA_SQUARED.sqrt()).abs() < 1e-6,
+                "{label}: reactant frequency {}",
+                profile.reactant_frequency
+            );
+            checks.covers(
+                &format!("{label} barrier"),
+                profile.barrier,
+                profile.barrier_error,
+                target,
+                Some(zero_temperature_barrier),
+            );
+            let rate = profile
+                .normalized_rate
+                .expect("widening rate must be representable");
+            let rate_error = profile
+                .normalized_rate_error
+                .expect("widening rate error must be representable");
+            checks.covers(
+                &format!("{label} rate"),
+                rate,
+                rate_error,
+                target_rate,
+                None,
+            );
+            if kbt > 0.3 {
+                checks.excludes(
+                    &format!("{label} rate against the integrated-partition rate"),
+                    rate,
+                    rate_error,
+                    widening_reduced_rate(kbt, target),
                 );
             }
-            if z.abs() > Z_LIMIT {
-                return Err(format!(
-                    "{label}: {} gives {} but {} gives {} (z {z:.2})",
-                    all[i].label(),
-                    a.mean,
-                    all[j].label(),
-                    b.mean
-                ));
-            }
+            barriers.push((profile.barrier, profile.barrier_error));
         }
-    }
-    Ok(())
-}
-
-fn assert_independent(label: &str, estimates: &[Estimate], exact: f64, bias_bound: f64) {
-    if let Err(message) = check_independent(label, estimates, exact, bias_bound, false) {
-        panic!("{message}");
-    }
-}
-
-/// The estimates must be rejected against an exact value computed at a
-/// temperature that is wrong by the given factors.
-fn assert_rejects_wrong_temperature(
-    label: &str,
-    estimates: &[Estimate],
-    factors: &[f64],
-    bias_bound: impl Fn(f64) -> f64,
-    exact_at: impl Fn(f64) -> f64,
-) {
-    for &factor in factors {
-        let exact = exact_at(factor);
-        let outcome = check_independent(label, estimates, exact, bias_bound(factor), true);
-        eprintln!(
-            "diag {label} wrong kT x{factor}: {}",
-            match &outcome {
-                Ok(()) => "accepted".to_string(),
-                Err(message) => format!("rejected ({message})"),
-            }
+        let first = 3 * index;
+        checks.agree(
+            &format!("kT {kbt} gamma 0.5 vs 2"),
+            barriers[first],
+            barriers[first + 1],
         );
-        assert!(
-            outcome.is_err(),
-            "{label}: an exact value at kT x{factor} was not rejected"
+        checks.agree(
+            &format!("kT {kbt} gamma 0.5 vs 8"),
+            barriers[first],
+            barriers[first + 2],
         );
     }
-}
+    checks.finish();
 
-/// Mean over independent replicas with the error of that mean taken from the
-/// spread of the replicas.
-fn replica_estimate(values: &[f64]) -> Estimate {
-    let n = values.len() as f64;
-    let mean = values.iter().sum::<f64>() / n;
-    let variance = values.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / (n - 1.0);
-    Estimate {
-        mean,
-        error: (variance / n).sqrt(),
-    }
-}
-
-fn harmonic_plane_force(setting: &Setting, seed: u64) -> (Estimate, f64) {
-    let (k1, k2) = (1.4_f64, 3.1_f64);
-    let offset = 0.65_f64;
-    let plane =
-        HyperplaneConstraint::from_direction(Array1::from_vec(vec![3.0, 4.0]).view(), offset)
-            .expect("3-4-5 unit normal");
-    let (n1, n2) = (plane.normal[0], plane.normal[1]);
-    let exact = offset / ((n1 * n1) / k1 + (n2 * n2) / k2);
-    let oracle = rgmin::Oracle::unbounded(2, move |x| {
-        let e = 0.5 * k1 * x[0] * x[0] + 0.5 * k2 * x[1] * x[1];
-        (e, Array1::from_vec(vec![k1 * x[0], k2 * x[1]]))
-    });
-    let cfg = NativeConfig::default()
-        .with_masses(Array1::from_vec(vec![0.9, 2.1]))
-        .with_thermostat(thermostat(setting.gamma, 0.5))
-        .with_constraint(plane)
-        .with_projection(setting.projection)
-        .with_seed(seed);
-    let mut engine = NativeEngine::new(EindirSurface::new(oracle), cfg).expect("engine");
-    assert_eq!(engine.thermostat().gamma, setting.gamma);
-    assert_eq!(engine.projection(), setting.projection);
-    engine.shoot_velocities(seed).expect("shoot");
-    let dt = 0.02;
-    for _ in 0..5_000 {
-        engine.step(dt).expect("burn");
-    }
-    let mut lambdas = Vec::with_capacity(120_000);
-    for _ in 0..120_000 {
-        let report = engine.step(dt).expect("step");
-        lambdas.push(report.constraint_force.expect("lambda"));
-    }
-    (mean_error(&lambdas), exact)
+    assert_nve_refused(
+        "pafi_profile",
+        widening_profile(0.0, 0.2, 400).map(|profile| {
+            format!(
+                "barrier {:.4} +- {:.4} against the canonical {:.4}",
+                profile.barrier,
+                profile.barrier_error,
+                widening_expected_barrier(0.2)
+            )
+        }),
+    );
 }
 
 #[test]
-fn harmonic_plane_df_dc_is_independent_of_friction_and_projection() {
-    let mut estimates = Vec::new();
-    let mut exact = 0.0;
-    for setting in settings() {
-        let (est, e) = harmonic_plane_force(&setting, seed_for(9_000, setting.index));
-        exact = e;
-        estimates.push(est);
-    }
-    assert_independent("harmonic dF/dc", &estimates, exact, 0.0);
-    // The harmonic constrained force does not depend on temperature, so it
-    // cannot be used to detect a wrong kT. A wrong plane offset is the
-    // negative control here.
-    let wrong = check_independent("harmonic dF/dc", &estimates, exact * 1.02, 0.0, true);
-    assert!(wrong.is_err(), "a 2% error in dF/dc was not rejected");
-}
+fn tilted_plane_entropic_force_and_kinetic_temperature_are_independent_of_friction() {
+    const KBT: f64 = 0.3;
+    const THETA: f64 = 0.7;
+    const SAMPLES: usize = 40_000;
+    let normal = Array1::from_vec(vec![THETA.cos(), THETA.sin()]);
+    let plane = HyperplaneConstraint::new(normal, 0.0).expect("plane");
+    let entropic = 0.25 * KBT / 1.5;
 
-#[test]
-fn widening_well_rate_is_independent_of_friction_and_projection() {
-    const REPLICAS: usize = 8;
-    let kbt = 0.25_f64;
-    let theta = 0.4_f64;
-    let direction = [theta.cos(), theta.sin()];
-    let entropy_scale = 0.5 * 1.5_f64.ln();
-    let exact_barrier = |kbt: f64| 1.0 + entropy_scale * kbt;
-    let exact_rate =
-        |kbt: f64| 8.0_f64.sqrt() / std::f64::consts::TAU * (-exact_barrier(kbt) / kbt).exp();
-    let mut path = Array2::zeros((21, 2));
-    for i in 0..21 {
-        let s = -1.0 + i as f64 / 10.0;
-        path[[i, 0]] = s * direction[0];
-        path[[i, 1]] = s * direction[1];
-    }
-    let config = PafiConfig::default()
-        .with_planes(21)
-        .with_burn_in_steps(4_000)
-        .with_sample_steps(15_000)
-        .with_time_step(0.05)
-        .with_stats(StatsConfig::default().with_min_batches(8));
-
-    // The error `pafi_profile` reports is dominated by the gap between the
-    // Hermite and trapezoid integrals, which is the same for every setting
-    // and hides sampling noise. The statistical error is therefore taken from
-    // the spread of independently seeded replicas. The comparison with the
-    // exact value gets a fixed quadrature allowance on the barrier instead.
-    let barrier_allowance = 1.0e-3_f64;
-    let mut barriers = Vec::new();
-    let mut rates = Vec::new();
-    let mut entropic_temperatures = Vec::new();
-    for setting in settings() {
-        let mut engine = NativeEngine::new(
-            TiltedWidening { theta },
-            NativeConfig::default()
-                .with_masses(Array1::from_vec(vec![1.0, 1.0]))
-                .with_thermostat(thermostat(setting.gamma, kbt))
-                .with_projection(setting.projection),
-        )
-        .expect("engine");
-        assert_eq!(engine.thermostat().gamma, setting.gamma);
-        assert_eq!(engine.projection(), setting.projection);
-        let mut barrier_samples = Vec::new();
-        let mut rate_samples = Vec::new();
-        let mut entropic_samples = Vec::new();
-        for replica in 0..REPLICAS {
-            let seed = 100_000_000 * (setting.index * REPLICAS + replica + 1) as u64;
-            let profile = pafi_profile(&mut engine, path.view(), &config.clone().with_seed(seed))
-                .expect("profile");
-            barrier_samples.push(profile.barrier);
-            rate_samples.push(
-                profile
-                    .normalized_rate
-                    .expect("test profile has a representable normalized rate"),
-            );
-            // The barrier is the potential barrier 1 plus the entropic term
-            // `kT ln(kappa_ratio) / 2`, so this recovers the temperature.
-            entropic_samples.push((profile.barrier - 1.0) / entropy_scale);
+    let force = |gamma: f64, masses: Vec<f64>, base: u64| -> Result<(f64, f64), FluxError> {
+        let run_seed = seed(base);
+        let config = NativeConfig::default()
+            .with_masses(Array1::from_vec(masses))
+            .with_thermostat(thermostat(gamma, KBT))
+            .with_seed(run_seed);
+        let mut engine = NativeEngine::new(TiltedWidening { theta: THETA }, config)?;
+        let sampling = HyperplaneConfig::default()
+            .with_burn_in_steps(2_000)
+            .with_sample_steps(SAMPLES)
+            .with_time_step(0.02)
+            .with_seed(run_seed)
+            .with_stats(block_stats(SAMPLES));
+        let sample = sample_hyperplane(&mut engine, &plane, &sampling)?;
+        Ok((sample.mean_force, sample.standard_error))
+    };
+    let kinetic = |gamma: f64, base: u64| -> (f64, f64) {
+        let run_seed = seed(base);
+        let config = NativeConfig::default()
+            .with_masses(Array1::from_vec(vec![1.0, 2.5]))
+            .with_thermostat(thermostat(gamma, KBT))
+            .with_constraint(plane.clone())
+            .with_seed(run_seed);
+        let mut engine =
+            NativeEngine::new(TiltedWidening { theta: THETA }, config).expect("engine");
+        engine.shoot_velocities(run_seed).expect("velocities");
+        for _ in 0..2_000 {
+            engine.step(0.02).expect("burn-in");
         }
-        barriers.push(replica_estimate(&barrier_samples));
-        rates.push(replica_estimate(&rate_samples));
-        entropic_temperatures.push(replica_estimate(&entropic_samples));
-    }
+        let mut series = Vec::with_capacity(SAMPLES);
+        for _ in 0..SAMPLES {
+            let report = engine.step(0.02).expect("step");
+            series.push(2.0 * report.kinetic_energy / KBT);
+        }
+        let estimate = batch_means(&series, &block_stats(SAMPLES)).expect("batch means");
+        (estimate.mean, estimate.standard_error)
+    };
 
-    let rate_allowance = |kbt: f64| exact_rate(kbt) * barrier_allowance / kbt;
-    let entropic_allowance = barrier_allowance / entropy_scale;
-    assert_independent(
-        "widening-well barrier",
-        &barriers,
-        exact_barrier(kbt),
-        barrier_allowance,
-    );
-    assert_independent(
-        "widening-well rate",
-        &rates,
-        exact_rate(kbt),
-        rate_allowance(kbt),
-    );
-    assert_independent(
-        "widening-well entropic kT",
-        &entropic_temperatures,
-        kbt,
-        entropic_allowance,
-    );
-
-    let wrong = [0.85, 1.15];
-    assert_rejects_wrong_temperature(
-        "widening-well barrier",
-        &barriers,
-        &wrong,
-        |_| barrier_allowance,
-        |f| exact_barrier(f * kbt),
-    );
-    assert_rejects_wrong_temperature(
-        "widening-well rate",
-        &rates,
-        &wrong,
-        |f| rate_allowance(f * kbt),
-        |f| exact_rate(f * kbt),
-    );
-    assert_rejects_wrong_temperature(
-        "widening-well entropic kT",
-        &entropic_temperatures,
-        &wrong,
-        |_| entropic_allowance,
-        |f| f * kbt,
-    );
-}
-
-#[test]
-fn free_degree_kinetic_temperature_is_independent_of_friction_and_projection() {
-    let kbt = 0.3_f64;
-    let theta = 0.7_f64;
-    let (nx, ny) = (theta.cos(), theta.sin());
-    let dt = 0.05;
-
+    let mut checks = Checks::new("tilted", TILTED_CHECKS);
     let mut forces = Vec::new();
-    let mut temperatures = Vec::new();
-    let mut flat_temperatures = Vec::new();
-    for setting in settings() {
-        let seed = seed_for(17, setting.index);
-        let plane = HyperplaneConstraint::new(Array1::from_vec(vec![nx, ny]), 0.0).expect("plane");
-        let cfg = NativeConfig::default()
-            .with_masses(Array1::from_vec(vec![1.0, 2.5]))
-            .with_thermostat(thermostat(setting.gamma, kbt))
-            .with_constraint(plane)
-            .with_projection(setting.projection)
-            .with_seed(seed);
-        let mut engine = NativeEngine::new(TiltedWidening { theta }, cfg).expect("engine");
-        assert_eq!(engine.thermostat().gamma, setting.gamma);
-        assert_eq!(engine.projection(), setting.projection);
-        engine
-            .set_positions(Array1::from_vec(vec![0.0, 0.0]).view())
-            .expect("anchor");
-        engine.shoot_velocities(seed).expect("shoot");
-        for _ in 0..8_000 {
-            engine.step(dt).expect("burn");
-        }
-        let mut force_series = Vec::with_capacity(200_000);
-        let mut kinetic_series = Vec::with_capacity(200_000);
-        for _ in 0..200_000 {
-            let report = engine.step(dt).expect("step");
-            force_series.push(report.constraint_force.expect("lambda"));
-            kinetic_series.push((2.0 * report.kinetic_energy) / kbt);
-        }
-        forces.push(mean_error(&force_series));
-        temperatures.push(mean_error(&kinetic_series));
-
-        let flat_seed = seed_for(19, setting.index);
-        let flat = HyperplaneConstraint::new(Array1::from_vec(vec![nx, ny]), 0.0).expect("flat");
-        let flat_cfg = NativeConfig::default()
-            .with_masses(Array1::from_vec(vec![1.0, 2.5]))
-            .with_thermostat(thermostat(setting.gamma, kbt))
-            .with_constraint(flat)
-            .with_projection(setting.projection)
-            .with_seed(flat_seed);
-        let surface = EindirSurface::new(rgmin::Oracle::unbounded(2, |x| {
-            (0.0, Array1::zeros(x.len()))
-        }));
-        let mut flat_engine = NativeEngine::new(surface, flat_cfg).expect("flat");
-        flat_engine.shoot_velocities(flat_seed).expect("shoot");
-        let mut flat_kinetic = Vec::with_capacity(200_000);
-        for step in 0..210_000 {
-            let report = flat_engine.step(dt).expect("step");
-            if step >= 10_000 {
-                flat_kinetic.push((2.0 * report.kinetic_energy) / kbt);
-            }
-        }
-        flat_temperatures.push(mean_error(&flat_kinetic));
+    for (slot, gamma) in FRICTIONS.into_iter().enumerate() {
+        let estimate = force(gamma, vec![1.0, 1.0], 500 + slot as u64).expect("force");
+        checks.covers(
+            &format!("gamma {gamma} multiplier"),
+            estimate.0,
+            estimate.1,
+            entropic,
+            Some(0.0),
+        );
+        forces.push(estimate);
     }
-    assert_independent(
-        "well constraint force",
-        &forces,
-        exact_widening_force(0.0, kbt),
-        0.0,
-    );
-    assert_independent("well free-degree temperature", &temperatures, 1.0, 0.0);
-    assert_independent("flat free-degree temperature", &flat_temperatures, 1.0, 0.0);
+    checks.agree("multiplier gamma 0.5 vs 2", forces[0], forces[1]);
+    checks.agree("multiplier gamma 0.5 vs 8", forces[0], forces[2]);
+    for (slot, gamma) in FRICTIONS.into_iter().enumerate() {
+        let estimate = kinetic(gamma, 600 + slot as u64);
+        checks.covers(
+            &format!("gamma {gamma} 2KE/kT"),
+            estimate.0,
+            estimate.1,
+            1.0,
+            Some(2.0),
+        );
+    }
+    checks.finish();
 
-    // The free-degree kinetic temperature is `2 KE / kT` with the true kT, so
-    // measured against a wrong kT it sits at the ratio of the two.
-    let wrong = [0.9, 1.1];
-    assert_rejects_wrong_temperature(
-        "well free-degree temperature",
-        &temperatures,
-        &wrong,
-        |_| 0.0,
-        |f| 1.0 / f,
-    );
-    assert_rejects_wrong_temperature(
-        "flat free-degree temperature",
-        &flat_temperatures,
-        &wrong,
-        |_| 0.0,
-        |f| 1.0 / f,
-    );
-    assert_rejects_wrong_temperature(
-        "well constraint force",
-        &forces,
-        &[0.7, 1.4],
-        |_| 0.0,
-        |f| exact_widening_force(0.0, f * kbt),
+    assert_nve_refused(
+        "sample_hyperplane",
+        force(0.0, vec![1.0, 1.0], 700).map(|(mean, se)| {
+            format!("multiplier {mean:.4} +- {se:.4} against the canonical {entropic:.4}")
+        }),
     );
 }
