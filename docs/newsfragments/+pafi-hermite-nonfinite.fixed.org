@@ -1,1 +1,0 @@
-Hermite mean-force integration now rejects non-finite gradients with =FluxError::NonFinite=, matching =SimpsonIntegral= and preventing NaN or infinity values from producing a successful cumulative profile.

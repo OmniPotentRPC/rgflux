@@ -5,6 +5,48 @@ All notable changes to `rgflux` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-11-21
+
+### Breaking
+
+- `FreeEnergyProfile::reactant_partition`, `normalized_rate` and
+  `normalized_rate_error` are `Option<f64>` instead of `f64`.
+  `reactant_log_partition` and `normalized_log_rate` stay authoritative for every
+  finite value, and a finite log stays on the profile.
+  `reactant_partition` and `normalized_rate` are `None` when the exponential of
+  that finite log overflows or underflows.
+  `normalized_rate_error` holds `exp(normalized_log_rate + ln(sigma))`, where
+  sigma is `barrier_error` divided by k_B T; it is `Some(0.0)` when sigma is zero
+  and `None` only when that exponential overflows, underflows, or is not finite.
+- `PafiConfig::zero_temperature_tol` is `Option<f64>` instead of `f64`.
+  `None`, the default, scales the tolerance with `planes`.
+  An explicit value is used at every plane count, including a value equal to the
+  tolerance at the default plane count.
+
+### Added
+
+- `kappa::bennett_chandler::shoot_reactive_trajectories` and `shoot_bennett_chandler` support opt-in early commitment through `ShootingConfig::kappa`. Fixed-length shooting remains the default. Enabling the optimization requires an explicit positive checkpoint count and signed-distance threshold; invalid criteria return a typed configuration error.
+- `OhtstConfig::reactant_fmax` sets the largest force component accepted at the OH-TST reactant minimum, default `1e-6`, so a reactant relaxed to the rounding floor of its forces gives a rate instead of stalling. The reactant is relaxed with the `rgmin` L-BFGS solver, and a relaxation that ends above the tolerance returns `FluxError::ReactantNotRelaxed`. `ohtst::relax_reactant` relaxes a reactant once, and `ohtst::optimize_hyperplane_from_minimum` evaluates an exit from a supplied `ReactantMinimum` after checking its force against the tolerance.
+
+### Developer
+
+- The PAFI rate standard-error cap now bounds only the lower tail of the
+  Hermite barrier estimate, with a one sided normal quantile in place of the
+  two sided one, so the cap meets its stated failure budget. The standard-error
+  caps have opt-in fixed-seed sweeps that require the observed failure rate to
+  stay within the per-assertion budget. Run
+  `cargo test --features rgpot -- --ignored sweep` to execute all six: five
+  native sweep tests and one rgpot sweep test.
+
+### Fixed
+
+- Hermite mean-force integration now rejects non-finite gradients with `FluxError::NonFinite`, matching `SimpsonIntegral` and preventing NaN or infinity values from producing a successful cumulative profile.
+- PAFI integrates the plane means with the cubic Hermite rule and takes the barrier from the global maximum of that interpolant, including a maximum that is not next to the highest sample. Two planes reduce the rule to the trapezoid rule, three planes are exact for a quadratic gradient, and four or more planes are exact for a cubic gradient. `reactant_log_partition` and `normalized_log_rate` stay the log of the reactant partition and of the normalized rate, now `ln(sqrt(2 π kT) / ω_0)` and `ln(ω_0) - ln(2π) - ΔF / kT` from the reactant Hessian at the first image. `FreeEnergyProfile` also reports `dividing_arc`, `reactant_frequency`, and `quadrature_residual`. The zero-temperature check remains the trapezoid comparison and keeps its default tolerance.
+- Report the PAFI truncation instead of a silent zero. `standard_error` and `barrier_error` combine the batch-means plane-force error with the absolute difference between the cubic Hermite integral and the trapezoid rule on the same nodes. `MeanForceIntegral` is the seam for another deterministic rule; `SimpsonIntegral` is composite Simpson and rejects an even plane count rather than falling back. There is no in-crate Gaussian process.
+- The free-energy `standard_error` and `barrier_error` are a scaled
+  Euclidean norm of the weighted plane uncertainties. A finite uncertainty
+  whose square overflows stays finite.
+
 ## [0.1.0] - 2026-11-19
 
 ### Added
