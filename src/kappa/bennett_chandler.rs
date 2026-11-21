@@ -563,10 +563,12 @@ fn shoot_half<E: DynamicsEngine + ?Sized>(
 /// - [`FluxError::Shape`] when `initial_positions.ncols()` or `dividing_surface.normal.len()`
 ///   differs from `engine.dof()`.
 /// - [`FluxError::InvalidConfig`] when `dividing_surface` is not a unit plane,
-///   `config.steps < 4`, `config.time_step <= 0` or non-finite, or
-///   `config.kappa.commit_checkpoints > config.steps`, or early commitment is
-///   enabled without a finite, positive `config.kappa.commitment_distance`.
-/// - [`FluxError::NonFinite`] when `initial_positions` contains non-finite values.
+///   `config.steps < 4`, `config.time_step <= 0` or non-finite,
+///   `config.kappa.commit_checkpoints > config.steps`, early commitment is
+///   enabled with a non-positive `config.kappa.commitment_distance`, or early
+///   commitment is disabled with a negative `config.kappa.commitment_distance`.
+/// - [`FluxError::NonFinite`] when `initial_positions` contains non-finite
+///   values or `config.kappa.commitment_distance` is non-finite.
 /// - Any [`FluxError`] propagated by `engine`.
 pub fn shoot_reactive_trajectories<E: DynamicsEngine + ?Sized>(
     engine: &mut E,
