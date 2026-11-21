@@ -128,7 +128,7 @@ Constructors and methods: =HyperplaneConstraint::new(normal, offset)=, =from_dir
 | Field | Type | Default | Constraint / Meaning |
 |---+---+---+---|
 | =commit_checkpoints= | =usize= | =0= (=DEFAULT_COMMIT_CHECKPOINTS=) | Consecutive basin-commitment checkpoints required to stop a half-trajectory and copy that side into later checkpoints (\(\le \text{steps}\)); =0= disables early commitment |
-| =commitment_distance= | =f64= | =0.0= | Minimum \(\lvert s\rvert\) for a committed checkpoint; must be finite and \(> 0\) when =commit_checkpoints > 0= |
+| =commitment_distance= | =f64= | =0.0= | Minimum \(\lvert s\rvert\) for a committed checkpoint. The value must be finite for every configuration, strictly positive when =commit_checkpoints > 0=, and non-negative when early commitment is disabled |
 | =quench_force_tol= | =f64= | =0.001= | Reserved force tolerance for endpoint-quench classifiers; the Bennett-Chandler shooter commits from consecutive signed-side checkpoints and does not read this field |
 | =quench_max_steps= | =usize= | =2_000= | Reserved step limit for endpoint-quench classifiers; the Bennett-Chandler shooter commits from consecutive signed-side checkpoints and does not read this field |
 

@@ -87,8 +87,9 @@ pub struct KappaConfig {
     /// With early commitment enabled, product commitment requires
     /// `s >= commitment_distance` and reactant commitment requires
     /// `s <= -commitment_distance`. Checkpoints inside that interval reset the
-    /// consecutive run. The value must be finite and strictly positive when
-    /// [`Self::commit_checkpoints`] is nonzero.
+    /// consecutive run. Every configuration requires a finite value. The value
+    /// must be strictly positive when [`Self::commit_checkpoints`] is nonzero,
+    /// and non-negative when early commitment is disabled.
     ///
     /// No universal distance is physically safe, so the disabled default is
     /// `0.0`; callers must select a basin-specific value to opt in.
