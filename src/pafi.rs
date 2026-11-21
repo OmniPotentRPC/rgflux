@@ -1438,6 +1438,8 @@ fn path_force_relative_error(arcs: &[f64], energies: &[f64], gradients: &[f64]) 
 /// - `path_images` has fewer than two rows, or two neighbouring images
 ///   coincide in the mass-weighted metric,
 /// - the thermal energy `k_B T` of the engine is not positive,
+/// - the thermostat friction is `0`, which is NVE dynamics and does not
+///   sample the canonical ensemble the plane means are defined over,
 /// - the zero-temperature check of [`PafiConfig::zero_temperature_tol`] fails,
 /// - a plane normal degenerates, or the reactant curvature along the first
 ///   path normal is not finite and positive, so `Z_R` is not defined.
@@ -1489,14 +1491,15 @@ pub fn pafi_profile<E: DynamicsEngine + ?Sized>(
         ));
     }
 
+    let kbt = engine.thermostat().require_canonical_sampling()?;
+    if kbt <= 0.0 {
+        return Err(FluxError::InvalidConfig(
+            "PAFI requires positive thermal energy",
+        ));
+    }
+
     let snapshot = EngineSnapshot::capture(engine);
     let result = (|| {
-        let kbt = engine.thermostat().thermal_energy()?;
-        if kbt <= 0.0 {
-            return Err(FluxError::InvalidConfig(
-                "PAFI requires positive thermal energy",
-            ));
-        }
         let masses = engine.masses().to_owned();
         let geometries = build_plane_geometries(path_images, masses.view(), config.planes)?;
         let arcs: Vec<f64> = geometries.iter().map(|geometry| geometry.arc).collect();
