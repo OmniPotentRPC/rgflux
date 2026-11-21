@@ -63,6 +63,7 @@ use rand::SeedableRng;
 use rand::rngs::StdRng;
 use rgmin::vecops::dot;
 
+use crate::engine::gle::{ColoredNoise, GleThermostat};
 use crate::engine::{
     DynamicsEngine, ForceSurface, HyperplaneConstraint, StepReport, SurfaceVelocityPolicy,
     ThermostatConfig, constraint_lagrange_multiplier, rattle_velocities_in_place,
@@ -152,6 +153,7 @@ pub struct NativeEngine<S> {
     cell: Option<[f64; 9]>,
     rng: StdRng,
     cached_eval: Option<(f64, Array1<f64>)>,
+    gle: GleThermostat,
 }
 
 impl<S: ForceSurface> NativeEngine<S> {
@@ -190,7 +192,9 @@ impl<S: ForceSurface> NativeEngine<S> {
             cell: config.cell,
             rng: StdRng::seed_from_u64(config.seed),
             cached_eval: None,
+            gle: GleThermostat::inactive(),
         };
+        engine.gle.sync(engine.thermostat.noise, dof);
         engine.project_state_onto_constraint()?;
         Ok(engine)
     }
@@ -265,6 +269,36 @@ impl<S: ForceSurface> NativeEngine<S> {
             },
         }
         self.cached_eval = None;
+        Ok(())
+    }
+
+    /// One GLE velocity update. A constraint is thermostated on its tangent,
+    /// so the auxiliary stack never stores the momentum RATTLE removes.
+    fn colored_noise(&mut self, dt: f64, kbt: f64) -> Result<(), FluxError> {
+        let normal = self.constraint.as_ref().map(|plane| plane.normal.to_vec());
+        let NativeEngine {
+            gle,
+            velocities,
+            masses,
+            rng,
+            ..
+        } = self;
+        let mass_buf: Vec<f64> = masses.iter().copied().collect();
+        let Some(slice) = velocities.as_slice_mut() else {
+            return Err(FluxError::InvalidConfig(
+                "GLE velocities are not contiguous",
+            ));
+        };
+        if let Some(normal) = normal.as_deref() {
+            gle.apply_on_tangent(slice, &mass_buf, normal, rng, kbt, dt)?;
+        } else {
+            gle.apply_in_place(slice, &mass_buf, rng, kbt, dt)?;
+        }
+        if let Some(plane) = &self.constraint
+            && self.projection == ConstraintProjection::Rattle
+        {
+            rattle_velocities_in_place(&mut self.velocities, self.masses.view(), plane);
+        }
         Ok(())
     }
 }
@@ -343,6 +377,7 @@ impl<S: ForceSurface> DynamicsEngine for NativeEngine<S> {
     fn set_thermostat(&mut self, thermostat: ThermostatConfig) -> Result<(), FluxError> {
         let _ = thermostat.thermal_energy()?;
         self.thermostat = thermostat;
+        self.gle.sync(self.thermostat.noise, self.masses.len());
         Ok(())
     }
 
@@ -403,8 +438,10 @@ impl<S: ForceSurface> DynamicsEngine for NativeEngine<S> {
         // A: first half drift (+ SHAKE on hyperplane if active).
         self.drift_half_step(half_dt)?;
 
-        // O: exact Ornstein-Uhlenbeck velocity update over full dt.
-        if gamma > 0.0 {
+        // O: white-noise Langevin, or the GLE on the constraint tangent.
+        if self.thermostat.noise == ColoredNoise::SmartSampling {
+            self.colored_noise(dt, kbt)?;
+        } else if gamma > 0.0 {
             let c1 = (-gamma * dt).exp();
             let one_minus_c1_sq = {
                 let raw = -(-2.0 * gamma * dt).exp_m1();

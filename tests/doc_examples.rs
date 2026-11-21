@@ -13,7 +13,7 @@ use rgflux::kappa::bennett_chandler::{
 };
 use rgflux::kappa::{KappaConfig, kramers_transmission_coefficient};
 use rgflux::ohtst::{OhtstConfig, optimize_hyperplane};
-use rgflux::pafi::{PafiConfig, pafi_profile};
+use rgflux::pafi::{AdaptivePafiConfig, PafiConfig, pafi_profile};
 use rgflux::stats::StatsConfig;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -120,7 +120,7 @@ fn reference_pafi_defaults_match_the_code() {
     let reference = include_str!("../docs/orgmode/reference.org");
     let defaults = PafiConfig::default();
     let pafi_rows = extract_pafi_reference_rows(reference);
-    assert_eq!(pafi_rows.len(), 9, "expected all PAFI rows to be present");
+    assert_eq!(pafi_rows.len(), 10, "expected all PAFI rows to be present");
     assert_row_contains(
         &pafi_rows,
         "=planes=",
@@ -164,6 +164,11 @@ fn reference_pafi_defaults_match_the_code() {
     );
     assert_row_contains(
         &pafi_rows,
+        "=translation_invariance=",
+        "=Option<[bool; 3]>= | =None=",
+    );
+    assert_row_contains(
+        &pafi_rows,
         "=seed=",
         format!("=u64= | ={}=", defaults.seed).as_str(),
     );
@@ -185,7 +190,28 @@ fn reference_pafi_row_drop_is_detected() {
         .collect::<Vec<_>>()
         .join("\n");
     let rows = extract_pafi_reference_rows(&dropped);
-    assert_eq!(rows.len(), 8);
+    assert_eq!(rows.len(), 9);
+}
+
+#[test]
+fn reference_adaptive_pafi_defaults_match_the_code() {
+    let reference = include_str!("../docs/orgmode/reference.org");
+    let defaults = AdaptivePafiConfig::default();
+    assert!(reference.contains("| =base= | =PafiConfig= | =PafiConfig::default().with_planes(5)="));
+    assert!(
+        reference
+            .contains(format!("| =max_planes= | =usize= | ={}=", defaults.max_planes).as_str())
+    );
+    assert!(
+        reference.contains(
+            format!(
+                "| =max_refinements= | =usize= | ={}=",
+                defaults.max_refinements
+            )
+            .as_str()
+        )
+    );
+    assert!(reference.contains("| =monitor= | =MonitorKind= | =MonitorKind::Combined="));
 }
 
 #[test]

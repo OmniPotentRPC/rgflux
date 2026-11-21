@@ -35,6 +35,11 @@
 //!   [`ffs::forward_flux_rate`].
 //! - [`network`]: symmetry-resolved kinetic networks and kMC rate tables
 //!   (`build_rate_table` is not yet implemented).
+//! - [`cu_reference`]: Daw and Chandross copper vacancy mobility. The
+//!   published column is the packaged Table II record. The lattice comes
+//!   from [`cu_reference::run_npt_lattice`], which refuses until an
+//!   rgpot-core release exports `eam_table_from_file` and
+//!   `eam_table_from_data`.
 //!
 //! ## Quick example
 //!
@@ -78,6 +83,7 @@
 #[macro_use]
 mod config;
 
+pub mod cu_reference;
 pub mod engine;
 pub mod error;
 pub mod ffs;
