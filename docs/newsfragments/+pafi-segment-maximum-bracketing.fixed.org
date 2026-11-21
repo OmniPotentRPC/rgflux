@@ -1,0 +1,1 @@
+The PAFI dividing-plane search finds the roots of each segment's cubic force by bracketing them between the critical points of the cubic, so a leading coefficient of any magnitude, including values between =1e-15= and =1e-8= of the others, no longer loses the interior maximum to cancellation.

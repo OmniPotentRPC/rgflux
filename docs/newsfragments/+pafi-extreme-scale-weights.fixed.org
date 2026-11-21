@@ -1,0 +1,1 @@
+The PAFI quadrature no longer overflows =h * h= for a plane spacing above the square root of the =f64= range, and the sensitivity of the reactant log partition to each plane free energy divides the bounded node fraction by =kbt= last, so a tiny =kbt= times a tiny partition no longer underflows to an infinite sensitivity.

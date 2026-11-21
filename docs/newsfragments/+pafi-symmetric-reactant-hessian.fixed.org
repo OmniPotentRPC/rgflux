@@ -1,0 +1,1 @@
+The PAFI reactant Hessian is symmetrized in mass-weighted coordinates before the eigensolver, so the central-difference truncation of each column no longer leaves an asymmetric matrix on an anharmonic surface with unequal masses.
