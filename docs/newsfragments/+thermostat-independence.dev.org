@@ -1,0 +1,1 @@
+The native-engine integration tests now check constrained forces, kinetic temperature, PAFI barriers, and normalized rates across friction values and both RATTLE and SHAKE, including negative controls at an incorrect temperature.
