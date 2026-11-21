@@ -2,7 +2,7 @@
 
 use ndarray::{Array1, ArrayView1};
 
-use rgflux::ohtst::OhtstEstimate;
+use rgflux::ohtst::{OhtstEstimate, ReactantMinimum, optimize_hyperplane_from_minimum};
 use rgflux::stats::SERIES_FLAT_TOL;
 
 mod ohtst_support;
@@ -207,23 +207,55 @@ fn a_zero_slope_ends_the_bracketing_walk_in_either_direction() {
 }
 
 #[test]
-fn a_seed_slope_at_the_flatness_tolerance_still_vanishes() {
-    let tolerance = SERIES_FLAT_TOL;
-    let inner = well(HALF_WIDTH);
-    let potential: Potential = Box::new(move |x| {
-        let (energy, force) = inner(x);
-        if x[0] == 0.5 {
-            (energy, Array1::from_vec(vec![-tolerance]))
-        } else {
-            (energy, force)
-        }
-    });
-    let mut engine = Scripted::new(
-        vec![-HALF_WIDTH],
-        vec![1.0],
-        potential,
-        harmonic_force(CURVATURE, -HALF_WIDTH),
-    );
-    let found = estimate(&mut engine, &plane(&[1.0], 0.5), &quiet());
-    assert_eq!(found.plane.offset, 0.5);
+fn a_seed_plane_keeps_its_offset_when_the_slope_is_within_the_force_tolerance() {
+    for bias in [5.11e-13, -5.11e-13] {
+        let inner = well(HALF_WIDTH);
+        let potential: Potential = Box::new(move |x| {
+            let (energy, force) = inner(x);
+            (-3.1e4 + energy, Array1::from_vec(vec![force[0] + bias]))
+        });
+        let mut engine = Scripted::new(
+            vec![-HALF_WIDTH],
+            vec![1.0],
+            potential,
+            harmonic_force(CURVATURE, -HALF_WIDTH),
+        );
+        let found = estimate(&mut engine, &plane(&[1.0], 0.0), &quiet());
+        assert_eq!(found.plane.offset, 0.0);
+
+        let reactant = ReactantMinimum::new(Array1::from_vec(vec![-HALF_WIDTH]), bias.abs());
+        let from_min =
+            optimize_hyperplane_from_minimum(&mut engine, &plane(&[1.0], 0.0), &reactant, &quiet())
+                .expect("OH-TST estimate from supplied minimum");
+        assert_eq!(from_min.plane.offset, 0.0);
+    }
+}
+
+#[test]
+fn a_seed_slope_at_the_force_tolerance_still_vanishes() {
+    let config = quiet();
+    let tolerance = config.reactant_fmax;
+    for sign in [-1.0, 1.0] {
+        let inner = well(HALF_WIDTH);
+        let potential: Potential = Box::new(move |x| {
+            let (energy, force) = inner(x);
+            if x[0] == 0.5 {
+                (energy, Array1::from_vec(vec![sign * tolerance]))
+            } else {
+                (energy, force)
+            }
+        });
+        let mut engine = Scripted::new(
+            vec![-HALF_WIDTH],
+            vec![1.0],
+            potential,
+            harmonic_force(CURVATURE, -HALF_WIDTH),
+        );
+        let found = estimate(&mut engine, &plane(&[1.0], 0.5), &config);
+        assert_eq!(found.plane.offset, 0.5);
+
+        let tighter = config.clone().with_reactant_fmax(0.5 * tolerance);
+        let bisected = estimate(&mut engine, &plane(&[1.0], 0.5), &tighter);
+        root_error(&bisected, 0.0, 2.25);
+    }
 }

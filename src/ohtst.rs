@@ -32,7 +32,7 @@
 //!    `8 * max_outer_steps` times. A relaxation that ends above the tolerance
 //!    returns [`FluxError::ReactantNotRelaxed`].
 //! 2. **Dividing-surface placement**: If the seed point `x_min + (c_0 - s_min) n`
-//!    already has vanishing normal slope (`|-n · F| <= SERIES_FLAT_TOL`) and
+//!    already has vanishing normal slope (`|-n · F| <= reactant_fmax`) and
 //!    `V(x_seed) > V_min`, `c^* = c_0` is kept. Otherwise, the offset walks from
 //!    `s_min` in direction `sign(c_0 - s_min)` (`+1` when `c_0 >= s_min`) in
 //!    steps of `max_translation` (up to `max_outer_steps` steps) to bracket the
@@ -64,14 +64,14 @@
 //! ## Tolerances
 //!
 //! The reactant is a physical minimum: it is accepted once its largest force
-//! component is at most [`OhtstConfig::reactant_fmax`]. Forces near a relaxed
-//! minimum carry rounding noise that grows with the system size and the
+//! component is at most [`OhtstConfig::reactant_fmax`], and the seed plane is
+//! kept verbatim when its normal slope `|-n · F|` is at most that same
+//! physical force tolerance. Forces near a relaxed minimum or saddle carry
+//! rounding noise that grows with the system size, the total energy, and the
 //! coordinate magnitude, so a fixed multiple of machine epsilon is not a
 //! reachable force criterion. [`SERIES_FLAT_TOL`] is kept where the
-//! comparison is between binary64 numbers of known scale: the bisection
-//! stops when the bracket is `SERIES_FLAT_TOL * (1 + hi)` wide, and a seed
-//! is used verbatim only when its normal slope is zero to that precision.
-//! Neither can fail on rounding; a seed with a larger slope is bisected.
+//! comparison is between binary64 lengths of known scale: the bisection stops
+//! when the bracket is `SERIES_FLAT_TOL * (1 + hi)` wide.
 //!
 //! ## Relaxing once for several exits
 //!
@@ -247,15 +247,17 @@ pub struct OhtstConfig {
     ///
     /// Default: `0.01`.
     pub time_step: f64,
-    /// Physical force tolerance on the reactant minimum, in the engine force
-    /// unit (eV/Å in metal units; finite and `> 0`).
+    /// Physical force tolerance on the reactant minimum and on the normal
+    /// slope at the seed plane, in the engine force unit (eV/Å in metal
+    /// units; finite and `> 0`).
     ///
     /// The reactant is a minimum once its largest absolute force component
-    /// `max_i |F_i|` is at most this value. The absolute separation from the
-    /// exact minimum is then about `reactant_fmax / κ`, so the default moves
-    /// the curvature `κ` inferred over a probe of length `δ` by a relative
-    /// `reactant_fmax / (κ δ)` and the barrier by about
-    /// `reactant_fmax² / (2 κ)`.
+    /// `max_i |F_i|` is at most this value, and the seed plane is kept
+    /// verbatim when `|-n · F|` there is at most this value above the
+    /// minimum. The absolute separation from the exact minimum is about
+    /// `reactant_fmax / κ`, so the default moves the curvature `κ` inferred
+    /// over a probe of length `δ` by a relative `reactant_fmax / (κ δ)` and
+    /// the barrier by about `reactant_fmax² / (2 κ)`.
     ///
     /// Default: `1e-6`, the gradient tolerance of [`rgmin::Lbfgs::default`]
     /// on the same infinity norm.
@@ -662,7 +664,7 @@ fn dividing_surface<E: DynamicsEngine + ?Sized>(
         engine.set_positions(seed_point.view())?;
         engine.energy_and_forces()?
     };
-    if slope_vanishes(seed_slope) && seed_energy > energy_min {
+    if slope_vanishes(seed_slope, config.reactant_fmax) && seed_energy > energy_min {
         return Ok(DividingSurface {
             plane: seed_plane.clone(),
             point: seed_point,
@@ -880,8 +882,8 @@ fn max_force(force: ArrayView1<'_, f64>) -> f64 {
         .unwrap_or(f64::INFINITY)
 }
 
-fn slope_vanishes(slope: f64) -> bool {
-    slope.abs() <= SERIES_FLAT_TOL
+fn slope_vanishes(slope: f64, force_tol: f64) -> bool {
+    slope.abs() <= force_tol
 }
 
 fn flux_mass(normal: ArrayView1<'_, f64>, masses: ArrayView1<'_, f64>) -> Result<f64, FluxError> {
