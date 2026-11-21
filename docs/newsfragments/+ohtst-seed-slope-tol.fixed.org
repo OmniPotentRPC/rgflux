@@ -1,0 +1,1 @@
+=ohtst::optimize_hyperplane= and =ohtst::optimize_hyperplane_from_minimum= now compare the normal slope \(\lvert -\mathbf{n} \cdot \mathbf{F} \rvert\) at the seed plane against the physical force tolerance =OhtstConfig::reactant_fmax= instead of =stats::SERIES_FLAT_TOL=, so a seed plane placed on a relaxed saddle with force round-off keeps its offset directly.
