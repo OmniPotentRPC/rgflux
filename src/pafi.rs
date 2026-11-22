@@ -981,16 +981,30 @@ impl Quadrature {
             .collect()
     }
 
-    fn slopes(&self, gradients: &[f64]) -> Vec<f64> {
-        self.derivative
-            .iter()
-            .map(|row| {
-                row.iter()
-                    .zip(gradients)
-                    .map(|(weight, gradient)| weight * gradient)
-                    .sum()
-            })
-            .collect()
+    /// `(h s_k, h s_{k+1})`, the interpolant slopes at both ends of segment
+    /// `k` times its width `h`.
+    ///
+    /// A derivative weight scales as `1 / h`, so `h * weight` is of order one
+    /// and is formed before the gradient multiplies it. Summing the unscaled
+    /// products first underflows to zero when `h` is near `sqrt(f64::MAX)`
+    /// and overflows when `h` is near `sqrt(f64::MIN_POSITIVE)`.
+    fn scaled_slopes(&self, k: usize, gradients: &[f64]) -> Result<(f64, f64), FluxError> {
+        let h = self.arcs[k + 1] - self.arcs[k];
+        let scaled = |row: &[f64]| -> f64 {
+            row.iter()
+                .zip(gradients)
+                .map(|(weight, gradient)| (h * weight) * gradient)
+                .sum()
+        };
+        let left = scaled(&self.derivative[k]);
+        let right = scaled(&self.derivative[k + 1]);
+        if left.is_finite() && right.is_finite() {
+            Ok((left, right))
+        } else {
+            Err(FluxError::NonFinite(
+                "PAFI dividing-plane interpolant slope",
+            ))
+        }
     }
 
     /// Cumulative-integral weights of `F(s_k + u h_k)`, with `u` in `[0, 1]`.
@@ -1014,12 +1028,13 @@ impl Quadrature {
         weights
     }
 
+    /// `F(s_k + u h)` on segment `k`, with `scaled` from [`Self::scaled_slopes`].
     fn interpolated_value(
         &self,
         k: usize,
         u: f64,
         gradients: &[f64],
-        slopes: &[f64],
+        scaled: (f64, f64),
         free_energy: &[f64],
     ) -> f64 {
         let h = self.arcs[k + 1] - self.arcs[k];
@@ -1028,8 +1043,8 @@ impl Quadrature {
         let u4 = u2 * u2;
         free_energy[k]
             + h * (gradients[k] * (u - u3 + 0.5 * u4) + gradients[k + 1] * (u3 - 0.5 * u4))
-            + h * ((h * slopes[k]) * (0.5 * u2 - 2.0 * u3 / 3.0 + 0.25 * u4)
-                + (h * slopes[k + 1]) * (0.25 * u4 - u3 / 3.0))
+            + h * (scaled.0 * (0.5 * u2 - 2.0 * u3 / 3.0 + 0.25 * u4)
+                + scaled.1 * (0.25 * u4 - u3 / 3.0))
     }
 
     /// Global maximum of the interpolated profile.
@@ -1040,11 +1055,19 @@ impl Quadrature {
     /// values at the real roots inside the segment. Those roots come from
     /// [`cubic_unit_interval_roots`], which brackets them between the
     /// critical points of the cubic, so a leading coefficient of any
-    /// magnitude, including `a == 0`, is handled by the same path. The highest
-    /// sampled plane is recorded separately,
-    /// because an overshoot can put `s*` on an interval that does not touch
-    /// that plane.
-    fn dividing_plane(&self, gradients: &[f64], free_energy: &[f64]) -> DividingPlane {
+    /// magnitude, including `a == 0`, is handled by the same path. The
+    /// endpoint values are the integrated plane values themselves, so the
+    /// barrier is never below the highest sampled plane. The highest sampled
+    /// plane is recorded separately, because an overshoot can put `s*` on an
+    /// interval that does not touch that plane.
+    ///
+    /// A slope or interior value that is not finite returns
+    /// [`FluxError::NonFinite`] rather than dropping that segment.
+    fn dividing_plane(
+        &self,
+        gradients: &[f64],
+        free_energy: &[f64],
+    ) -> Result<DividingPlane, FluxError> {
         let n = self.len();
         let mut index = 0usize;
         for i in 1..n {
@@ -1052,12 +1075,11 @@ impl Quadrature {
                 index = i;
             }
         }
-        let slopes = self.slopes(gradients);
         let mut best_interval = 0usize;
         let mut best_u = 0.0_f64;
         let mut best_value = free_energy[0];
         for k in 0..n - 1 {
-            let (u, value) = self.segment_maximum(k, gradients, &slopes, free_energy);
+            let (u, value) = self.segment_maximum(k, gradients, free_energy)?;
             if value > best_value {
                 best_interval = k;
                 best_u = u;
@@ -1070,13 +1092,13 @@ impl Quadrature {
         } else {
             best_interval + 1
         };
-        DividingPlane {
+        Ok(DividingPlane {
             index,
             arc: self.arcs[best_interval] + best_u * width,
             free_energy: best_value,
             weights: self.interval_weights(best_interval, best_u),
             partition_end,
-        }
+        })
     }
 
     /// `(u, F)` at the maximum of segment `k`, with `u` in `[0, 1]`.
@@ -1086,39 +1108,65 @@ impl Quadrature {
         &self,
         k: usize,
         gradients: &[f64],
-        slopes: &[f64],
         free_energy: &[f64],
-    ) -> (f64, f64) {
-        let h = self.arcs[k + 1] - self.arcs[k];
-        let g0 = gradients[k];
-        let g1 = gradients[k + 1];
-        let s0 = slopes[k];
-        let s1 = slopes[k + 1];
-        // `dF/ds` on this segment. `h > 0`, so its roots are the critical
-        // points of `F`. Coefficients of `a u^3 + b u^2 + c u + d`.
-        let a = (g0 - g1).mul_add(2.0, h * (s0 + s1));
-        let b = (g1 - g0).mul_add(3.0, -h * s0.mul_add(2.0, s1));
-        let c = h * s0;
-        let d = g0;
+    ) -> Result<(f64, f64), FluxError> {
+        let scaled = self.scaled_slopes(k, gradients)?;
+        let [a, b, c, d] = segment_force_coefficients(gradients[k], gradients[k + 1], scaled);
         let (nroots, roots) = cubic_unit_interval_roots(a, b, c, d);
-        let mut best_u = 0.0_f64;
-        let mut best_value = self.interpolated_value(k, 0.0, gradients, slopes, free_energy);
-        let mut consider = |u: f64| {
-            let value = self.interpolated_value(k, u, gradients, slopes, free_energy);
-            if !value.is_finite() {
-                return;
+        let value_at = |u: f64| -> Result<f64, FluxError> {
+            let value = if u == 0.0 {
+                free_energy[k]
+            } else if u == 1.0 {
+                free_energy[k + 1]
+            } else {
+                self.interpolated_value(k, u, gradients, scaled, free_energy)
+            };
+            if value.is_finite() {
+                Ok(value)
+            } else {
+                Err(FluxError::NonFinite(
+                    "PAFI dividing-plane interpolant value",
+                ))
             }
+        };
+        let mut best_u = 0.0_f64;
+        let mut best_value = value_at(0.0)?;
+        for u in roots.iter().take(nroots).copied().chain([1.0]) {
+            let value = value_at(u)?;
             if value > best_value || (value.to_bits() == best_value.to_bits() && u < best_u) {
                 best_u = u;
                 best_value = value;
             }
-        };
-        for &root in roots.iter().take(nroots) {
-            consider(root);
         }
-        consider(1.0);
-        (best_u, best_value)
+        Ok((best_u, best_value))
     }
+}
+
+/// Coefficients `[a, b, c, d]` of a positive multiple of the mean force
+/// `a u^3 + b u^2 + c u + d` on a segment, with `u` in `[0, 1]`.
+///
+/// `g0` and `g1` are the plane means at the ends and `scaled` holds the end
+/// slopes times the segment width. Every input is divided by the largest
+/// magnitude first, so `g0 - g1` cannot overflow. The roots, which are all the
+/// dividing-plane search needs, do not depend on that factor. All zero inputs
+/// give all zero coefficients.
+fn segment_force_coefficients(g0: f64, g1: f64, scaled: (f64, f64)) -> [f64; 4] {
+    let magnitude = g0
+        .abs()
+        .max(g1.abs())
+        .max(scaled.0.abs())
+        .max(scaled.1.abs());
+    if magnitude == 0.0 {
+        return [0.0; 4];
+    }
+    let (g0, g1) = (g0 / magnitude, g1 / magnitude);
+    let (s0, s1) = (scaled.0 / magnitude, scaled.1 / magnitude);
+    [
+        (g0 - g1).mul_add(2.0, s0 + s1),
+        (g1 - g0).mul_add(3.0, -s0.mul_add(2.0, s1)),
+        s0,
+        g0,
+    ]
 }
 
 /// Real roots of `a x^2 + b x + c = 0`.
@@ -1643,7 +1691,7 @@ fn integrate_profile(
         return Err(FluxError::NonFinite("PAFI integrated free energy"));
     }
     let lower = trapezoid_cumulative(&quadrature.arcs, gradients, "PAFI trapezoid free energy")?;
-    let dividing = quadrature.dividing_plane(gradients, &free_energy);
+    let dividing = quadrature.dividing_plane(gradients, &free_energy)?;
     let standard_error: Vec<f64> = quadrature
         .cumulative
         .iter()
@@ -1993,7 +2041,8 @@ fn path_force_relative_error(arcs: &[f64], energies: &[f64], gradients: &[f64]) 
 /// [`FluxError::Shape`] when the engine masses do not match the path
 /// coordinates. [`FluxError::NonFinite`] reports non-finite path coordinates,
 /// constraint forces, force samples, profile values, plane means, Lagrange
-/// weights, or reactant partition exponents `-F(s_k) / k_B T`. Errors
+/// weights, dividing-plane interpolant slopes or values, or reactant
+/// partition exponents `-F(s_k) / k_B T`. Errors
 /// from the engine and from the batch-means estimator are passed through, for
 /// example an invalid [`StatsConfig`] or an engine that does not report the
 /// constraint force on a constrained step.
@@ -2702,13 +2751,13 @@ mod tests {
     fn dense_profile_maximum(arcs: &[f64], gradients: &[f64], samples: usize) -> f64 {
         let quadrature = Quadrature::new(arcs).expect("quadrature");
         let free_energy = quadrature.integrate(gradients);
-        let slopes = quadrature.slopes(gradients);
         let mut best = f64::NEG_INFINITY;
         for k in 0..arcs.len() - 1 {
+            let scaled = quadrature.scaled_slopes(k, gradients).expect("slopes");
             for j in 0..=samples {
                 let u = f64::from(u32::try_from(j).expect("sample index"))
                     / f64::from(u32::try_from(samples).expect("sample count"));
-                let value = quadrature.interpolated_value(k, u, gradients, &slopes, &free_energy);
+                let value = quadrature.interpolated_value(k, u, gradients, scaled, &free_energy);
                 if value > best {
                     best = value;
                 }
@@ -2720,16 +2769,16 @@ mod tests {
     fn sampled_local_maxima(arcs: &[f64], gradients: &[f64]) -> usize {
         let quadrature = Quadrature::new(arcs).expect("quadrature");
         let free_energy = quadrature.integrate(gradients);
-        let slopes = quadrature.slopes(gradients);
         let steps = 4_000usize;
         let mut count = 0usize;
         let mut previous = f64::NEG_INFINITY;
-        let mut current = quadrature.interpolated_value(0, 0.0, gradients, &slopes, &free_energy);
+        let mut current = free_energy[0];
         for k in 0..arcs.len() - 1 {
+            let scaled = quadrature.scaled_slopes(k, gradients).expect("slopes");
             for j in 1..=steps {
                 let u = f64::from(u32::try_from(j).expect("step"))
                     / f64::from(u32::try_from(steps).expect("steps"));
-                let next = quadrature.interpolated_value(k, u, gradients, &slopes, &free_energy);
+                let next = quadrature.interpolated_value(k, u, gradients, scaled, &free_energy);
                 if current > previous && current > next {
                     count += 1;
                 }
@@ -2745,6 +2794,7 @@ mod tests {
         let free_energy = quadrature.integrate(gradients);
         let exact = quadrature
             .dividing_plane(gradients, &free_energy)
+            .expect("dividing plane")
             .free_energy;
         let samples = 1_000_000usize;
         let brute = dense_profile_maximum(arcs, gradients, samples);
@@ -2888,7 +2938,9 @@ mod tests {
                 .collect();
             let quadrature = Quadrature::new(&arcs).expect("quadrature");
             let free_energy = quadrature.integrate(&gradients);
-            let plane = quadrature.dividing_plane(&gradients, &free_energy);
+            let plane = quadrature
+                .dividing_plane(&gradients, &free_energy)
+                .expect("dividing plane");
             assert_abs_diff_eq!(plane.arc, upper, epsilon = 1.0e-12);
             assert_abs_diff_eq!(plane.free_energy, barrier, epsilon = 1.0e-12);
         }
@@ -2899,26 +2951,22 @@ mod tests {
         let arcs = [0.0, 0.3, 1.1, 1.7];
         let gradients = [0.4, -1.2, 0.7, 0.2];
         let quadrature = Quadrature::new(&arcs).expect("quadrature");
-        let slopes = quadrature.slopes(&gradients);
         for k in 0..arcs.len() - 1 {
-            let h = arcs[k + 1] - arcs[k];
             let g0 = gradients[k];
             let g1 = gradients[k + 1];
-            let s0 = slopes[k];
-            let s1 = slopes[k + 1];
-            let a = (g0 - g1).mul_add(2.0, h * (s0 + s1));
-            let b = (g1 - g0).mul_add(3.0, -h * s0.mul_add(2.0, s1));
-            let c = h * s0;
-            let d = g0;
+            let (hs0, hs1) = quadrature.scaled_slopes(k, &gradients).expect("slopes");
+            let magnitude = g0.abs().max(g1.abs()).max(hs0.abs()).max(hs1.abs());
+            let [a, b, c, d] = segment_force_coefficients(g0, g1, (hs0, hs1));
             for j in 0..=8 {
                 let u = f64::from(j) / 8.0;
                 let u2 = u * u;
                 let u3 = u2 * u;
                 let force = g0 * (2.0 * u3 - 3.0 * u2 + 1.0)
                     + g1 * (-2.0 * u3 + 3.0 * u2)
-                    + h * (s0 * (u3 - 2.0 * u2 + u) + s1 * (u3 - u2));
+                    + hs0 * (u3 - 2.0 * u2 + u)
+                    + hs1 * (u3 - u2);
                 let polynomial = a.mul_add(u, b).mul_add(u, c).mul_add(u, d);
-                assert_abs_diff_eq!(polynomial, force, epsilon = 1.0e-12);
+                assert_abs_diff_eq!(polynomial * magnitude, force, epsilon = 1.0e-12);
             }
         }
     }
@@ -2937,8 +2985,9 @@ mod tests {
         let descending = [-1.0, -1.0, -1.0, -1.0];
         let descending_quadrature = Quadrature::new(&descending_arcs).expect("quadrature");
         let descending_energy = descending_quadrature.integrate(&descending);
-        let descending_plane =
-            descending_quadrature.dividing_plane(&descending, &descending_energy);
+        let descending_plane = descending_quadrature
+            .dividing_plane(&descending, &descending_energy)
+            .expect("dividing plane");
         assert_eq!(descending_plane.arc, descending_arcs[0]);
         assert_eq!(descending_plane.free_energy, 0.0);
         assert_exact_maximum_covers_dense_sample(&descending_arcs, &descending);
@@ -3165,7 +3214,9 @@ mod tests {
         let kbt = 1.2;
         let quadrature = Quadrature::new(&arcs).expect("quadrature");
         let free_energy = quadrature.integrate(&gradients);
-        let dividing = quadrature.dividing_plane(&gradients, &free_energy);
+        let dividing = quadrature
+            .dividing_plane(&gradients, &free_energy)
+            .expect("dividing plane");
         let (_, sensitivity) = reactant_log_partition_and_sensitivity(
             &arcs,
             &free_energy,
@@ -3251,7 +3302,9 @@ mod tests {
     ) -> f64 {
         let quadrature = Quadrature::new(arcs).expect("quadrature");
         let free_energy = quadrature.integrate(gradients);
-        let dividing = quadrature.dividing_plane(gradients, &free_energy);
+        let dividing = quadrature
+            .dividing_plane(gradients, &free_energy)
+            .expect("dividing plane");
         let (_, d_ln_zr_d_f) =
             reactant_log_partition_and_sensitivity(arcs, &free_energy, dividing.partition_end, kbt)
                 .expect("partition");
@@ -3332,7 +3385,9 @@ mod tests {
 
         let quadrature = Quadrature::new(&arcs).expect("quadrature");
         let free_energy = quadrature.integrate(&gradients);
-        let dividing = quadrature.dividing_plane(&gradients, &free_energy);
+        let dividing = quadrature
+            .dividing_plane(&gradients, &free_energy)
+            .expect("dividing plane");
         let (_, d_ln_zr) = reactant_log_partition_and_sensitivity(
             &arcs,
             &free_energy,
@@ -3652,7 +3707,9 @@ mod tests {
         let gradients: Vec<f64> = unit.iter().map(|s| -(s - peak)).collect();
         let quadrature = Quadrature::new(&wide).expect("quadrature");
         let free_energy = quadrature.integrate(&gradients);
-        let plane = quadrature.dividing_plane(&gradients, &free_energy);
+        let plane = quadrature
+            .dividing_plane(&gradients, &free_energy)
+            .expect("dividing plane");
         let scale = spacing / 0.5;
         assert!(
             (plane.arc - peak * scale).abs() <= 1.0e-9 * scale,
@@ -3665,6 +3722,89 @@ mod tests {
             (plane.free_energy - barrier).abs() <= 1.0e-9 * scale,
             "barrier {} versus {barrier}",
             plane.free_energy
+        );
+    }
+
+    /// Mean force `E (0.34 - x)(1 + 3x) / L` on four planes at `x L`, with
+    /// `x = 0, 1/3, 2/3, 1`. The Hermite rule is exact for this quadratic, so
+    /// the dividing plane is `x = 0.34` and the barrier is `0.077452 E`.
+    fn scaled_quadratic_profile(length: f64, energy: f64) -> FreeEnergyProfile {
+        let unit = [0.0, 1.0 / 3.0, 2.0 / 3.0, 1.0];
+        let arcs: Vec<f64> = unit.iter().map(|x| x * length).collect();
+        let gradients: Vec<f64> = unit
+            .iter()
+            .map(|x| energy * (0.34 - x) * 3.0_f64.mul_add(*x, 1.0) / length)
+            .collect();
+        profile_from(&arcs, &gradients, &[0.0; 4], energy, 1.0).expect("profile")
+    }
+
+    #[test]
+    fn interpolant_slopes_do_not_underflow_on_a_huge_spacing() {
+        // The derivative weights are about `1 / L` and the means about
+        // `E / L`, so their product is near `1e-325` and flushes to zero
+        // unless the weight is scaled by `h` first.
+        let (length, energy) = (1.0e155_f64, 1.0e-15_f64);
+        assert_eq!((energy / length) * (1.0 / length), 0.0);
+        let profile = scaled_quadratic_profile(length, energy);
+        assert_abs_diff_eq!(profile.dividing_arc / length, 0.34, epsilon = 1.0e-12);
+        assert_abs_diff_eq!(profile.barrier / energy, 0.077_452, epsilon = 1.0e-12);
+    }
+
+    #[test]
+    fn interpolant_slopes_do_not_overflow_on_a_compact_grid() {
+        // Here the same product is near `1e309` and overflows unless the
+        // weight is scaled by `h` first.
+        let (length, energy) = (3.0e-150_f64, 1.0e10_f64);
+        assert!(((energy / length) * (1.0 / length)).is_infinite());
+        let profile = scaled_quadratic_profile(length, energy);
+        assert_abs_diff_eq!(profile.dividing_arc / length, 0.34, epsilon = 1.0e-12);
+        assert_abs_diff_eq!(profile.barrier / energy, 0.077_452, epsilon = 1.0e-12);
+    }
+
+    #[test]
+    fn barrier_is_not_below_the_highest_plane_on_a_mixed_scale_grid() {
+        // Gaps of about 3e-6, 1e-16 and 2e-5. Re-evaluating the interpolant
+        // at the right end of a segment lands a few ulps below the integrated
+        // plane value there.
+        let arcs = [
+            0.0,
+            3.328_878_653_758_490_4e-6,
+            3.328_878_653_861_533_3e-6,
+            1.922_735_806_438_615_6e-5,
+        ];
+        let gradients = [
+            -1.390_499_491_346_321e-4,
+            -5_202.970_370_744_257,
+            -12.102_897_034_268_363,
+            -9.627_726_547_885_606,
+        ];
+        let profile = profile_from(&arcs, &gradients, &[0.0; 4], 1.0, 1.0).expect("profile");
+        let highest = profile.free_energy[profile.dividing_index];
+        assert!(
+            profile.barrier >= highest,
+            "barrier {:e} is below the highest plane {highest:e}",
+            profile.barrier
+        );
+    }
+
+    #[test]
+    fn dividing_plane_rejects_a_non_finite_slope_or_value() {
+        let quadrature = Quadrature::new(&[0.0, 1.0, 2.0, 3.0]).expect("quadrature");
+        let alternating = [f64::MAX, -f64::MAX, f64::MAX, -f64::MAX];
+        assert_eq!(
+            quadrature.dividing_plane(&alternating, &[0.0; 4]).err(),
+            Some(FluxError::NonFinite(
+                "PAFI dividing-plane interpolant slope"
+            ))
+        );
+        // The slopes are finite, but an interior root adds about `1e299` to a
+        // plane value at `f64::MAX`.
+        let gradients = [1.0e300, -1.0e300, 1.0e300, -1.0e300];
+        assert_eq!(
+            quadrature.dividing_plane(&gradients, &[f64::MAX; 4]).err(),
+            Some(FluxError::NonFinite(
+                "PAFI dividing-plane interpolant value"
+            ))
         );
     }
 
