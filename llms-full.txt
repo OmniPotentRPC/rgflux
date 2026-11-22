@@ -2033,6 +2033,32 @@ Report issues at https://github.com/OmniPotentRPC/rgflux/issues. Maintainer: Roh
 
 # towncrier release notes start
 
+## 0.3.0 (2026-11-22)
+
+### Developer
+
+- The end-plane standard-error cap sweep now draws its two trial profiles from
+  independent random streams. The cap sums the two profile variances, so profiles
+  that share a seed can agree on every common plane and understate the
+  disagreement budget. Tests now verify that the two streams share no plane seed
+  and that the trial differences have the variance the cap assumes.
+- The native-engine integration tests now check constrained forces, kinetic temperature, PAFI barriers, and normalized rates across friction values and both RATTLE and SHAKE, including negative controls at an incorrect temperature.
+
+### Changed
+
+- `KappaConfig::default().commit_checkpoints` is `0`.
+  `kappa::bennett_chandler::shoot_reactive_trajectories` and
+  `shoot_bennett_chandler` integrate each half-trajectory for
+  `ShootingConfig::steps`. Early commitment stays opt-in through
+  `ShootingConfig::kappa` and requires a positive checkpoint count together
+  with a strictly positive `commitment_distance`. Invalid criteria return a
+  typed configuration error.
+
+### Fixed
+
+- `hyperplane::sample_hyperplane`, `ohtst::optimize_hyperplane`, and `pafi::pafi_profile` now return `FluxError::InvalidConfig` when the engine thermostat has `gamma = 0`. That setting is NVE dynamics, which samples an energy shell started at the anchor and not the canonical ensemble, so the constrained mean force, OH-TST curvature probe, and PAFI barrier it gave were biased with no error reported. The OH-TST reactant curvature is that same canonical average, and `optimize_hyperplane` refuses `gamma = 0` with the same error before it snapshots the engine or starts the reactant search. With `gamma > 0` the sampled mean force and the profile do not depend on the friction, the constraint scheme, or the thermostat temperature beyond the `k_B T` in the reference; the documentation now says so.
+- `ohtst::optimize_hyperplane` and `ohtst::optimize_hyperplane_from_minimum` now compare the normal slope \(\lvert -\mathbf{n} \cdot \mathbf{F} \rvert\) at the seed plane against the physical force tolerance `OhtstConfig::reactant_fmax` instead of `stats::SERIES_FLAT_TOL`, so a seed plane placed on a relaxed saddle with force round-off keeps its offset directly.
+
 ## 0.2.0 (2026-11-21)
 
 ### Breaking

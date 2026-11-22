@@ -1,7 +1,0 @@
-=KappaConfig::default().commit_checkpoints= is =0=.
-=kappa::bennett_chandler::shoot_reactive_trajectories= and
-=shoot_bennett_chandler= integrate each half-trajectory for
-=ShootingConfig::steps=. Early commitment stays opt-in through
-=ShootingConfig::kappa= and requires a positive checkpoint count together
-with a strictly positive =commitment_distance=. Invalid criteria return a
-typed configuration error.
