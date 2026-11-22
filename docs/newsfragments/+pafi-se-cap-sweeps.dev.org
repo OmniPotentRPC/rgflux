@@ -1,5 +1,0 @@
-The end-plane standard-error cap sweep now draws its two trial profiles from
-independent random streams. The cap sums the two profile variances, so profiles
-that share a seed can agree on every common plane and understate the
-disagreement budget. Tests now verify that the two streams share no plane seed
-and that the trial differences have the variance the cap assumes.
