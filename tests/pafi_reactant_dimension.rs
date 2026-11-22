@@ -3,7 +3,7 @@
 use ndarray::{Array1, Array2, ArrayView1};
 use rgflux::engine::native::{NativeConfig, NativeEngine};
 use rgflux::engine::{DynamicsEngine, ThermostatConfig};
-use rgflux::pafi::{PafiConfig, pafi_profile};
+use rgflux::pafi::{FreeEnergyProfile, PafiConfig, pafi_profile};
 use rgflux::stats::StatsConfig;
 
 struct SeparableHarmonic;
@@ -17,7 +17,7 @@ impl rgsaddle::PointSurface for SeparableHarmonic {
     }
 }
 
-fn sampled_profile(dof: usize) {
+fn sampled_profile(dof: usize) -> FreeEnergyProfile {
     let masses = Array1::from_elem(dof, 1.0);
     let mut engine = NativeEngine::new(
         SeparableHarmonic,
@@ -45,15 +45,21 @@ fn sampled_profile(dof: usize) {
     let profile = pafi_profile(&mut engine, path.view(), &config).expect("sampled profile");
     assert_eq!(profile.free_energy.len(), 2);
     assert!(profile.barrier.is_finite());
+    profile
 }
 
 #[test]
 fn pafi_samples_above_dense_hessian_limit() {
-    sampled_profile(150);
+    assert!(!sampled_profile(150).reactant_hessian_certified);
 }
 
 #[test]
-fn dense_hessian_limit_boundary_accepts_128_and_129_dof() {
-    sampled_profile(128);
-    sampled_profile(129);
+fn dense_hessian_limit_certifies_128_dof_and_skips_129() {
+    assert!(sampled_profile(128).reactant_hessian_certified);
+    assert!(!sampled_profile(129).reactant_hessian_certified);
+}
+
+#[test]
+fn small_reactant_hessian_is_certified() {
+    assert!(sampled_profile(2).reactant_hessian_certified);
 }

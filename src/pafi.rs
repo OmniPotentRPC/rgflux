@@ -3419,6 +3419,21 @@ mod tests {
     }
 
     #[test]
+    fn an_overflowing_free_energy_standard_error_is_rejected() {
+        // The last plane carries weight `h / 2 = 2` in `F(s_1)`, so its
+        // standard error overflows. The barrier at `s = 2` weights the same
+        // plane by `0.375`, so every later error stays finite.
+        let arcs = [0.0, 4.0];
+        let gradients = [2.0, -2.0];
+        let sigma = 1.0e308_f64;
+        assert!((2.0 * sigma).is_infinite() && (0.375 * sigma).is_finite());
+        assert_eq!(
+            profile_from(&arcs, &gradients, &[0.0, sigma], 1.0, 4.0).err(),
+            Some(FluxError::NonFinite("PAFI free-energy standard error"))
+        );
+    }
+
+    #[test]
     fn non_finite_reactant_partition_exponent_is_rejected() {
         let arcs = [0.0, 1.0];
         let gradients = [1.0, 1.0];
