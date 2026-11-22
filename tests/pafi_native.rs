@@ -42,6 +42,12 @@ struct AnisotropicHarmonic {
     ax: f64,
     ay: f64,
 }
+struct CircularValley {
+    ax: f64,
+    ay: f64,
+    radius: f64,
+    along_path: f64,
+}
 
 impl rgsaddle::PointSurface for WideningDoubleWell {
     fn eval(&self, r: ArrayView1<'_, f64>) -> Result<(f64, Array1<f64>), rgsaddle::SaddleError> {
@@ -62,6 +68,40 @@ impl rgsaddle::PointSurface for AnisotropicHarmonic {
         let y = r[1];
         let energy = 0.5 * (self.ax * x * x + 4.0 * self.ay * y * y);
         let gradient = Array1::from_vec(vec![self.ax * x, 4.0 * self.ay * y]);
+        Ok((energy, gradient))
+    }
+}
+
+impl rgsaddle::PointSurface for CircularValley {
+    fn eval(&self, r: ArrayView1<'_, f64>) -> Result<(f64, Array1<f64>), rgsaddle::SaddleError> {
+        let qx = r[0];
+        let qy = 2.0 * r[1];
+        let rho_sq = qx * qx + qy * qy;
+        let rho = rho_sq.sqrt();
+        if !rho.is_finite() || rho == 0.0 {
+            return Err(rgsaddle::SaddleError::NonFinite("circular valley radius"));
+        }
+        let theta = qy.atan2(qx);
+        let radial = rho - self.radius;
+        let lambda = (self.ax * qx * qx + self.ay * qy * qy) / rho_sq;
+        let angle = std::f64::consts::FRAC_PI_2 - theta;
+        let energy = 0.5 * lambda * radial * radial
+            + 0.5 * self.along_path * self.radius * self.radius * angle * angle;
+        let d_rho_dqx = qx / rho;
+        let d_rho_dqy = qy / rho;
+        let d_theta_dqx = -qy / rho_sq;
+        let d_theta_dqy = qx / rho_sq;
+        let d_lambda_d_theta = 2.0 * (self.ay - self.ax) * (qy / rho) * (qx / rho);
+        let radial_sq = radial * radial;
+        let d_trans_dqx =
+            0.5 * d_lambda_d_theta * d_theta_dqx * radial_sq + lambda * radial * d_rho_dqx;
+        let d_trans_dqy =
+            0.5 * d_lambda_d_theta * d_theta_dqy * radial_sq + lambda * radial * d_rho_dqy;
+        let well = self.along_path * self.radius * self.radius * angle;
+        let gradient = Array1::from_vec(vec![
+            d_trans_dqx - well * d_theta_dqx,
+            2.0 * (d_trans_dqy - well * d_theta_dqy),
+        ]);
         Ok((energy, gradient))
     }
 }
@@ -113,18 +153,38 @@ fn widening_analytic_barrier() -> f64 {
     1.0 + 0.5 * THERMAL * 1.5_f64.ln()
 }
 
+fn integrate_reactant_partition(
+    arc_lengths: &[f64],
+    free_energy: &[f64],
+    dividing_index: usize,
+) -> f64 {
+    let mut zr_half = 0.0_f64;
+    for i in 1..=dividing_index {
+        let ds = arc_lengths[i] - arc_lengths[i - 1];
+        let w0 = (-free_energy[i - 1] / THERMAL).exp();
+        let w1 = (-free_energy[i] / THERMAL).exp();
+        zr_half += 0.5 * ds * (w0 + w1);
+    }
+    2.0 * zr_half
+}
+
 /// Hermite integral of [`widening_mean_force`] from `x = -1` to `x = 0`.
-fn widening_expected_barrier(planes: usize) -> f64 {
+fn widening_expected_profile(planes: usize) -> (Vec<f64>, Vec<f64>) {
     let denominator = (planes - 1) as f64;
     let arcs: Vec<f64> = (0..planes).map(|i| (i as f64) / denominator).collect();
     let gradients: Vec<f64> = arcs
         .iter()
         .map(|arc| widening_mean_force(-1.0 + *arc))
         .collect();
-    HermiteIntegral
+    let values = HermiteIntegral
         .cumulative(&arcs, &gradients)
         .expect("widening hermite barrier")
-        .values[planes - 1]
+        .values;
+    (arcs, values)
+}
+
+fn widening_expected_barrier(planes: usize) -> f64 {
+    widening_expected_profile(planes).1[planes - 1]
 }
 
 fn widening_profile(
@@ -597,6 +657,64 @@ fn end_plane_sweep_trials_have_the_variance_the_cap_assumes() {
     );
 }
 
+#[test]
+fn circular_valley_starts_at_a_minimum() {
+    let start = mass_weighted_circular_path(CURVED_RADIUS, PI * 0.5, 0.0, 2);
+    let mut engine = NativeEngine::new(
+        CircularValley {
+            ax: CURVED_FORCE_CONSTANT_X,
+            ay: CURVED_FORCE_CONSTANT_Y,
+            radius: CURVED_RADIUS,
+            along_path: 0.05,
+        },
+        NativeConfig::default()
+            .with_masses(Array1::from_vec(vec![1.0, 4.0]))
+            .with_thermostat(
+                ThermostatConfig::default()
+                    .with_temperature(THERMAL)
+                    .with_boltzmann(1.0),
+            ),
+    )
+    .expect("native engine");
+    engine
+        .set_positions(start.row(0))
+        .expect("set the first image");
+    let (_, forces) = engine.energy_and_forces().expect("forces");
+    let peak = forces
+        .iter()
+        .fold(0.0_f64, |acc, force| acc.max(force.abs()));
+    assert!(
+        peak <= rgflux::stats::SERIES_FLAT_TOL,
+        "valley reactant force peak {peak}"
+    );
+    let config = PafiConfig::default()
+        .with_planes(2)
+        .with_burn_in_steps(1)
+        .with_sample_steps(2);
+    pafi_profile(&mut engine, start.view(), &config).expect("valley reactant is a minimum");
+}
+
+#[test]
+fn widening_well_reports_the_reactant_curvature() {
+    let profile = widening_profile(vec![1.0, 4.0], 1.3, RATE_SEED, RATE_SAMPLES);
+    // V_xx = 8 at x = -1 along the unit normal, and the mass on x is 1.
+    let omega_0 = 8.0_f64.sqrt();
+    assert!((profile.reactant_frequency - omega_0).abs() <= 1.0e-6 * omega_0);
+    let harmonic_rate = omega_0 / (2.0 * PI) * (-profile.barrier / THERMAL).exp();
+    let rate = profile
+        .normalized_rate
+        .expect("representable normalized rate");
+    let rate_error = profile
+        .normalized_rate_error
+        .expect("representable normalized rate error");
+    let gap = (rate - harmonic_rate).abs();
+    assert!(
+        gap > 2.0 * rate_error,
+        "harmonic gap {gap:.4e} does not exceed two standard errors {:.4e}",
+        2.0 * rate_error
+    );
+}
+
 const RATE_SAMPLES: usize = 20_000;
 const RATE_MASS_Y: f64 = 4.0;
 const RATE_GAMMA: f64 = 1.3;
@@ -604,36 +722,48 @@ const RATE_GAMMA: f64 = 1.3;
 #[test]
 fn normalized_pafi_rate_matches_analytic_profile() {
     let profile = widening_profile(vec![1.0, 4.0], 1.3, RATE_SEED, RATE_SAMPLES);
-    let rate = profile.normalized_rate.expect("representable rate");
+    let rate = profile
+        .normalized_rate
+        .expect("representable normalized rate");
     let rate_error = profile
         .normalized_rate_error
-        .expect("representable rate error");
+        .expect("representable normalized rate error");
+    let reactant_partition = profile
+        .reactant_partition
+        .expect("representable reactant partition");
     assert_dividing_plane("rate dividing plane", profile.dividing_index, PLANES - 1);
 
     // Reactant Hessian at x = -1: V_xx = 8 along the unit normal, mass 1.
-    // The reactant well is that Gaussian, so the partition and the rate are
-    // the closed form of the barrier the profile reports.
-    // The reactant curvature is a numerical Hessian, so the frequency matches
-    // the analytic oscillator to the tolerance used for that projection. The
-    // partition and the rate are then the closed form of the frequency and
-    // the barrier the profile actually reports.
+    // The partition is the doubled-trapezoid integral of exp(-F(s) / kT) up
+    // to the dividing plane, and the rate is the closed form of that
+    // partition and the barrier the profile reports.
     let omega_0 = 8.0_f64.sqrt();
     assert!((profile.reactant_frequency - omega_0).abs() <= 1.0e-6 * omega_0);
-    let gaussian = (TAU * THERMAL).sqrt() / profile.reactant_frequency;
-    assert!(
-        (profile.reactant_partition.expect("representable partition") - gaussian).abs()
-            <= 1.0e-6 * gaussian
+    let reconstructed_zr = integrate_reactant_partition(
+        &profile.arc_lengths,
+        &profile.free_energy,
+        profile.arc_lengths.len() - 1,
     );
-    assert!((profile.reactant_log_partition - gaussian.ln()).abs() <= 1.0e-6 * gaussian.ln().abs());
-    let closed_rate = profile.reactant_frequency / TAU * (-profile.barrier / THERMAL).exp();
+    assert!((reactant_partition - reconstructed_zr).abs() <= 1.0e-12 * reconstructed_zr);
+    assert!(
+        (profile.reactant_log_partition - reconstructed_zr.ln()).abs()
+            <= 1.0e-12 * reconstructed_zr.ln().abs().max(1.0)
+    );
+    let closed_rate =
+        (THERMAL / TAU).sqrt() * (-profile.barrier / THERMAL).exp() / reconstructed_zr;
     assert!((rate - closed_rate).abs() <= 1.0e-12 * closed_rate);
     assert!(
         (profile.normalized_log_rate - closed_rate.ln()).abs()
-            <= 1.0e-9 * closed_rate.ln().abs().max(1.0)
+            <= 1.0e-12 * closed_rate.ln().abs().max(1.0)
     );
+    let harmonic_rate = omega_0 / TAU * (-profile.barrier / THERMAL).exp();
+    assert!((rate - harmonic_rate).abs() > 2.0 * rate_error);
 
-    let expected_barrier = widening_expected_barrier(PLANES);
-    let expected_rate = omega_0 / TAU * (-expected_barrier / THERMAL).exp();
+    let (expected_arcs, expected_free_energy) = widening_expected_profile(PLANES);
+    let expected_barrier = expected_free_energy[PLANES - 1];
+    let expected_zr =
+        integrate_reactant_partition(&expected_arcs, &expected_free_energy, PLANES - 1);
+    let expected_rate = (THERMAL / TAU).sqrt() * (-expected_barrier / THERMAL).exp() / expected_zr;
     assert_below(
         "rate SE",
         rate_error,

@@ -24,11 +24,12 @@
 //!   target is the Hermite integral of that force on the sampled planes, the
 //!   expectation of the PAFI estimator, so quadrature error does not enter.
 //!   The rate target is the estimator's own formula,
-//!   `(omega_0 / 2 pi) exp(-Delta F / k_B T)`, with `omega_0^2 = 8` the
-//!   curvature of `(1 - x^2)^2` at `x = -1`. It is the harmonic-reactant
-//!   rate that PAFI documents. It is not the exact rate of the anharmonic
-//!   one-dimensional reduction, because the reactant partition function is
-//!   replaced by a Gaussian.
+//!   `sqrt(k_B T / 2 pi) exp(-Delta F / k_B T) / Z_R`, with `Z_R` the doubled
+//!   trapezoid of `exp(-F(s) / k_B T)` over the expected profile. The
+//!   harmonic-reactant rate `(omega_0 / 2 pi) exp(-Delta F / k_B T)`, with
+//!   `omega_0^2 = 8` the curvature of `(1 - x^2)^2` at `x = -1`, lies a
+//!   few percent above it because the reactant well is not a Gaussian, and
+//!   the rate PAFI reports must exclude it.
 //! - Tilted plane: on `s = 0` the multiplier has mean `k_B T / (4 k(0))`, and
 //!   with one holonomic constraint in two coordinates `2 KE / k_B T = 1`.
 //!
@@ -356,9 +357,10 @@ fn widening_mean_force(x: f64, kbt: f64) -> f64 {
     -4.0 * x * (1.0 - x * x) + 0.25 * kbt / (1.5 + 0.5 * x)
 }
 
-/// Hermite integral of the exact mean force over the sampled planes: the
-/// expectation of the PAFI barrier on a path from `x = -1` to `x = 0`.
-fn widening_expected_barrier(kbt: f64) -> f64 {
+/// Arc lengths and Hermite integral of the exact mean force over the sampled
+/// planes: the expectation of the PAFI profile on a path from `x = -1` to
+/// `x = 0`.
+fn widening_expected_profile(kbt: f64) -> (Vec<f64>, Vec<f64>) {
     let arcs: Vec<f64> = (0..WIDENING_PLANES)
         .map(|i| i as f64 / (WIDENING_PLANES - 1) as f64)
         .collect();
@@ -366,40 +368,33 @@ fn widening_expected_barrier(kbt: f64) -> f64 {
         .iter()
         .map(|arc| widening_mean_force(-1.0 + arc, kbt))
         .collect();
-    HermiteIntegral
+    let values = HermiteIntegral
         .cumulative(&arcs, &gradients)
         .expect("hermite")
-        .values[WIDENING_PLANES - 1]
+        .values;
+    (arcs, values)
 }
 
-/// Rate of the one-dimensional reduction with the dividing plane at `x = 0`
-/// and the reactant partition function integrated, not replaced by a
-/// Gaussian: `sqrt(k_B T / 2 pi) exp(-Delta F / k_B T) / Z_R` with
-/// `Z_R = int exp(-(F(x) - F(-1)) / k_B T) dx` over `x < 0`.
-///
-/// `F(x) = (1 - x^2)^2 + (k_B T / 2) ln(1.5 + 0.5x)` is normalizable for
-/// `x > -3`; the weight there is below `exp(-60)`, so the integral starts at
-/// `-2.9`. Simpson's rule on `1_000` intervals is far below the statistical
-/// error.
-fn widening_reduced_rate(kbt: f64, barrier: f64) -> f64 {
-    let free_energy = |x: f64| (1.0 - x * x).powi(2) + 0.5 * kbt * (1.5 + 0.5 * x).ln();
-    let reference = free_energy(-1.0);
-    let (lo, hi, intervals) = (-2.9_f64, 0.0_f64, 1_000_usize);
-    let h = (hi - lo) / intervals as f64;
-    let mut sum = 0.0;
-    for i in 0..=intervals {
-        let x = lo + h * i as f64;
-        let weight = if i == 0 || i == intervals {
-            1.0
-        } else if i % 2 == 1 {
-            4.0
-        } else {
-            2.0
-        };
-        sum += weight * (-(free_energy(x) - reference) / kbt).exp();
-    }
-    let reactant_partition = sum * h / 3.0;
-    (kbt / std::f64::consts::TAU).sqrt() * (-barrier / kbt).exp() / reactant_partition
+/// Hermite integral of the exact mean force over the sampled planes: the
+/// expectation of the PAFI barrier on a path from `x = -1` to `x = 0`.
+fn widening_expected_barrier(kbt: f64) -> f64 {
+    let (_, values) = widening_expected_profile(kbt);
+    values[WIDENING_PLANES - 1]
+}
+
+/// The normalized rate PAFI reports for the expected profile, with the
+/// dividing plane at `x = 0`: `sqrt(k_B T / 2 pi) exp(-Delta F / k_B T) / Z_R`
+/// and `Z_R` the doubled trapezoid of `exp(-F(s) / k_B T)` over the planes.
+fn widening_expected_rate(kbt: f64) -> f64 {
+    let (arcs, values) = widening_expected_profile(kbt);
+    let weights: Vec<f64> = values.iter().map(|value| (-value / kbt).exp()).collect();
+    let half_partition: f64 = arcs
+        .windows(2)
+        .zip(weights.windows(2))
+        .map(|(arc, weight)| 0.5 * (arc[1] - arc[0]) * (weight[0] + weight[1]))
+        .sum();
+    let barrier = values[WIDENING_PLANES - 1];
+    (kbt / std::f64::consts::TAU).sqrt() * (-barrier / kbt).exp() / (2.0 * half_partition)
 }
 
 fn widening_path() -> Array2<f64> {
@@ -441,13 +436,13 @@ fn widening_well_barrier_and_rate_are_independent_of_friction() {
     let mut barriers = Vec::new();
     for (index, (kbt, base)) in [(0.2, 200_u64), (0.35, 300)].into_iter().enumerate() {
         let target = widening_expected_barrier(kbt);
-        let target_rate =
+        let target_rate = widening_expected_rate(kbt);
+        let gaussian_rate =
             REACTANT_OMEGA_SQUARED.sqrt() / std::f64::consts::TAU * (-target / kbt).exp();
-        let reduced = widening_reduced_rate(kbt, target);
         assert!(
-            (1.02..1.12).contains(&(target_rate / reduced)),
-            "kT {kbt}: the Gaussian-reactant rate {target_rate:.4e} must sit a few percent above \
-             the integrated-partition rate {reduced:.4e}"
+            (1.05..1.25).contains(&(gaussian_rate / target_rate)),
+            "kT {kbt}: the Gaussian-reactant rate {gaussian_rate:.4e} must sit well above \
+             the doubled-trapezoid rate {target_rate:.4e}"
         );
         for (slot, gamma) in FRICTIONS.into_iter().enumerate() {
             let profile =
@@ -480,10 +475,10 @@ fn widening_well_barrier_and_rate_are_independent_of_friction() {
             );
             if kbt > 0.3 {
                 checks.excludes(
-                    &format!("{label} rate against the integrated-partition rate"),
+                    &format!("{label} rate against the Gaussian-reactant rate"),
                     rate,
                     rate_error,
-                    widening_reduced_rate(kbt, target),
+                    gaussian_rate,
                 );
             }
             barriers.push((profile.barrier, profile.barrier_error));
