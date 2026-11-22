@@ -1807,6 +1807,16 @@ fn mass_weighted_hessian<E: DynamicsEngine + ?Sized>(
             hessian[(row, column)] = product[row];
         }
     }
+    // Column `j` differences the gradient along coordinate `j`, so on an
+    // anharmonic surface `H[(i, j)]` and `H[(j, i)]` carry different `O(h^2)`
+    // truncation terms. The Hessian is symmetric, so average them.
+    for row in 0..dof {
+        for column in row + 1..dof {
+            let mean = 0.5 * (hessian[(row, column)] + hessian[(column, row)]);
+            hessian[(row, column)] = mean;
+            hessian[(column, row)] = mean;
+        }
+    }
     Ok(hessian)
 }
 
@@ -3735,6 +3745,71 @@ mod tests {
                 (left - right).abs() <= hessian_translation_tol,
                 "hessian entries {left} and {right} differ by more than {hessian_translation_tol}"
             );
+        }
+    }
+
+    struct CoupledCubic;
+
+    impl rgsaddle::PointSurface for CoupledCubic {
+        fn eval(
+            &self,
+            r: ArrayView1<'_, f64>,
+        ) -> Result<(f64, Array1<f64>), rgsaddle::SaddleError> {
+            // `V = x^2 / 2 + y^2 / 2 + 0.4 x y^3`. The mixed derivative of the
+            // gradient differs by `0.4 h^2` between the two difference orders.
+            let (x, y) = (r[0], r[1]);
+            let energy = 0.5 * x * x + 0.5 * y * y + 0.4 * x * y.powi(3);
+            Ok((
+                energy,
+                Array1::from_vec(vec![x + 0.4 * y.powi(3), y + 1.2 * x * y * y]),
+            ))
+        }
+    }
+
+    #[test]
+    fn mass_weighted_hessian_is_symmetric_for_unequal_masses() {
+        let masses = [1.0, 4.0];
+        let mut engine = NativeEngine::new(
+            CoupledCubic,
+            NativeConfig::default()
+                .with_masses(Array1::from_vec(masses.to_vec()))
+                .with_thermostat(ThermostatConfig::default().with_temperature(0.2)),
+        )
+        .expect("engine");
+        let root = engine.masses().mapv(f64::sqrt);
+        let (x, y) = (0.3_f64, 0.7_f64);
+        let origin = Array1::from_vec(vec![x, y]);
+        let hessian =
+            mass_weighted_hessian(&mut engine, origin.view(), root.view()).expect("hessian");
+        assert_eq!(
+            hessian[(0, 1)].to_bits(),
+            hessian[(1, 0)].to_bits(),
+            "off-diagonal entries {} and {}",
+            hessian[(0, 1)],
+            hessian[(1, 0)]
+        );
+        let exact = [
+            [
+                1.0 / masses[0],
+                1.2 * y * y / (masses[0] * masses[1]).sqrt(),
+            ],
+            [
+                1.2 * y * y / (masses[0] * masses[1]).sqrt(),
+                (1.0 + 2.4 * x * y) / masses[1],
+            ],
+        ];
+        // Symmetrizing halves the `0.4 h^2 / sqrt(m_x m_y)` truncation of the
+        // one asymmetric entry. Round-off in the force differences is the
+        // remaining error.
+        let hessian_tol = 4.0 * hessian_displacement_fraction().powi(2);
+        for (row, exact_row) in exact.iter().enumerate() {
+            for (column, expected) in exact_row.iter().enumerate() {
+                assert!(
+                    (hessian[(row, column)] - expected).abs() <= hessian_tol,
+                    "entry ({row}, {column}) is {} against {expected}",
+                    hessian[(row, column)]
+                );
+            }
         }
     }
 
