@@ -954,8 +954,7 @@ fn pooled_rate_eliminates_jensen_bias_on_analytic_double_well() {
     let pooled_z = (pooled_rate - exact_rate).abs() / pooled_rate_error;
 
     eprintln!(
-        "Analytic 2D double-well Jensen check: exact_k={exact_rate:.6e}, arith_mean_k={arith_mean_rate:.6e} +- {arith_se:.6e} (z=+{arith_z:.2}), pooled_k={:.6e} +- {:.6e} (|z|={pooled_z:.2})",
-        pooled_rate, pooled_rate_error
+        "Analytic 2D double-well Jensen check: exact_k={exact_rate:.6e}, arith_mean_k={arith_mean_rate:.6e} +- {arith_se:.6e} (z=+{arith_z:.2}), pooled_k={pooled_rate:.6e} +- {pooled_rate_error:.6e} (|z|={pooled_z:.2})",
     );
 
     let separation_roundoff = 64.0 * f64::EPSILON * arith_mean_rate.abs().max(pooled_rate.abs());

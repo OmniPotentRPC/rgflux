@@ -2166,6 +2166,20 @@ fn classify_translation_mode(
     })
 }
 
+/// Whether `dof` coordinates are at least two Cartesian atoms.
+///
+/// `usize::is_multiple_of` is stable from Rust 1.91 and the minimum supported
+/// version is 1.88, so the remainder is spelled out and the lint that asks for
+/// the method is allowed on this function only.
+#[allow(
+    unknown_lints,
+    clippy::manual_is_multiple_of,
+    reason = "usize::is_multiple_of needs Rust 1.91 and the MSRV is 1.88"
+)]
+const fn is_cartesian_system(dof: usize) -> bool {
+    dof >= 6 && dof % 3 == 0
+}
+
 /// Mass-weighted unit translations accepted at `origin`.
 ///
 /// `Some` on [`PafiConfig::translation_invariance`] declares each Cartesian
@@ -2180,7 +2194,7 @@ fn classified_translation_modes<E: DynamicsEngine + ?Sized>(
     translation_invariance: Option<[bool; 3]>,
 ) -> Result<Vec<Array1<f64>>, FluxError> {
     let dof = origin.len();
-    let hessian_frobenius = if dof >= 6 && dof % 3 == 0 && translation_invariance.is_none() {
+    let hessian_frobenius = if is_cartesian_system(dof) && translation_invariance.is_none() {
         let mut squared_bound = 0.0;
         for i in 0..dof {
             let mut basis = Array1::zeros(dof);
@@ -2202,7 +2216,7 @@ fn classified_translation_modes<E: DynamicsEngine + ?Sized>(
     };
 
     let mut translation_modes = Vec::new();
-    if dof >= 6 && dof % 3 == 0 {
+    if is_cartesian_system(dof) {
         for axis in 0..3 {
             let mut translation = Array1::zeros(dof);
             for i in (axis..dof).step_by(3) {
@@ -3699,18 +3713,19 @@ pub fn pafi_profile_adaptive<E: DynamicsEngine + ?Sized>(
                         .dividing_plane(&gradients, &free_energy)?
                         .partition_end
                         == 0;
-                let profile = match integrate_profile(
+                let profile = integrate_profile(
                     &quadrature,
                     &gradients,
                     &errors,
                     kbt,
                     reactant_curvature,
                     reactant_hessian_certified,
-                ) {
-                    Ok(profile) => Ok(profile),
-                    Err(error) if unresolved => Err(error),
-                    Err(error) => return Err(error),
-                };
+                );
+                if let Err(error) = &profile
+                    && !unresolved
+                {
+                    return Err(error.clone());
+                }
                 let need_more_stat_rounds = match (&profile, config.base.target_error) {
                     (Ok(profile), Some(target)) => {
                         profile.barrier_error > target
