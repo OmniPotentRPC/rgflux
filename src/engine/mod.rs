@@ -29,9 +29,13 @@
 //! - Sprik, M., and Ciccotti, G. (1998). *Free energy from constrained
 //!   molecular dynamics*. The Journal of Chemical Physics, 109, 7737-7744.
 //!   <https://doi.org/10.1063/1.477419>
+//! - Ceriotti, M., Bussi, G., and Parrinello, M. (2010). *Colored-noise
+//!   thermostats à la carte*. Journal of Chemical Theory and Computation, 6,
+//!   1170-1180. <https://doi.org/10.1021/ct900563s>
 //! - Higham, N. J. (2002). *Accuracy and Stability of Numerical Algorithms*
 //!   (2nd ed.). SIAM. <https://doi.org/10.1137/1.9780898718027>
 
+pub mod gle;
 #[cfg(feature = "lammpc")]
 pub mod lammpc;
 pub mod native;
@@ -190,6 +194,11 @@ pub struct ThermostatConfig {
     ///
     /// Default: `1.0`.
     pub boltzmann: f64,
+    /// White-noise Langevin, or the published smart-sampling GLE.
+    ///
+    /// The GLE step ignores `gamma`. On a holonomic constraint it thermostats
+    /// only the tangent momenta. Default: [`gle::ColoredNoise::White`].
+    pub noise: gle::ColoredNoise,
 }
 
 impl Default for ThermostatConfig {
@@ -198,6 +207,7 @@ impl Default for ThermostatConfig {
             gamma: 1.0,
             temperature: 1.0,
             boltzmann: 1.0,
+            noise: gle::ColoredNoise::White,
         }
     }
 }
@@ -206,6 +216,7 @@ with_setters!(ThermostatConfig {
     with_gamma => gamma: val f64,
     with_temperature => temperature: val f64,
     with_boltzmann => boltzmann: val f64,
+    with_noise => noise: val gle::ColoredNoise,
 });
 
 impl ThermostatConfig {
@@ -236,15 +247,16 @@ impl ThermostatConfig {
         Ok(kbt)
     }
 
-    /// Validate parameters and require friction `gamma > 0`.
+    /// Validate parameters and require friction `gamma > 0` for white noise.
     ///
     /// Equilibrium samplers average over constrained dynamics and read the
-    /// mean as a canonical expectation. With `gamma == 0` the engine is NVE,
-    /// which samples an energy shell started from the anchor and not the
-    /// canonical ensemble, so those samplers refuse it.
+    /// mean as a canonical expectation. With white noise and `gamma == 0` the
+    /// engine is NVE, which samples an energy shell started from the anchor
+    /// and not the canonical ensemble, so those samplers refuse it. The GLE
+    /// noise ignores `gamma` and is always thermostatted.
     pub(crate) fn require_canonical_sampling(&self) -> Result<f64, FluxError> {
         let kbt = self.thermal_energy()?;
-        if self.gamma <= 0.0 {
+        if self.gamma <= 0.0 && self.noise == gle::ColoredNoise::White {
             return Err(FluxError::InvalidConfig(
                 "canonical sampling requires ThermostatConfig::gamma > 0; gamma == 0 is NVE dynamics",
             ));
@@ -732,6 +744,14 @@ mod tests {
         fn eval(&self, x: ArrayView1<f64>) -> Result<(f64, Array1<f64>), rgsaddle::SaddleError> {
             Ok((0.5 * x[0] * x[0], Array1::from_vec(vec![x[0]])))
         }
+    }
+
+    #[test]
+    fn canonical_sampling_refuses_nve_only_for_white_noise() {
+        let nve = ThermostatConfig::default().with_gamma(0.0);
+        assert!(nve.require_canonical_sampling().is_err());
+        let gle = nve.with_noise(gle::ColoredNoise::SmartSampling);
+        assert_eq!(gle.require_canonical_sampling(), Ok(1.0));
     }
 
     #[test]

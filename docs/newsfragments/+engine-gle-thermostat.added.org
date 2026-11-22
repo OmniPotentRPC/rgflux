@@ -1,0 +1,1 @@
+Add a smart-sampling generalized Langevin thermostat to the native engine through ThermostatConfig::noise, applied to the momenta tangent to a holonomic constraint.
