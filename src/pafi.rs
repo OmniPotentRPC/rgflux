@@ -1343,7 +1343,15 @@ fn same_length(arcs: &[f64], gradients: &[f64]) -> Result<(), FluxError> {
     Ok(())
 }
 
-fn trapezoid_to(arcs: &[f64], gradients: &[f64], arc: f64) -> f64 {
+fn trapezoid_to(
+    arcs: &[f64],
+    gradients: &[f64],
+    arc: f64,
+    context: &'static str,
+) -> Result<f64, FluxError> {
+    if !arc.is_finite() {
+        return Err(FluxError::NonFinite(context));
+    }
     let mut accumulated = 0.0_f64;
     for k in 0..arcs.len() - 1 {
         let left = arcs[k];
@@ -1352,21 +1360,30 @@ fn trapezoid_to(arcs: &[f64], gradients: &[f64], arc: f64) -> f64 {
         }
         let width = arcs[k + 1] - left;
         let fraction = ((arc.min(arcs[k + 1]) - left) / width).clamp(0.0, 1.0);
-        let slope = gradients[k + 1] - gradients[k];
-        accumulated += width * (gradients[k] * fraction + slope * fraction * fraction / 2.0);
+        accumulated += width
+            * fraction
+            * (gradients[k] * (1.0 - 0.5 * fraction) + gradients[k + 1] * (0.5 * fraction));
         if arc <= arcs[k + 1] {
             break;
         }
     }
-    accumulated
+    if accumulated.is_finite() {
+        Ok(accumulated)
+    } else {
+        Err(FluxError::NonFinite(context))
+    }
 }
 
-fn trapezoid_cumulative(arcs: &[f64], gradients: &[f64]) -> Vec<f64> {
+fn trapezoid_cumulative(
+    arcs: &[f64],
+    gradients: &[f64],
+    context: &'static str,
+) -> Result<Vec<f64>, FluxError> {
     let mut values = vec![0.0_f64; arcs.len()];
     for k in 0..arcs.len() - 1 {
-        values[k + 1] = trapezoid_to(arcs, gradients, arcs[k + 1]);
+        values[k + 1] = trapezoid_to(arcs, gradients, arcs[k + 1], context)?;
     }
-    values
+    Ok(values)
 }
 
 fn integral_estimate(
@@ -1408,7 +1425,7 @@ impl MeanForceIntegral for HermiteIntegral {
         }
         let quadrature = Quadrature::new(arcs)?;
         let values = quadrature.integrate(gradients);
-        let lower = trapezoid_cumulative(arcs, gradients);
+        let lower = trapezoid_cumulative(arcs, gradients, "PAFI Hermite mean-force integral")?;
         integral_estimate(values, lower, "PAFI Hermite mean-force integral")
     }
 }
@@ -1459,7 +1476,7 @@ impl MeanForceIntegral for SimpsonIntegral {
             accumulated += to_end;
             values[i + 2] = accumulated;
         }
-        let lower = trapezoid_cumulative(arcs, gradients);
+        let lower = trapezoid_cumulative(arcs, gradients, "PAFI Simpson mean-force integral")?;
         integral_estimate(values, lower, "PAFI Simpson mean-force integral")
     }
 }
@@ -1626,10 +1643,7 @@ fn integrate_profile(
     if free_energy.iter().any(|value| !value.is_finite()) {
         return Err(FluxError::NonFinite("PAFI integrated free energy"));
     }
-    let lower = trapezoid_cumulative(&quadrature.arcs, gradients);
-    if lower.iter().any(|value| !value.is_finite()) {
-        return Err(FluxError::NonFinite("PAFI trapezoid free energy"));
-    }
+    let lower = trapezoid_cumulative(&quadrature.arcs, gradients, "PAFI trapezoid free energy")?;
     let dividing = quadrature.dividing_plane(gradients, &free_energy);
     let standard_error: Vec<f64> = quadrature
         .cumulative
@@ -1647,10 +1661,12 @@ fn integrate_profile(
         return Err(FluxError::NonFinite("PAFI free-energy standard error"));
     }
     let barrier = dividing.free_energy;
-    let lower_barrier = trapezoid_to(&quadrature.arcs, gradients, dividing.arc);
-    if !lower_barrier.is_finite() {
-        return Err(FluxError::NonFinite("PAFI trapezoid barrier"));
-    }
+    let lower_barrier = trapezoid_to(
+        &quadrature.arcs,
+        gradients,
+        dividing.arc,
+        "PAFI trapezoid barrier",
+    )?;
     let barrier_error = linear_euclidean_norm(&dividing.weights, gradient_errors)
         .hypot((barrier - lower_barrier).abs());
     if !barrier.is_finite() || !barrier_error.is_finite() || barrier_error < 0.0 {
@@ -2856,6 +2872,84 @@ mod tests {
         assert_eq!(
             result,
             Err(FluxError::NonFinite("PAFI integrated free energy"))
+        );
+    }
+
+    fn slope_form_trapezoid_to(arcs: &[f64], gradients: &[f64], arc: f64) -> f64 {
+        let mut accumulated = 0.0_f64;
+        for k in 0..arcs.len() - 1 {
+            let left = arcs[k];
+            if arc <= left {
+                break;
+            }
+            let width = arcs[k + 1] - left;
+            let fraction = ((arc.min(arcs[k + 1]) - left) / width).clamp(0.0, 1.0);
+            let slope = gradients[k + 1] - gradients[k];
+            accumulated += width * (gradients[k] * fraction + slope * fraction * fraction / 2.0);
+            if arc <= arcs[k + 1] {
+                break;
+            }
+        }
+        accumulated
+    }
+
+    #[test]
+    fn trapezoid_to_matches_the_slope_form_on_ordinary_input() {
+        let arcs = [0.0, 0.7, 1.9, 2.0, 3.5, 5.25];
+        let gradients = [2.0, -0.3, 4.5, 1.25e3, -7.0e2, 0.125];
+        let mut probes = vec![-1.0, 0.0, 6.0, 1.0e3];
+        probes.extend_from_slice(&arcs);
+        for window in arcs.windows(2) {
+            for fraction in [0.1, 0.25, 0.5, 0.9] {
+                probes.push(window[0] + fraction * (window[1] - window[0]));
+            }
+        }
+        for arc in probes {
+            let new = trapezoid_to(&arcs, &gradients, arc, "test").expect("finite");
+            let old = slope_form_trapezoid_to(&arcs, &gradients, arc);
+            assert_abs_diff_eq!(new, old, epsilon = 1.0e-12);
+        }
+    }
+
+    #[test]
+    fn trapezoid_to_rejects_non_finite_input() {
+        let arcs = [0.0, 1.0, 2.0];
+        let gradients = [1.0, 2.0, 3.0];
+        assert!(slope_form_trapezoid_to(&arcs, &gradients, f64::NAN).is_finite());
+        for arc in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert_eq!(
+                trapezoid_to(&arcs, &gradients, arc, "test arc"),
+                Err(FluxError::NonFinite("test arc"))
+            );
+        }
+        assert_eq!(
+            trapezoid_to(&arcs, &[1.0, f64::NAN, 3.0], 2.0, "test gradient"),
+            Err(FluxError::NonFinite("test gradient"))
+        );
+    }
+
+    #[test]
+    fn trapezoid_to_survives_a_gradient_difference_that_overflows() {
+        let arcs = [0.0, 1.0];
+        let gradients = [-1.0e308_f64, 1.0e308];
+        assert!((gradients[1] - gradients[0]).is_infinite());
+        assert!(!slope_form_trapezoid_to(&arcs, &gradients, 1.0).is_finite());
+        assert_abs_diff_eq!(
+            trapezoid_to(&arcs, &gradients, 1.0, "test").expect("finite"),
+            0.0,
+            epsilon = 1.0e-12
+        );
+        let half = trapezoid_to(&arcs, &gradients, 0.5, "test").expect("finite");
+        assert_abs_diff_eq!(half / 1.0e308, -0.25, epsilon = 1.0e-12);
+    }
+
+    #[test]
+    fn trapezoid_to_rejects_a_result_that_overflows() {
+        let arcs = [0.0, 2.0];
+        let gradients = [1.0e308, 1.0e308];
+        assert_eq!(
+            trapezoid_to(&arcs, &gradients, 2.0, "test result"),
+            Err(FluxError::NonFinite("test result"))
         );
     }
 
