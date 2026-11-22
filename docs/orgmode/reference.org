@@ -994,6 +994,7 @@ The generated block is authoritative. Run
 - =rgflux::pafi::FreeEnergyProfile::normalized_rate_error=
 - =rgflux::pafi::FreeEnergyProfile::quadrature_residual=
 - =rgflux::pafi::FreeEnergyProfile::reactant_frequency=
+- =rgflux::pafi::FreeEnergyProfile::reactant_hessian_certified=
 - =rgflux::pafi::FreeEnergyProfile::reactant_log_partition=
 - =rgflux::pafi::FreeEnergyProfile::reactant_partition=
 - =rgflux::pafi::FreeEnergyProfile::standard_error=
