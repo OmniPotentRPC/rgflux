@@ -11,8 +11,9 @@
 use std::error::Error;
 
 fn main() -> Result<(), Box<dyn Error>> {
-    Err(
-        "Cu vacancy campaign unavailable: requires an rgpot-core release exporting eam_table_from_file/eam_table_from_data"
-            .into(),
-    )
+    match rgflux::cu_reference::cu_vacancy_comparison(1000.0, 0.0) {
+        Ok(_) => Ok(()),
+        Err(rgflux::FluxError::InvalidConfig(message)) => Err(message.into()),
+        Err(other) => Err(other.into()),
+    }
 }
