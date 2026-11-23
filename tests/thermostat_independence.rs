@@ -61,7 +61,9 @@ use rgflux::engine::gle::ColoredNoise;
 use rgflux::engine::native::{ConstraintProjection, NativeConfig, NativeEngine};
 use rgflux::engine::{DynamicsEngine, EindirSurface, HyperplaneConstraint, ThermostatConfig};
 use rgflux::hyperplane::{HyperplaneConfig, sample_hyperplane};
-use rgflux::pafi::{HermiteIntegral, MeanForceIntegral, PafiConfig, pafi_profile};
+use rgflux::pafi::{
+    HermiteIntegral, MeanForceIntegral, PafiConfig, pafi_profile, pafi_profile_dyn,
+};
 use rgflux::stats::{StatsConfig, batch_means};
 
 /// Statistical assertions over the three tests.
@@ -707,7 +709,12 @@ fn both_thermostats_match_pafi_plane_forces_at_unequal_mass() {
                 ),
         )
         .expect("engine");
-        let profile = pafi_profile(&mut engine, path.view(), &config).expect("profile");
+        let profile = if noise == ColoredNoise::SmartSampling {
+            let engine: &mut dyn DynamicsEngine = &mut engine;
+            pafi_profile_dyn(engine, path.view(), &config).expect("trait-object profile")
+        } else {
+            pafi_profile(&mut engine, path.view(), &config).expect("profile")
+        };
         let forces = profile.gradients().to_vec();
         let errors = profile.gradient_errors().to_vec();
         assert_eq!(forces.len(), planes);
