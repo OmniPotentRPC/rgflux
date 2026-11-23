@@ -212,6 +212,7 @@ impl<S: ForceSurface> NativeEngine<S> {
     /// Reset the internal Langevin PRNG stream to `seed`.
     pub fn reseed_rng(&mut self, seed: u64) {
         self.rng = StdRng::seed_from_u64(seed);
+        self.gle.invalidate();
     }
 
     /// Public reseed alias matching [`DynamicsEngine::reseed`].
@@ -502,6 +503,7 @@ impl<S: ForceSurface> DynamicsEngine for NativeEngine<S> {
             rattle_velocities_in_place(&mut self.velocities, self.masses.view(), plane);
         }
         self.rng = StdRng::seed_from_u64(seed ^ SHOOT_NOISE_STREAM_MIX);
+        self.gle.invalidate();
         Ok(())
     }
 
