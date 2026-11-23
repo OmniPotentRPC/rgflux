@@ -2,12 +2,13 @@
 //!
 //! This backend links `liblammpc` and drives its persistent `lammpc_session_*`
 //! C ABI with `ForceInput` and `PotentialConfig` Cap'n Proto messages from
-//! `rgpot_core`. It supports constrained Langevin or zero-friction projected
-//! velocity-Verlet dynamics and unconstrained NVE; unconstrained Langevin is
-//! unavailable in the current C ABI. [`DynamicsEngine::positions`] returns
-//! unwrapped Cartesian coordinates. LAMMPS reports wrapped `x`; the integer
-//! image count implied by the periodic cell is applied before those
-//! coordinates are stored, matching the engine contract.
+//! `rgpot_core`. It supports constrained white-noise Langevin or zero-friction
+//! projected velocity-Verlet dynamics and unconstrained NVE. Colored-noise
+//! thermostats and unconstrained Langevin are unavailable in the current C
+//! ABI and are rejected. [`DynamicsEngine::positions`] returns unwrapped
+//! Cartesian coordinates. LAMMPS reports wrapped `x`; the integer image count
+//! implied by the periodic cell is applied before those coordinates are
+//! stored, matching the engine contract.
 //!
 //! ## Units and linking
 //!
@@ -218,6 +219,9 @@ pub struct LammpcConfig {
     pub suffix: String,
     /// Thermostat controls in metal units (`gamma` in `1/ps`, `k_B T` in `eV`).
     ///
+    /// Only [`crate::engine::gle::ColoredNoise::White`] is supported.
+    /// Colored-noise configurations return [`FluxError::InvalidConfig`].
+    ///
     /// Default: [`ThermostatConfig::default()`].
     pub thermostat: ThermostatConfig,
     /// Optional hyperplane constraint.
@@ -306,7 +310,7 @@ impl LammpcEngine {
                 "LammpcConfig::pair_style must be non-empty",
             ));
         }
-        let _ = config.thermostat.thermal_energy()?;
+        let _ = validate_lammpc_thermostat(&config.thermostat)?;
 
         let dof = config.atomic_numbers.len() * 3;
         let masses = expand_coordinate_masses(&config.atomic_numbers, &config)?;
@@ -775,7 +779,7 @@ impl DynamicsEngine for LammpcEngine {
     }
 
     fn set_thermostat(&mut self, thermostat: ThermostatConfig) -> Result<(), FluxError> {
-        let _ = thermostat.thermal_energy()?;
+        let _ = validate_lammpc_thermostat(&thermostat)?;
         self.thermostat = thermostat;
         self.md_initialized = false;
         self.md_timestep_ps = None;
@@ -825,6 +829,7 @@ impl DynamicsEngine for LammpcEngine {
                 "LammpcEngine::step requires a finite positive timestep",
             ));
         }
+        let _ = validate_lammpc_thermostat(&self.thermostat)?;
         if self.constraint.is_some() {
             self.constrained_langevin_step(dt)
         } else if self.thermostat.gamma == 0.0 {
@@ -894,6 +899,16 @@ impl DynamicsEngine for LammpcEngine {
             }
         }
     }
+}
+
+fn validate_lammpc_thermostat(thermostat: &ThermostatConfig) -> Result<f64, FluxError> {
+    let kbt = thermostat.thermal_energy()?;
+    if thermostat.noise != crate::engine::gle::ColoredNoise::White {
+        return Err(FluxError::InvalidConfig(
+            "LammpcEngine does not support colored-noise thermostats",
+        ));
+    }
+    Ok(kbt)
 }
 
 fn type_index_for_atomic_number(z: i32, type_to_atomic_number: &[i32]) -> Option<usize> {
@@ -1069,5 +1084,38 @@ fn last_error_message() -> String {
         "lammpc returned an empty error message".to_string()
     } else {
         text
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::gle::ColoredNoise;
+
+    #[test]
+    fn zero_friction_white_noise_is_nve_and_not_canonical() {
+        let thermostat = ThermostatConfig::default()
+            .with_gamma(0.0)
+            .with_noise(ColoredNoise::White);
+
+        assert_eq!(validate_lammpc_thermostat(&thermostat), Ok(1.0));
+        assert!(thermostat.require_canonical_sampling().is_err());
+    }
+
+    #[test]
+    fn zero_friction_colored_noise_is_rejected() {
+        let thermostat = ThermostatConfig::default()
+            .with_gamma(0.0)
+            .with_noise(ColoredNoise::SmartSampling);
+
+        assert!(thermostat.require_canonical_sampling().is_ok());
+        let error = match LammpcEngine::new(LammpcConfig::default().with_thermostat(thermostat)) {
+            Err(error) => error,
+            Ok(_) => panic!("unsupported noise was accepted"),
+        };
+        assert!(matches!(
+            error,
+            FluxError::InvalidConfig(message) if message.contains("colored-noise")
+        ));
     }
 }
