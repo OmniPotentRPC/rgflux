@@ -109,7 +109,7 @@ Constructors and methods: =HyperplaneConstraint::new(normal, offset)=, =from_dir
 | =spec= | =Vec<u8>= | =vec![]= | Serialized system specification bytes forwarded to =rgpot_md_session_create= |
 | =options= | =Option<String>= | =None= | Optional backend-specific option string |
 | =masses= | =Array1<f64>= | =Array1::from_elem(3, 1.0)= | Per-coordinate masses in amu (length must be a positive multiple of 3) |
-| =thermostat= | =ThermostatConfig= | =ThermostatConfig::default()= | Langevin thermostat (\(\gamma\) in \(\mathrm{ps}^{-1}\), \(k_{\mathrm{B}}T\) in eV) |
+| =thermostat= | =ThermostatConfig= | =ThermostatConfig::default()= | White-noise Langevin thermostat (\(\gamma\) in \(\mathrm{ps}^{-1}\), \(k_{\mathrm{B}}T\) in eV); colored-noise models are unsupported and return =FluxError::InvalidConfig= |
 | =constraint= | =Option<HyperplaneConstraint>= | =None= | Optional hyperplane constraint forwarded to =rgpot_md_session_step_langevin= |
 | =cell= | =Option<[f64; 9]>= | =None= | Optional row-major \(3 \times 3\) periodic box in Å |
 | =seed= | =u64= | =1= | Deterministic 64-bit PRNG seed |
@@ -388,9 +388,12 @@ The =rgpot= feature consumes =rgpot_core::potential::PotentialImpl= through
 the external =rgpot_force_input_t= and =rgpot_force_out_t= callback contract.
 The =rgpot-session= feature targets the external =rgpot_md_session_*= session
 contract for creation, state transfer, force evaluation, reseeding, and
-Langevin stepping. These symbols are not declared or exported by =rgflux=.
-Unavailable session calls return =FluxError::BackendUnavailable=, while direct
-=liblammpc= failures return =FluxError::Lammpc=.
+Langevin stepping. It accepts only white-noise thermostat configurations;
+colored-noise selections return =FluxError::InvalidConfig= before a session
+can silently substitute a different noise model. These symbols are not
+declared or exported by =rgflux=. Unavailable session calls return
+=FluxError::BackendUnavailable=, while direct =liblammpc= failures return
+=FluxError::Lammpc=.
 
 ** Python
 
