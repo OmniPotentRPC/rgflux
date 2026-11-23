@@ -1,0 +1,1 @@
+The lammpc CI job checks out a lammpc commit that is on main. The previous pin is absent from every lammpc branch, so a normal clone stopped with "reference is not a tree" and the job could not build liblammpc. The job now reads the LAMMPS release tag with scripts/build_lammps.sh --print-tag, which is the tag that script builds.
