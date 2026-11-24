@@ -2,6 +2,7 @@
 
 use ndarray::{Array1, ArrayView1};
 use rgflux::FluxError;
+use rgflux::engine::gle::ColoredNoise;
 use rgflux::engine::lammpc::{LammpcConfig, LammpcEngine, MASS_VELOCITY_TO_EV};
 use rgflux::engine::native::{NativeConfig, NativeEngine};
 use rgflux::engine::{DynamicsEngine, HyperplaneConstraint, ThermostatConfig};
@@ -146,6 +147,31 @@ fn make_force_free_constrained_engine(seed: u64) -> LammpcEngine {
     let x = Array1::from_vec(vec![0.0, 0.0, 0.0, 4.2, 0.0, 0.0]);
     engine.set_positions(x.view()).expect("set positions");
     engine
+}
+
+#[test]
+fn colored_noise_is_rejected_at_construction_and_update() {
+    let colored = ThermostatConfig::default().with_noise(ColoredNoise::SmartSampling);
+    let construction_error =
+        match LammpcEngine::new(LammpcConfig::default().with_thermostat(colored)) {
+            Err(error) => error,
+            Ok(_) => panic!("colored noise created a session"),
+        };
+    assert!(matches!(
+        construction_error,
+        FluxError::InvalidConfig("LammpcEngine does not support colored-noise thermostats")
+    ));
+
+    let mut engine = make_lammpc_engine(81);
+    let original = *engine.thermostat();
+    let update_error = engine
+        .set_thermostat(colored)
+        .expect_err("colored noise must not replace the active thermostat");
+    assert!(matches!(
+        update_error,
+        FluxError::InvalidConfig("LammpcEngine does not support colored-noise thermostats")
+    ));
+    assert_eq!(*engine.thermostat(), original);
 }
 
 #[test]
