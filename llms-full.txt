@@ -695,6 +695,7 @@ fn main() -> Result<(), rgflux::FluxError> {
 | `ohtst` | OH-TST with a fixed hyperplane normal (`optimize_hyperplane`, `optimize_hyperplane_from_minimum`) and reactant relaxation (`relax_reactant`) | Implemented for a fixed normal with `rgsaddle::flux_mass`; normal optimization is not yet implemented |
 | `ffs` | Forward Flux Sampling across ordered interfaces (`forward_flux_rate`) | Implemented: flux collection, staged trials, and uncertainty propagation. Exit restores positions, velocities, the periodic cell, the thermostat, and the constraint; the stochastic stream is left where the run put it |
 | `network` | Symmetry-resolved rate networks and kinetic Monte Carlo rate tables (`NetworkConfig`, `RateTableConfig`, `RateEdge`, `build_rate_table`) | `RateEdge::new` and configuration types implemented; `build_rate_table` is not yet implemented |
+| `cu_reference` | Daw and Chandross Table II copper vacancy mobility record (`published_copper_mobility`, `published_mobility_a2_per_ps`, `mobility_a2_per_ps`) and refusing NPT campaign boundary (`run_npt_lattice`, `cu_vacancy_comparison`) | Table II record implemented; NPT campaign refuses until `rgpot-core` exports EAM table constructors |
 | `error` | Shared `FluxError` enum and `From<rgsaddle::SaddleError>` conversion | Implemented |
 | `config` | Internal `with_setters!` macro used by public configuration types | Private module, so it has no importable public path; every generated public setter is listed in the inventory below |
 
@@ -709,6 +710,7 @@ fn main() -> Result<(), rgflux::FluxError> {
 | `network` | This page, network configuration, edge and function entries, and generated inventory | `howto.org`, /Assemble a rate-network edge and kMC configuration/; `explanation.org`, /Kinetic rate networks (network)/ |
 | `kappa` | This page, `KappaConfig`, Bennett-Chandler types and functions, Kramers function, and generated inventory | `howto.org`, /Shoot Bennett-Chandler reactive-flux trajectories and compare with Kramers/; `explanation.org`, /Reactive-flux recrossing (kappa and kappa::bennett_chandler)/ |
 | `stats` | This page, constants, configuration, outputs, functions, and generated inventory | `howto.org`, /Diagnose correlated samples with batch means, effective sample size, and Geweke windows/; `explanation.org`, /Correlated time-series diagnostics (stats)/ |
+| `cu_reference` | This page, copper vacancy mobility types and functions, and generated inventory | `explanation.org`, /Copper vacancy mobility reference (`cu_reference`)/; `examples/cu_vacancy_adaptive.rs` |
 | `engine` | This page, features, configuration, traits, types, methods, constants, and generated inventory | `howto.org` examples for hyperplanes, trajectory methods, and `EindirSurface`; `getting-started.org`, /Choose an engine/ |
 | internal `config` | This page, /Configuration structs and field defaults/, plus every `with_*` path in the generated inventory | `AGENTS.md`, /Public configuration convention/ |
 | C ABI and Python | This page, /Binding surface/ | No exported binding exists in this release |
@@ -953,6 +955,15 @@ Here \(I_T\) is the trapezoid integral of \(dV/ds\) over the plane anchors and \
 | `pafi::HermiteIntegral` | Unit struct implementing `MeanForceIntegral` | Cubic Hermite integral of the mean force, the quadrature used by the profile, with truncation taken as the absolute difference from the trapezoid rule |
 | `pafi::SimpsonIntegral` | Unit struct implementing `MeanForceIntegral` | Composite Simpson integral of the mean force on unequally spaced planes, with truncation taken as the absolute difference from the trapezoid rule |
 | `network::RateEdge` | `from`, `to`, `rate` (`RateEdge::new(from, to, rate)`) | Directed elementary transition edge in `network::build_rate_table` |
+| `cu_reference::CAMPAIGN_UNAVAILABLE` | `&'static str` | Refusal sentence returned while `rgpot-core` lacks EAM table constructors |
+| `cu_reference::PublishedMobility` | `doi`, `table`, `equation`, `m0_a2_per_ps`, `m0_unit`, `qm_ev`, `qm_unit`, `qm_sigma_ev`, `ln_m0_sigma`, `coordination` | Pure-Cu Table II comparison record from Daw and Chandross (2021) cite:`dawSluggishDiffusion2021` (DOI `10.1103/PhysRevMaterials.5.043603`, \(M_0 = 190\,\text{Å}^2/\text{ps}\), \(Q_m = 0.67\,\text{eV}\), \(\sigma(Q_m) = 0.013\,\text{eV}\), \(\sigma[\ln M_0] = 0.13\), \(z = 12\)) |
+| `cu_reference::NptLatticeRecord` | `temperature_k()`, `lattice_angstrom()` | Cubic NPT lattice constant \(a(T)\) measured by `run_npt_lattice` |
+| `cu_reference::MobilityComparison` | `temperature_k`, `lattice_angstrom`, `ours_a2_per_ps`, `reference_a2_per_ps`, `ratio` | Computed mobility \(M = \Gamma a^2 / z\) alongside the Table II Arrhenius column and their ratio |
+| `cu_reference::published_copper_mobility` | `() -> Result<PublishedMobility, FluxError>` | Parse and validate the packaged Table II record for pure Cu |
+| `cu_reference::published_mobility_a2_per_ps` | `(temperature_k) -> Result<f64, FluxError>` | Evaluate \(M_0 \exp(-Q_m / k_{\mathrm{B}}T)\) in Å²/ps from the packaged Table II record |
+| `cu_reference::mobility_a2_per_ps` | `(total_rate_hz, lattice_angstrom, coordination) -> Option<f64>` | Convert a total hop rate \(\Gamma\) (Hz) to \(\Gamma a^2 / z / 10^{12}\) in Å²/ps |
+| `cu_reference::run_npt_lattice` | `(temperature_k) -> Result<NptLatticeRecord, FluxError>` | NPT lattice driver; validates \(T > 0\) and refuses with `CAMPAIGN_UNAVAILABLE` until `rgpot-core` exports EAM table constructors |
+| `cu_reference::cu_vacancy_comparison` | `(temperature_k, total_rate_hz) -> Result<MobilityComparison, FluxError>` | Compare a computed vacancy hop rate against Table II at the NPT lattice from `run_npt_lattice` |
 
 ### Estimator and sampling entry points
 
@@ -2107,6 +2118,12 @@ Correlated MD and Markov-chain observables underestimate uncertainty when treate
 ## Kinetic rate networks (`network`)
 
 `network` defines `NetworkConfig`, `RateTableConfig`, `RateEdge`, and `build_rate_table` for assembling elementary transition rates \(k_{i \to j}(T)\) cite:`vineyardFrequencyFactors1957,henkelmanLongTimeScale2001` into master-equation graphs and Bortz-Kalos-Lebowitz / Gillespie kinetic Monte Carlo (kMC) residence-time tables cite:`goswamiEfficientExploration2025,goswamiConcurrencyAkmc2025,eon2901,bortzNewAlgorithmMonteCarlo1975,gillespieGeneralMethod1976`. `RateEdge::new` validates finite non-negative rate constants, while `build_rate_table` is not yet implemented and returns `FluxError::Unimplemented`.
+
+## Copper vacancy mobility reference (`cu_reference`)
+
+`cu_reference` packages the pure-Cu vacancy mobility column from Table II of Daw and Chandross (2021) cite:`dawSluggishDiffusion2021` (Physical Review Materials 5, 043603, https://doi.org/10.1103/PhysRevMaterials.5.043603) strictly as a comparison denominator rather than an input to any rate computed by `rgflux`. In Eq. (5) of that paper, the mean-square displacement \(\operatorname{MSD}(t) = \langle\lvert\Delta \mathbf{u}(t)\rvert^2\rangle\) has long-time slope \(6\tilde{M}\) and total vacancy mobility \(M = N_{\mathrm{at}}\tilde{M}\). On an FCC lattice with nearest-neighbour coordination \(z = 12\) and jump distance \(a / \sqrt{2}\), a total vacancy hop rate \(\Gamma\) converts to mobility by \(M = \Gamma a^2 / z\) using the lattice constant \(a(T)\) measured at the simulation temperature.
+
+Table II (p. 043603-8) reports the pure-Cu Arrhenius parameters \(M(T) = M_0 \exp(-Q_m / k_{\mathrm{B}}T)\) (Eq. 3) with \(M_0 = 190\,\text{Å}^2/\text{ps}\) and \(Q_m = 0.67\,\text{eV}\) (matching the FBD static saddle-point energy), together with pure-element statistical sampling errors of \(13\%\) (\(0.13\)) on \(\ln M_0\) and \(0.013\,\text{eV}\) on \(Q_m\). `cu_reference::run_npt_lattice` and `cu_reference::cu_vacancy_comparison` (exercised by `examples/cu_vacancy_adaptive.rs`) refuse explicitly until `rgpot-core` exports `eam_table_from_file` and `eam_table_from_data`, rather than substituting a stored lattice.
 
 ## Bibliography
 

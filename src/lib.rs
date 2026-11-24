@@ -77,6 +77,9 @@
 //! - Goswami, R. (2026). *Reproducible orchestration of best practices for
 //!   reaction path optimization with the nudged elastic band*. MethodsX, 16,
 //!   103899. <https://doi.org/10.1016/j.mex.2026.103899>
+//! - Daw, M. S., and Chandross, M. (2021). *Sluggish diffusion in random
+//!   equimolar FCC alloys*. Physical Review Materials, 5(4), 043603.
+//!   <https://doi.org/10.1103/PhysRevMaterials.5.043603>
 
 #![deny(missing_docs)]
 
