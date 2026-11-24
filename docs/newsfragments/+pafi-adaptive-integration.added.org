@@ -1,0 +1,1 @@
+Add adaptive PAFI plane placement with monitor equidistribution, spectral-tail refinement, and replicate pooling that removes the Jensen bias of averaged per-replicate rates.
