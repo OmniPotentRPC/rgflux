@@ -41,6 +41,8 @@ pub mod lammpc;
 pub mod native;
 #[cfg(feature = "rgpot")]
 pub mod rgpot;
+#[cfg(feature = "rgpot-md-session")]
+pub mod md_session;
 #[cfg(feature = "rgpot-session")]
 pub mod rgpot_session;
 
