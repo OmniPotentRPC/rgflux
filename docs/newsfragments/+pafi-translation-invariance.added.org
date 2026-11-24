@@ -1,0 +1,1 @@
+Add PafiConfig::translation_invariance and FluxError::AmbiguousTranslationMode so a rigid-translation probe that cannot be resolved from its finite-difference uncertainty is reported, or declared per axis, instead of being guessed.
