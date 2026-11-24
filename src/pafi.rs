@@ -2242,11 +2242,13 @@ fn reactant_curvature<E: DynamicsEngine + ?Sized>(
     normal.mapv_inplace(|value| value / normal_norm);
 
     let mut apply = |direction: &Array1<f64>| -> Result<Array1<f64>, FluxError> {
-        let mut product = mass_weighted_hessian_product(
+        let (mut product, _, _) = estimate_hessian_product(
             engine,
             origin.view(),
             root_mass.view(),
             direction.view(),
+            hessian_displacement_fraction(),
+            0.0,
         )?;
         remove_translations(&mut product);
         Ok(product)
