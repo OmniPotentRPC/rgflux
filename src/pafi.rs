@@ -24,7 +24,10 @@
 //! `n' = 0` and this is the Sprik and Ciccotti (1998) mean constraint force,
 //! which [`crate::hyperplane::sample_hyperplane`] samples for a single plane.
 //! The term `(x - X) . n'` is the Jacobian of the plane foliation. Omitting it
-//! on a curved path gives a wrong profile.
+//! on a curved path gives a wrong profile. A Cartesian translation that
+//! [`PafiConfig::translation_invariance`] declares, or that the reactant
+//! Hessian-image test accepts, is removed from `x - X` before that dot. A
+//! tether that the same test rejects stays in the Jacobian.
 //!
 //! The plane means `g(s) = dF/ds` are integrated with a cubic Hermite rule.
 //! With two planes the derivative correction cancels and the rule is the
@@ -810,6 +813,7 @@ fn sample_plane<E: DynamicsEngine + ?Sized>(
     config: &PafiConfig,
     plane_index: usize,
     round: usize,
+    translation_modes: &[Array1<f64>],
 ) -> Result<Vec<f64>, FluxError> {
     let offset = dot(geometry.normal.view(), geometry.anchor.view());
     let plane = HyperplaneConstraint::new(geometry.normal.clone(), offset)?;
@@ -836,7 +840,12 @@ fn sample_plane<E: DynamicsEngine + ?Sized>(
         let lambda = report.constraint_force.ok_or(FluxError::InvalidConfig(
             "PAFI requires constraint force reporting on constrained steps",
         ))?;
-        values.push(projected_force_sample(engine, geometry, lambda)?);
+        values.push(projected_force_sample(
+            engine,
+            geometry,
+            lambda,
+            translation_modes,
+        )?);
     }
     Ok(values)
 }
@@ -845,12 +854,35 @@ fn projected_force_sample<E: DynamicsEngine + ?Sized>(
     engine: &E,
     geometry: &PlaneGeometry,
     lambda: f64,
+    translation_modes: &[Array1<f64>],
 ) -> Result<f64, FluxError> {
     let positions = engine.positions();
-    let mut jacobian_projection = 0.0_f64;
-    for i in 0..engine.dof() {
-        jacobian_projection += (positions[i] - geometry.anchor[i]) * geometry.dn_ds[i];
+    let masses = engine.masses();
+    let mut weighted: Array1<f64> = positions
+        .iter()
+        .zip(geometry.anchor.iter())
+        .zip(masses.iter())
+        .map(|((position, anchor), mass)| (position - anchor) * mass.sqrt())
+        .collect();
+    for mode in translation_modes {
+        let component = dot(weighted.view(), mode.view());
+        weighted.scaled_add(-component, mode);
     }
+    let jacobian_projection = weighted
+        .iter()
+        .zip(masses.iter())
+        .zip(positions.iter().zip(geometry.anchor.iter()))
+        .zip(geometry.dn_ds.iter())
+        .map(|(((weighted, mass), (position, anchor)), dn_ds)| {
+            let root = mass.sqrt();
+            let displacement = if root > 0.0 {
+                weighted / root
+            } else {
+                position - anchor
+            };
+            displacement * dn_ds
+        })
+        .sum::<f64>();
     let value = lambda * (geometry.dc_ds - jacobian_projection);
     if !value.is_finite() {
         return Err(FluxError::NonFinite("PAFI projected force sample"));
@@ -2031,7 +2063,7 @@ fn mass_weighted_hessian<E: DynamicsEngine + ?Sized>(
 /// [`reactant_zero_mode_floor`] times `1 +` the stiffest curvature are zero
 /// modes. Every other eigenvalue must be positive, and at least one positive
 /// eigenvalue must remain. Above the limit, finite forces are the cheap check
-/// here and positive projected curvature is checked by [`reactant_curvature`].
+/// here and positive projected curvature is checked by [`curvature_with_modes`].
 fn ensure_reactant_minimum<E: DynamicsEngine + ?Sized>(
     engine: &mut E,
     origin: ArrayView1<'_, f64>,
@@ -2143,22 +2175,20 @@ fn classify_translation_mode(
     })
 }
 
-/// Squared projected reactant frequency `omega_0^2 = 1 / (n^T H^-1 n)`.
+/// Mass-weighted unit translations accepted at `origin`.
 ///
-/// `H` is the mass-weighted Hessian at the first path image and `n` the unit
-/// mass-weighted path tangent there. `H u = n` is solved by conjugate
-/// gradients. The products are central differences of
-/// [`DynamicsEngine::energy_and_forces`], so the solve stays generic over the
-/// engine trait.
-fn reactant_curvature<E: DynamicsEngine + ?Sized>(
+/// `Some` on [`PafiConfig::translation_invariance`] declares each Cartesian
+/// axis and skips the probe. `None` probes with the same centered
+/// Hessian-vector products, position-roundoff floor, and uncertainty band as
+/// the reactant curvature. Fewer than two atoms, or a degree-of-freedom count
+/// that is not a multiple of three, returns no modes.
+fn classified_translation_modes<E: DynamicsEngine + ?Sized>(
     engine: &mut E,
-    geometry: &PlaneGeometry,
+    origin: &Array1<f64>,
+    root_mass: &Array1<f64>,
     translation_invariance: Option<[bool; 3]>,
-) -> Result<f64, FluxError> {
-    let dof = engine.dof();
-    let root_mass: Array1<f64> = engine.masses().mapv(f64::sqrt);
-    let origin = geometry.anchor.clone();
-
+) -> Result<Vec<Array1<f64>>, FluxError> {
+    let dof = origin.len();
     let hessian_frobenius = if dof >= 6 && dof % 3 == 0 && translation_invariance.is_none() {
         let mut squared_bound = 0.0;
         for i in 0..dof {
@@ -2214,8 +2244,43 @@ fn reactant_curvature<E: DynamicsEngine + ?Sized>(
             }
         }
     }
+    Ok(translation_modes)
+}
+
+/// Squared projected reactant frequency `omega_0^2 = 1 / (n^T H^-1 n)`.
+///
+/// `H` is the mass-weighted Hessian at the first path image and `n` the unit
+/// mass-weighted path tangent there. `H u = n` is solved by conjugate
+/// gradients. The products are central differences of
+/// [`DynamicsEngine::energy_and_forces`], so the solve stays generic over the
+/// engine trait. [`rgsaddle::numerical_hvp`] is not used: it requires a
+/// shared [`rgsaddle::PointSurface`], and this path only has a
+/// [`DynamicsEngine`]. The translation modes removed from `n` and from each
+/// Hessian product are the modes [`classified_translation_modes`] accepts, and
+/// the mean-force Jacobian removes that same list.
+#[cfg(test)]
+fn reactant_curvature<E: DynamicsEngine + ?Sized>(
+    engine: &mut E,
+    geometry: &PlaneGeometry,
+    translation_invariance: Option<[bool; 3]>,
+) -> Result<f64, FluxError> {
+    let root_mass: Array1<f64> = engine.masses().mapv(f64::sqrt);
+    let origin = geometry.anchor.clone();
+    let translation_modes =
+        classified_translation_modes(engine, &origin, &root_mass, translation_invariance)?;
+    curvature_with_modes(engine, geometry, &translation_modes)
+}
+
+fn curvature_with_modes<E: DynamicsEngine + ?Sized>(
+    engine: &mut E,
+    geometry: &PlaneGeometry,
+    translation_modes: &[Array1<f64>],
+) -> Result<f64, FluxError> {
+    let dof = engine.dof();
+    let root_mass: Array1<f64> = engine.masses().mapv(f64::sqrt);
+    let origin = geometry.anchor.clone();
     let remove_translations = |vector: &mut Array1<f64>| {
-        for translation in &translation_modes {
+        for translation in translation_modes {
             let component = dot(vector.view(), translation.view());
             vector.scaled_add(-component, translation);
         }
@@ -2432,13 +2497,28 @@ pub fn pafi_profile<E: DynamicsEngine + ?Sized>(
         }
         let reactant_hessian_certified =
             ensure_reactant_minimum(engine, geometries[0].anchor.view())?;
-        let curvature = reactant_curvature(engine, &geometries[0], config.translation_invariance)?;
+        let root_mass = engine.masses().mapv(f64::sqrt);
+        let origin = geometries[0].anchor.clone();
+        let translation_modes = classified_translation_modes(
+            engine,
+            &origin,
+            &root_mass,
+            config.translation_invariance,
+        )?;
+        let curvature = curvature_with_modes(engine, &geometries[0], &translation_modes)?;
 
         let mut plane_samples = vec![Vec::new(); geometries.len()];
         let mut final_profile = None;
         for round in 0..config.max_rounds {
             for (plane_index, geometry) in geometries.iter().enumerate() {
-                let samples = sample_plane(engine, geometry, config, plane_index, round)?;
+                let samples = sample_plane(
+                    engine,
+                    geometry,
+                    config,
+                    plane_index,
+                    round,
+                    &translation_modes,
+                )?;
                 plane_samples[plane_index].extend(samples);
             }
             let estimates: Vec<PlaneEstimate> = plane_samples
@@ -3534,11 +3614,16 @@ pub fn pafi_profile_adaptive<E: DynamicsEngine + ?Sized>(
         }
         let reactant_hessian_certified =
             ensure_reactant_minimum(engine, ref_geometries[0].anchor.view())?;
-        let reactant_curvature = reactant_curvature(
+        let root_mass = engine.masses().mapv(f64::sqrt);
+        let origin = ref_geometries[0].anchor.clone();
+        let translation_modes = classified_translation_modes(
             engine,
-            &ref_geometries[0],
+            &origin,
+            &root_mass,
             config.base.translation_invariance,
         )?;
+        let reactant_curvature =
+            curvature_with_modes(engine, &ref_geometries[0], &translation_modes)?;
 
         let initial_map = match config.monitor {
             MonitorKind::ForceGradient => EquidistributionMap::from_inputs(
@@ -3589,6 +3674,7 @@ pub fn pafi_profile_adaptive<E: DynamicsEngine + ?Sized>(
                         &config.base,
                         record.uid,
                         record.rounds_completed,
+                        &translation_modes,
                     )?;
                     force_calls += 1 + config.base.burn_in_steps + config.base.sample_steps;
                     record.samples.extend(samples);
@@ -3652,6 +3738,7 @@ pub fn pafi_profile_adaptive<E: DynamicsEngine + ?Sized>(
                                 &config.base,
                                 record.uid,
                                 record.rounds_completed,
+                                &translation_modes,
                             )?;
                             force_calls += 1 + config.base.burn_in_steps + config.base.sample_steps;
                             record.samples.extend(samples);
@@ -4342,7 +4429,7 @@ mod tests {
         engine
             .set_positions(middle.anchor.view())
             .expect("set anchor");
-        let projected = projected_force_sample(&engine, middle, 2.0).expect("projected force");
+        let projected = projected_force_sample(&engine, middle, 2.0, &[]).expect("projected force");
         assert_abs_diff_eq!(projected, 2.0 * middle.dc_ds, epsilon = f64::EPSILON);
         assert!((middle.dc_ds - 1.0).abs() > 0.1);
     }
@@ -6903,5 +6990,118 @@ mod tests {
             .with_zero_temperature_tol(1.0);
         let profile = pafi_profile(&mut engine, path.view(), &config).expect("accepted");
         assert!(profile.reactant_frequency > 0.0);
+    }
+
+    #[test]
+    fn projected_force_drops_a_rigid_translation() {
+        let mut engine = NativeEngine::new(
+            IsotropicPair { stiffness: 3.25 },
+            NativeConfig::default().with_masses(Array1::ones(6)),
+        )
+        .expect("engine");
+        let mut dn_ds = Array1::zeros(6);
+        dn_ds[0] = 0.4;
+        let mut tangent = Array1::zeros(6);
+        tangent[0] = 1.0;
+        let geometry = PlaneGeometry {
+            anchor: Array1::zeros(6),
+            normal: tangent.clone(),
+            dn_ds,
+            dc_ds: 1.0,
+            tangent,
+            arc: 0.0,
+        };
+        let mut local = Array1::zeros(6);
+        local[0] = 0.3;
+        local[4] = 0.05;
+        let root_mass = engine.masses().mapv(f64::sqrt);
+        let origin = geometry.anchor.clone();
+        let modes = classified_translation_modes(&mut engine, &origin, &root_mass, None)
+            .expect("translation modes");
+        assert_eq!(modes.len(), 3);
+        engine.set_positions(local.view()).expect("local");
+        let local_force =
+            projected_force_sample(&engine, &geometry, 1.0, &modes).expect("local force");
+        let mut shifted = local.clone();
+        for atom in 0..2 {
+            shifted[3 * atom] += 4.0;
+            shifted[3 * atom + 1] -= 2.5;
+        }
+        engine.set_positions(shifted.view()).expect("shifted");
+        let shifted_force =
+            projected_force_sample(&engine, &geometry, 1.0, &modes).expect("shifted force");
+        let raw = |positions: &Array1<f64>| -> f64 {
+            positions
+                .iter()
+                .zip(geometry.dn_ds.iter())
+                .map(|(left, right)| left * right)
+                .sum()
+        };
+        assert!(
+            (raw(&local) - raw(&shifted)).abs() > 1.0,
+            "the unprojected Jacobian must see the rigid shift"
+        );
+        assert!(
+            (local_force - shifted_force).abs() <= 1.0e-12,
+            "rigid translation changed the projected force: local {local_force} shifted {shifted_force}"
+        );
+        assert_abs_diff_eq!(local_force, 0.94, epsilon = 1.0e-12);
+    }
+
+    #[test]
+    fn projected_force_keeps_a_tethered_shift() {
+        let mut engine = NativeEngine::new(
+            TetheredPair {
+                first_stiffness: 1.0,
+                second_stiffness: 3.0,
+                coupling: 0.25,
+            },
+            NativeConfig::default().with_masses(Array1::ones(6)),
+        )
+        .expect("engine");
+        let shift = 0.3_f64;
+        let mut positions = Array1::zeros(6);
+        for atom in 0..2 {
+            positions[3 * atom] = shift;
+        }
+        let mut dn_ds = Array1::zeros(6);
+        dn_ds[0] = 0.4;
+        let mut tangent = Array1::zeros(6);
+        tangent[0] = 1.0;
+        let geometry = PlaneGeometry {
+            anchor: Array1::zeros(6),
+            normal: tangent.clone(),
+            dn_ds,
+            dc_ds: 1.0,
+            tangent,
+            arc: 0.0,
+        };
+        let root_mass = engine.masses().mapv(f64::sqrt);
+        let origin = geometry.anchor.clone();
+        let modes = classified_translation_modes(&mut engine, &origin, &root_mass, None)
+            .expect("translation modes");
+        assert!(
+            modes.is_empty(),
+            "tethers to fixed points are not zero modes"
+        );
+        engine.set_positions(positions.view()).expect("shift");
+        let force = projected_force_sample(&engine, &geometry, 1.0, &modes).expect("force");
+        let correct = 1.0 - shift * 0.4;
+        assert_abs_diff_eq!(force, correct, epsilon = 1.0e-12);
+        assert!((force - 1.0).abs() > 0.1);
+        let declared = classified_translation_modes(
+            &mut engine,
+            &origin,
+            &root_mass,
+            Some([true, true, true]),
+        )
+        .expect("declared modes");
+        assert_eq!(declared.len(), 3);
+        let stripped =
+            projected_force_sample(&engine, &geometry, 1.0, &declared).expect("declared force");
+        assert_abs_diff_eq!(stripped, 1.0, epsilon = 1.0e-12);
+        let curvature = reactant_curvature(&mut engine, &geometry, None).expect("soft tether");
+        assert_abs_diff_eq!(curvature, 16.0 / 13.0, epsilon = 1.0e-6);
+        assert!((curvature - 2.0).abs() > 0.4);
     }
 }
