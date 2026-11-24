@@ -1,0 +1,1 @@
+Add the =cu_reference= module packaging the Daw and Chandross Table II copper vacancy mobility parameters (190 Angstrom^2/ps and 0.67 eV), =published_copper_mobility=, =published_mobility_a2_per_ps=, =mobility_a2_per_ps=, =run_npt_lattice=, and =cu_vacancy_comparison=, while refusing until =rgpot-core= exports EAM table constructors.

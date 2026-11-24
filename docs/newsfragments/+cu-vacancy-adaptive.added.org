@@ -1,0 +1,1 @@
+Add the =cu_vacancy_adaptive= example exercising =cu_reference::cu_vacancy_comparison= as an explicit diagnostic until =rgpot-core= exports =eam_table_from_file= and =eam_table_from_data=.
