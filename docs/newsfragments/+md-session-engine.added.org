@@ -1,0 +1,6 @@
+Added =engine::md_session::MdSessionEngine= (feature =rgpot-md-session=), a live
+engine over =rgpot_core::md_session=. It scales masses so kinetic and thermal
+energies are both in eV, starts a new random stream with every new state,
+returns the hyperplane multiplier of every step, and refuses a hyperplane normal
+that does not translate rigid groups as a whole. The =session_pafi= example
+samples one plane of a straight solvent-translation path.

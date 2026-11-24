@@ -38,6 +38,9 @@ rgpot = ["dep:rgpot-core"]
 # Engine-agnostic MD session adapter wrapping rgpot's MdSession / CAbiMdSession
 # contract ("openmm", "nblib", "lammps").
 rgpot-session = ["dep:rgpot-core"]
+# Live MD sessions over rgpot_core::md_session. Needs an rgpot-core release
+# that carries the module.
+rgpot-md-session = ["rgpot-session", "rgpot-core/profile"]
 # Direct lammpc-backed DynamicsEngine over lammpc_session_* C ABI. Only this
 # engine uses the Cap'n Proto profile wire format, so only it enables the
 # rgpot-core `profile` and `schema` features, whose build script needs the
@@ -72,3 +75,7 @@ pkg-config = "0.3"
 # The PAFI analytic tests integrate millions of Langevin steps. Optimized
 # code keeps them fast while debug assertions and overflow checks stay on.
 opt-level = 2
+
+[[example]]
+name = "session_pafi"
+required-features = ["rgpot-md-session"]
