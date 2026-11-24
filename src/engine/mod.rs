@@ -175,14 +175,17 @@ where
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct ThermostatConfig {
-    /// Langevin friction coefficient `gamma >= 0` in inverse time units (`0` gives NVE).
+    /// Langevin friction coefficient `gamma >= 0` in inverse time units
+    /// (`0` with white noise gives NVE).
     ///
-    /// Samplers that average a constrained force as a canonical expectation,
-    /// [`crate::hyperplane::sample_hyperplane`],
+    /// With white noise, samplers that average a constrained force as a
+    /// canonical expectation, [`crate::hyperplane::sample_hyperplane`],
     /// [`crate::ohtst::optimize_hyperplane`], and [`crate::pafi::pafi_profile`],
     /// require `gamma > 0` and return [`FluxError::InvalidConfig`] otherwise.
-    /// Within that range the sampled mean does not depend on `gamma`; only
-    /// the statistical error and the burn-in needed do.
+    /// A colored-noise model may provide canonical sampling independently of
+    /// `gamma`, but each engine must implement that model or reject it. Within
+    /// a supported canonical regime the sampled mean does not depend on
+    /// `gamma`; only the statistical error and the burn-in needed do.
     ///
     /// Default: `1.0`.
     pub gamma: f64,

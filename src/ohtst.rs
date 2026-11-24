@@ -60,10 +60,12 @@
 //! - Positive barrier `ΔV > 0` above the reactant minimum and positive harmonic
 //!   reactant curvature `κ > 0` at the probe offset `c_probe`.
 //! - Strictly positive thermal energy `k_B * T > 0` and masses `m_i > 0`.
-//! - Positive Langevin friction `gamma > 0`, because the curvature probe is a
-//!   canonical constrained-force expectation. `gamma == 0` (NVE) makes
-//!   [`optimize_hyperplane`] return [`FluxError::InvalidConfig`] before the
-//!   engine is snapshotted or the search starts.
+//! - A supported canonical thermostat, because the curvature probe is a
+//!   canonical constrained-force expectation. White noise requires positive
+//!   Langevin friction `gamma > 0`; a supported colored-noise thermostat can
+//!   sample canonically with `gamma == 0`. NVE makes [`optimize_hyperplane`]
+//!   return [`FluxError::InvalidConfig`] before the engine is snapshotted or
+//!   the search starts.
 //!
 //! ## Tolerances
 //!
@@ -387,15 +389,16 @@ fn relaxed_reactant<E: DynamicsEngine + ?Sized>(
 /// surface. Otherwise the offset walks along the normal to the first
 /// normal-force zero. The reactant curvature is `κ = ⟨λ⟩ / δ` from a
 /// constrained sample a distance `δ` from the minimum toward that surface.
-/// That sample is a canonical average, so `gamma == 0` (NVE) returns
-/// [`FluxError::InvalidConfig`] before the engine is snapshotted or the
-/// search starts.
+/// That sample is a canonical average, so an NVE thermostat returns
+/// [`FluxError::InvalidConfig`] before the engine is snapshotted or the search
+/// starts. White noise with `gamma == 0` is NVE; a supported colored-noise
+/// thermostat can remain canonical at zero `gamma`.
 ///
 /// # Errors
 ///
 /// - [`FluxError::InvalidConfig`] when a [`OhtstConfig`] field violates its
-///   bounds, the engine thermostat friction is `0` (NVE dynamics, which does
-///   not sample the canonical ensemble), thermal energy `k_B * T <= 0`, the
+///   bounds, the engine thermostat does not provide canonical sampling,
+///   thermal energy `k_B * T <= 0`, the
 ///   flux-mass metric from [`rgsaddle::flux_mass`] is non-finite or
 ///   non-positive, no reactant minimum along `seed_plane.normal` is found
 ///   within the escape budget, no

@@ -2397,8 +2397,9 @@ fn path_force_relative_error(arcs: &[f64], energies: &[f64], gradients: &[f64]) 
 /// - `path_images` has fewer than two rows, or two neighbouring images
 ///   coincide in the mass-weighted metric,
 /// - the thermal energy `k_B T` of the engine is not positive,
-/// - the thermostat friction is `0`, which is NVE dynamics and does not
-///   sample the canonical ensemble the plane means are defined over,
+/// - the thermostat does not provide canonical sampling; white noise with
+///   zero friction is NVE, while a supported colored-noise thermostat may
+///   remain canonical at zero friction,
 /// - the zero-temperature check of [`PafiConfig::zero_temperature_tol`] fails,
 /// - a plane normal degenerates, the mass-weighted Hessian at the first image
 ///   is not positive definite once zero modes are excluded when `dof <= 128`,

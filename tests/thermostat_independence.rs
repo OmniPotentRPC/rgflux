@@ -10,10 +10,12 @@
 //!   enforced and not what is sampled,
 //! - the temperature, where the reference moves with `k_B T` and the same
 //!   estimator has to follow it,
-//! - the NVE choice, `gamma == 0`. NVE samples an energy shell started at the
-//!   anchor and not the canonical ensemble, so `sample_hyperplane` and
-//!   `pafi_profile` must refuse it. Before that check they accepted it and
-//!   returned a biased number; every test below asserts the refusal.
+//! - the white-noise NVE choice, `gamma == 0`. NVE samples an energy shell
+//!   started at the anchor and not the canonical ensemble, so
+//!   `sample_hyperplane` and `pafi_profile` must refuse it. Before that check
+//!   they accepted it and returned a biased number; every test below asserts
+//!   the refusal. The smart-sampling GLE remains thermostatted at zero
+//!   `gamma`.
 //!
 //! What the references are:
 //!
