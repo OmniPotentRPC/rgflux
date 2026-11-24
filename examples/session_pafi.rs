@@ -8,7 +8,8 @@
 //!
 //! SOLUTE is the number of leading atoms the path leaves in place. The solvent
 //! is rigid three-site molecules. The plane sits AXIS_SHIFT_A from the starting
-//! configuration; the system is first pulled there at 1 A per 10 ps.
+//! configuration; the system is first pulled there in 0.005 A stages of 50
+//! steps. PAFI_DT_PS sets the time step, 0.001 ps when it is unset.
 use std::io::Write;
 
 use ndarray::Array1;
@@ -18,7 +19,6 @@ use rgflux::stats::{StatsConfig, batch_means};
 use rgpot_core::md_session::CAbiMdSession;
 
 const KB: f64 = 8.617_333_262e-5;
-const DT: f64 = 0.001;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let a: Vec<String> = std::env::args().collect();
@@ -26,6 +26,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let shift: f64 = a[4].parse()?;
     let (burn, sample): (usize, usize) = (a[5].parse()?, a[6].parse()?);
     let seed: u64 = a[7].parse()?;
+    let dt: f64 = std::env::var("PAFI_DT_PS")
+        .map_or(Ok(0.001), |text| text.parse())?;
     let threads = std::env::var("OMP_NUM_THREADS").unwrap_or_else(|_| "1".into());
     // SAFETY: the engine is built from the rgpot tree this crate links.
     let session = unsafe {
@@ -72,11 +74,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for k in 1..=stages {
         let offset = start + scale * shift * k as f64 / stages as f64;
         engine.set_constraint(Some(HyperplaneConstraint::new(normal.clone(), offset)?))?;
-        engine.run(DT, 50)?;
+        engine.run(dt, 50)?;
     }
     let offset = start + scale * shift;
     engine.set_constraint(Some(HyperplaneConstraint::new(normal.clone(), offset)?))?;
-    engine.run(DT, burn)?;
+    engine.run(dt, burn)?;
     let mut series = Vec::with_capacity(sample);
     let mut heat = 0.0;
     let mut out = std::io::BufWriter::new(std::fs::File::create(format!(
@@ -85,12 +87,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut chunks = 0.0;
     while series.len() < sample {
         // dF/ds = lambda * dc/ds in eV per Angstrom of solvent displacement.
-        let chunk = engine.run(DT, 1000)?;
+        let chunk = engine.run(dt, 1000)?;
         let mean = chunk.iter().sum::<f64>() / chunk.len() as f64;
         writeln!(out, "{} {}", series.len(), mean * scale)?;
         series.extend(chunk.iter().map(|l| l * scale));
         heat += engine.kinetic_energy();
         chunks += 1.0;
+        out.flush()?;
     }
     out.flush()?;
     let mut last = std::fs::File::create(format!("last_{shift:+.3}_{seed}.txt"))?;
