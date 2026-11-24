@@ -31,8 +31,9 @@ crate-type = ["lib"]
 
 [features]
 default = []
-# Static PES adapter over rgpot-core's DLPack potential callback ABI,
-# consumed by the native BAOAB integrator.
+# Static PES adapter over the published rgpot-core DLPack callback ABI,
+# consumed by the native BAOAB integrator. Concrete potentials must be
+# supplied as rgpot-core PotentialImpl handles.
 rgpot = ["dep:rgpot-core"]
 # Engine-agnostic MD session adapter wrapping rgpot's MdSession / CAbiMdSession
 # contract ("openmm", "nblib", "lammps").

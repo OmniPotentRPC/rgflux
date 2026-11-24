@@ -1,6 +1,7 @@
 //! Analytic validation suite for `rgflux::engine::native`.
 
 use ndarray::{Array1, ArrayView1};
+use rgflux::engine::gle::ColoredNoise;
 use rgflux::engine::native::{ConstraintProjection, NativeConfig, NativeEngine};
 use rgflux::engine::{
     DynamicsEngine, EindirSurface, HYPERPLANE_PROJECTION_TOL, HyperplaneConstraint,
@@ -323,4 +324,79 @@ fn reseed_reproduces_trajectory_and_distinguishes_streams() {
 
     assert_eq!(seq_a, seq_b);
     assert_ne!(seq_a, seq_c);
+}
+
+#[test]
+fn reseed_and_velocity_shoot_discard_gle_auxiliary_noise() {
+    let mk_engine = || {
+        NativeEngine::new(
+            AnisotropicHarmonic {
+                stiffness: [0.8, 1.5, 2.6],
+            },
+            NativeConfig::default()
+                .with_masses(Array1::from_vec(vec![1.0, 1.7, 2.3]))
+                .with_thermostat(
+                    ThermostatConfig::default()
+                        .with_temperature(0.7)
+                        .with_noise(ColoredNoise::SmartSampling),
+                ),
+        )
+        .expect("GLE engine")
+    };
+    let positions = Array1::from_vec(vec![0.2, -0.3, 0.4]);
+    let velocities = Array1::from_vec(vec![0.5, -0.1, 0.25]);
+    let state_bits = |engine: &NativeEngine<_>| {
+        engine
+            .positions()
+            .iter()
+            .chain(engine.velocities())
+            .map(|value| value.to_bits())
+            .collect::<Vec<_>>()
+    };
+
+    let mut warmed = mk_engine();
+    warmed
+        .set_velocities(velocities.view())
+        .expect("warm velocity");
+    warmed.step(0.03).expect("populate GLE auxiliaries");
+    warmed
+        .set_positions(positions.view())
+        .expect("reset position");
+    warmed
+        .set_velocities(velocities.view())
+        .expect("reset velocity");
+    warmed.reseed_rng(91);
+
+    let mut fresh = mk_engine();
+    fresh
+        .set_positions(positions.view())
+        .expect("fresh position");
+    fresh
+        .set_velocities(velocities.view())
+        .expect("fresh velocity");
+    fresh.reseed(91).expect("fresh reseed");
+
+    warmed.step(0.03).expect("reseeded step");
+    fresh.step(0.03).expect("fresh step");
+    assert_eq!(state_bits(&warmed), state_bits(&fresh));
+
+    let mut warmed = mk_engine();
+    warmed
+        .set_velocities(velocities.view())
+        .expect("warm velocity");
+    warmed.step(0.03).expect("populate GLE auxiliaries");
+    warmed
+        .set_positions(positions.view())
+        .expect("reset position");
+    warmed.shoot_velocities(177).expect("shoot warmed");
+
+    let mut fresh = mk_engine();
+    fresh
+        .set_positions(positions.view())
+        .expect("fresh position");
+    fresh.shoot_velocities(177).expect("shoot fresh");
+
+    warmed.step(0.03).expect("shot step");
+    fresh.step(0.03).expect("fresh shot step");
+    assert_eq!(state_bits(&warmed), state_bits(&fresh));
 }

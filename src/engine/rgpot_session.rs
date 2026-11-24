@@ -112,6 +112,9 @@ pub struct RgpotSessionConfig {
     pub masses: Array1<f64>,
     /// Langevin thermostat configuration (`gamma` in `1/ps`, `k_B * T` in `eV`).
     ///
+    /// Only [`crate::engine::gle::ColoredNoise::White`] is supported.
+    /// Colored-noise configurations return [`FluxError::InvalidConfig`].
+    ///
     /// Default: [`ThermostatConfig::default()`].
     pub thermostat: ThermostatConfig,
     /// Optional holonomic hyperplane constraint forwarded as `(plane_point, plane_normal)`.
@@ -179,7 +182,7 @@ impl RgpotSessionEngine {
             ));
         }
         validate_masses(config.masses.view())?;
-        let _ = config.thermostat.thermal_energy()?;
+        validate_rgpot_session_thermostat(&config.thermostat)?;
         if let Some(plane) = &config.constraint {
             plane.validate()?;
             if plane.normal.len() != dof {
@@ -295,7 +298,7 @@ impl DynamicsEngine for RgpotSessionEngine {
     }
 
     fn set_thermostat(&mut self, thermostat: ThermostatConfig) -> Result<(), FluxError> {
-        let _ = thermostat.thermal_energy()?;
+        validate_rgpot_session_thermostat(&thermostat)?;
         self.config.thermostat = thermostat;
         Ok(())
     }
@@ -387,9 +390,20 @@ impl DynamicsEngine for RgpotSessionEngine {
     }
 }
 
+fn validate_rgpot_session_thermostat(thermostat: &ThermostatConfig) -> Result<(), FluxError> {
+    let _ = thermostat.thermal_energy()?;
+    if thermostat.noise != crate::engine::gle::ColoredNoise::White {
+        return Err(FluxError::InvalidConfig(
+            "RgpotSessionEngine does not support colored-noise thermostats",
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::gle::ColoredNoise;
 
     #[test]
     fn session_engine_names_and_unavailable_contract() {
@@ -422,6 +436,34 @@ mod tests {
                     if message.contains("reseed is unsupported")
             ));
         }
+    }
+
+    #[test]
+    fn colored_noise_is_rejected_at_construction_and_update() {
+        let colored = ThermostatConfig::default().with_noise(ColoredNoise::SmartSampling);
+        let construction_error =
+            RgpotSessionEngine::new(RgpotSessionConfig::default().with_thermostat(colored))
+                .expect_err("colored noise must not create a session engine");
+        assert!(matches!(
+            construction_error,
+            FluxError::InvalidConfig(
+                "RgpotSessionEngine does not support colored-noise thermostats"
+            )
+        ));
+
+        let mut engine =
+            RgpotSessionEngine::new(RgpotSessionConfig::default()).expect("white-noise engine");
+        let original = *engine.thermostat();
+        let update_error = engine
+            .set_thermostat(colored)
+            .expect_err("colored noise must not replace the active thermostat");
+        assert!(matches!(
+            update_error,
+            FluxError::InvalidConfig(
+                "RgpotSessionEngine does not support colored-noise thermostats"
+            )
+        ));
+        assert_eq!(*engine.thermostat(), original);
     }
 
     #[test]
