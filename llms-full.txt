@@ -722,6 +722,7 @@ fn main() -> Result<(), rgflux::FluxError> {
 | `default` | none | Pure-Rust `engine::native`, `stats`, `kappa`, `hyperplane`, `ohtst`, `ffs`, `pafi`, and `network` over `rgsaddle` and `rgmin` |
 | `rgpot` | `dep:rgpot-core` | Enables `engine::rgpot::RgpotSurface` and `RgpotConfig` over `rgpot_core::potential::PotentialImpl` DLPack callbacks |
 | `rgpot-session` | `dep:rgpot-core` | Enables `engine::rgpot_session::RgpotSessionEngine`, `RgpotSessionConfig`, and `SessionEngineKind` (`OpenMm`, `NbLib`, `Lammps`) |
+| `rgpot-md-session` | `rgpot-session`, `rgpot-core/profile` | Enables `engine::md_session::MdSessionEngine` over a live `rgpot_core::md_session::MdSession` |
 | `lammpc` | `dep:rgpot-core`, `dep:capnp` | Enables `engine::lammpc::LammpcEngine`, `LammpcConfig`, and `MASS_VELOCITY_TO_EV` over `liblammpc` (`lammpc_session_*`) |
 
 ## Configuration structs and field defaults
@@ -796,6 +797,12 @@ Constructors and methods: `HyperplaneConstraint::new(normal, offset)`, `from_dir
 | `constraint` | `Option<HyperplaneConstraint>` | `None` | Optional hyperplane constraint forwarded to `rgpot_md_session_step_langevin` |
 | `cell` | `Option<[f64; 9]>` | `None` | Optional row-major \(3 \times 3\) periodic box in Å |
 | `seed` | `u64` | `1` | Deterministic 64-bit PRNG seed |
+
+### `engine::md_session::MdSessionEngine` (feature `rgpot-md-session`)
+
+`MdSessionEngine::new(session, thermostat)` takes over an `MdSession` at its state. Units are Å, ps and eV, with masses scaled by `AMU_A2_PS2_PER_EV`.
+`run(dt, steps)` advances in one call and returns the plane multiplier of each step. `session()` borrows the session.
+`check_rigid_translation(normal, groups)` refuses a hyperplane normal that does not translate each rigid group as a whole, because the mean multiplier then needs a metric weight.
 
 ### `stats::StatsConfig`
 
