@@ -243,8 +243,11 @@ fn restart_continues_at_the_stored_step_and_rejects_another_start() {
     assert_eq!(first.bias.last_step(), Some(30_025));
     let mut state = Vec::new();
     first.bias.write_state(&mut state, 300.25).expect("write");
-    let restored =
-        OpesMultithermal::from_state(ladder(), &thermostat, &state[..]).expect("restore");
+    // print_stride 1 records every update, so the history lists the
+    // steps the bias absorbed.
+    let every_update = ladder().with_print_stride(1);
+    let restored = OpesMultithermal::from_state(every_update.clone(), &thermostat, &state[..])
+        .expect("restore");
     assert_eq!(restored.last_step(), Some(30_025));
 
     let shared = SharedOpesMultithermal::new(restored.clone());
@@ -265,6 +268,9 @@ fn restart_continues_at_the_stored_step_and_rejects_another_start() {
     assert_eq!(resumed.steps[0], 30_025);
     assert_eq!(resumed.last_step, 30_125);
     assert_eq!(resumed.bias.counter(), first.bias.counter() + 2);
+    // Absolute multiples of pace 50; a cadence counted from the restart
+    // would give 30_075 and 30_125 instead.
+    assert_eq!(update_steps(&resumed), [30_050, 30_100]);
     let explicit = run_opes_multithermal(
         &mut engine,
         &shared,
@@ -275,6 +281,7 @@ fn restart_continues_at_the_stored_step_and_rejects_another_start() {
     .expect("explicit start at the stored step");
     assert_eq!(explicit.steps[0], 30_125);
     assert_eq!(explicit.bias.counter(), first.bias.counter() + 4);
+    assert_eq!(update_steps(&explicit), [30_150, 30_200]);
 
     let text = String::from_utf8(state).expect("utf8");
     let plumed: String = text
@@ -287,7 +294,7 @@ fn restart_continues_at_the_stored_step_and_rejects_another_start() {
         Err(FluxError::InvalidConfig(_))
     ));
     let from_plumed = OpesMultithermal::from_plumed_state(
-        ladder(),
+        every_update,
         &thermostat,
         plumed.as_bytes(),
         T0,
@@ -317,6 +324,16 @@ fn restart_continues_at_the_stored_step_and_rejects_another_start() {
     )
     .expect("explicit start from a PLUMED state");
     assert_eq!(resumed.steps[0], 30_025);
+    assert_eq!(update_steps(&resumed), [30_050, 30_100]);
+}
+
+/// MD steps of the recorded updates; every update with `print_stride` 1.
+fn update_steps(trajectory: &OpesTrajectory) -> Vec<u64> {
+    trajectory
+        .delta_f_history
+        .iter()
+        .map(|record| record.step)
+        .collect()
 }
 
 #[test]
