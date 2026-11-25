@@ -267,7 +267,7 @@ which is the sum of the PLUMED =REWEIGHT_BIAS= and =REWEIGHT_TEMP_PRESS= log wei
 | =temperature= | =TEMP= | Simulation temperature \(T_0\); =None= takes the thermostat temperature |
 | =temp_min=, =temp_max= | =TEMP_MIN=, =TEMP_MAX= | Range ends; an unset end is \(T_0\) |
 | =temp_steps= | =TEMP_STEPS= | Fixed count. With =TemperatureSpacing::Geometric= the ratio \(T_{k+1} / T_k\) is constant; with =LinearInverse= (=NO_GEOM_SPACING=) \(\beta\) is equally spaced. One step uses the midpoint in \(\beta\) |
-| =temp_steps = None= | omitted | Count estimated from the observations: at each end the Kish effective fraction of the observations reweighted by \(e^{-\Delta u}\) halves at a half width in \(\beta - \beta_0\), found by regula falsi to \(10^{-4}\); the count is \(\lceil \lvert \Delta\beta_{\mathrm{range}} \rvert / (\text{left} + \text{right half width}) \rceil\), at least 2 |
+| =temp_steps = None= | omitted | Count estimated from the observations: at each end the Kish effective fraction of the observations reweighted by \(e^{-\Delta u}\) halves at a half width in \(\beta - \beta_0\), found by regula falsi to \(10^{-4}\); the count is \(\lceil \lvert \Delta\beta_{\mathrm{range}} \rvert / (\text{left} + \text{right half width}) \rceil\), at least 2. Equal ends, \(T_{\min} = T_{\max}\), skip the estimate and give the single temperature \(T_{\min}\) |
 | =temp_set_all= | =TEMP_SET_ALL= | Explicit non-decreasing list of at least two temperatures |
 | =pace=, =observation_steps=, =print_stride= | =PACE=, =OBSERVATION_STEPS=, =PRINT_STRIDE= | Update stride (default 500, the PLUMED example value), unbiased samples before the first bias (default 100), and updates between recorded estimates (default 100) |
 

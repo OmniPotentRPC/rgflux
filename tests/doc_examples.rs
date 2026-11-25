@@ -338,6 +338,28 @@ fn howto_opes_restart_gives_delta_f_and_rct_in_energy_units() -> Result<(), Flux
 }
 
 #[test]
+fn explanation_opes_automatic_ladder_documents_equal_range_ends() -> Result<(), FluxError> {
+    let explanation = include_str!("../docs/orgmode/explanation.org");
+    let row = org_line_starting_with(explanation, "| =temp_steps = None= |");
+    assert!(
+        row.contains("\\(T_{\\min} = T_{\\max}\\)") && row.contains("single temperature"),
+        "the automatic ladder row must state that equal ends give one temperature:\n{row}"
+    );
+
+    let thermostat = ThermostatConfig::default().with_temperature(0.8);
+    let config = OpesMultithermalConfig::range(1.2, 1.2)
+        .with_pace(1)
+        .with_observation_steps(2);
+    let mut bias = OpesMultithermal::new(config, &thermostat)?;
+    for (step, u) in [0.4, 0.1, 0.7].into_iter().enumerate() {
+        bias.update(step as u64, u)?;
+    }
+    assert!(bias.is_initialized());
+    assert_eq!(bias.temperatures().len(), 1);
+    Ok(())
+}
+
+#[test]
 fn getting_started_bennett_chandler_example_runs() -> Result<(), FluxError> {
     let trajectories = vec![
         ReactiveTrajectory::new(1.2, vec![Side::Product; 16])?,

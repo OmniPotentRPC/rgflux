@@ -2387,6 +2387,23 @@ mod tests {
     }
 
     #[test]
+    fn equal_range_ends_give_a_single_temperature() {
+        let config = OpesMultithermalConfig::range(1.2, 1.2)
+            .with_pace(1)
+            .with_observation_steps(2);
+        let mut bias = OpesMultithermal::new(config, &thermostat(0.8)).expect("bias");
+        assert_eq!(bias.temperatures().len(), 1);
+        for (step, u) in [0.4, 0.1, 0.7].into_iter().enumerate() {
+            bias.update(step as u64, u).expect("update");
+        }
+        assert!(bias.is_initialized());
+        assert_eq!(bias.delta_f().len(), 1);
+        let temperatures = bias.temperatures();
+        assert_eq!(temperatures.len(), 1);
+        assert!((temperatures[0] - 1.2).abs() <= 1e-12);
+    }
+
+    #[test]
     fn updates_ignore_a_repeated_step_and_reject_an_earlier_one() {
         let mut bias = initialized_bias();
         let counter = bias.counter();
