@@ -52,5 +52,27 @@ class ItemPathTests(unittest.TestCase):
         self.assertEqual(generate_api_inventory.item_path(line), "rgflux::foo::Alias")
 
 
+class CountTests(unittest.TestCase):
+    def test_rendered_block_states_the_item_count(self) -> None:
+        block = generate_api_inventory.render(["rgflux::opes", "rgflux::opes::OpesMultithermal"])
+        self.assertIn("This inventory lists 2 qualified public item paths.", block)
+        self.assertEqual(generate_api_inventory.stray_counts(block), [])
+
+    def test_flags_hand_written_counts_outside_the_block(self) -> None:
+        text = (
+            "Before this audit, 0 of 575 qualified public item paths were listed. "
+            "It documents 842 public Rust API items.\n"
+            + generate_api_inventory.render(["rgflux::opes"])
+        )
+        self.assertEqual(
+            generate_api_inventory.stray_counts(text),
+            ["0 of 575", "842 public Rust API items"],
+        )
+
+    def test_ignores_counts_unrelated_to_the_api(self) -> None:
+        text = "The ladder has 6 temperatures over 3 items and 2 paths."
+        self.assertEqual(generate_api_inventory.stray_counts(text), [])
+
+
 if __name__ == "__main__":
     unittest.main()

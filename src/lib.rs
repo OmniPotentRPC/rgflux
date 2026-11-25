@@ -33,6 +33,11 @@
 //!   yet implemented.
 //! - [`ffs`]: direct Forward Flux Sampling across ordered interfaces via
 //!   [`ffs::forward_flux_rate`].
+//! - [`opes`]: multithermal OPES expanded-ensemble bias on the potential
+//!   energy ([`opes::OpesMultithermal`]), its biased [`ForceSurface`]
+//!   ([`opes::OpesMultithermalSurface`]), the [`DynamicsEngine`] driver
+//!   [`opes::run_opes_multithermal`], and per-frame temperature reweighting
+//!   ([`opes::MultithermalReweighting`]).
 //! - [`network`]: symmetry-resolved kinetic networks and kMC rate tables
 //!   (`build_rate_table` is not yet implemented).
 //! - [`cu_reference`]: Daw and Chandross copper vacancy mobility. The
@@ -77,6 +82,9 @@
 //! - Goswami, R. (2026). *Reproducible orchestration of best practices for
 //!   reaction path optimization with the nudged elastic band*. MethodsX, 16,
 //!   103899. <https://doi.org/10.1016/j.mex.2026.103899>
+//! - Invernizzi, M., Piaggi, P. M., and Parrinello, M. (2020). *Unified
+//!   Approach to Enhanced Sampling*. Physical Review X, 10, 041034.
+//!   <https://doi.org/10.1103/PhysRevX.10.041034>
 //! - Daw, M. S., and Chandross, M. (2021). *Sluggish diffusion in random
 //!   equimolar FCC alloys*. Physical Review Materials, 5(4), 043603.
 //!   <https://doi.org/10.1103/PhysRevMaterials.5.043603>
@@ -94,6 +102,7 @@ pub mod hyperplane;
 pub mod kappa;
 pub mod network;
 pub mod ohtst;
+pub mod opes;
 pub mod pafi;
 pub mod stats;
 

@@ -16,6 +16,7 @@ use rgflux::ohtst::{
     OhtstConfig, ReactantMinimum, optimize_hyperplane, optimize_hyperplane_from_minimum,
     relax_reactant,
 };
+use rgflux::opes::{OpesMultithermal, OpesMultithermalConfig};
 use rgflux::pafi::{PafiConfig, pafi_profile};
 use rgflux::stats::StatsConfig;
 use std::fs;
@@ -49,7 +50,7 @@ fn org_guide_rust_blocks_compile_and_run() {
 
     let howto = include_str!("../docs/orgmode/howto.org");
     let howto_blocks = extract_rust_blocks(howto);
-    assert_eq!(howto_blocks.len(), 9, "howto.org has 9 Rust blocks");
+    assert_eq!(howto_blocks.len(), 11, "howto.org has 11 Rust blocks");
     run_extracted_blocks("howto", &howto_blocks);
 }
 
@@ -284,6 +285,78 @@ fn assert_row_contains(rows: &[String], field: &str, fragment: &str) {
         row.contains(fragment),
         "row for {field} lacks expected fragment `{fragment}`:\n{row}"
     );
+}
+
+fn org_line_starting_with<'a>(source: &'a str, prefix: &str) -> &'a str {
+    let mut matches = source.lines().filter(|line| line.starts_with(prefix));
+    let line = matches
+        .next()
+        .unwrap_or_else(|| panic!("no line starts with `{prefix}`"));
+    assert!(
+        matches.next().is_none(),
+        "several lines start with `{prefix}`"
+    );
+    line
+}
+
+#[test]
+fn howto_opes_restart_gives_delta_f_and_rct_in_energy_units() -> Result<(), FluxError> {
+    let howto = include_str!("../docs/orgmode/howto.org");
+    let line = org_line_starting_with(howto, "- \\(\\Delta F\\) and =rct= are free energies");
+    assert!(
+        !line.contains("in units of \\(k_{\\mathrm{B}}\\)"),
+        "Delta F and rct are energies, not multiples of k_B:\n{line}"
+    );
+    assert!(line.contains("energy units"), "{line}");
+
+    // Scaling U and k_B together scales Delta F and rct by the same factor.
+    let observe = |scale: f64| -> Result<(Vec<f64>, f64), FluxError> {
+        let thermostat = ThermostatConfig::default()
+            .with_boltzmann(scale)
+            .with_temperature(0.8);
+        let config = OpesMultithermalConfig::range(0.5, 2.0)
+            .with_temp_steps(4)
+            .with_pace(1)
+            .with_observation_steps(2);
+        let mut bias = OpesMultithermal::new(config, &thermostat)?;
+        for (step, u) in [0.4, 0.1, 0.7, 0.3, 0.9].into_iter().enumerate() {
+            bias.update(step as u64, scale * u)?;
+        }
+        Ok((bias.delta_f().to_vec(), bias.rct()))
+    };
+    let (delta_f, rct) = observe(1.0)?;
+    let (scaled_delta_f, scaled_rct) = observe(4.0)?;
+    assert!(rct != 0.0);
+    assert!((scaled_rct - 4.0 * rct).abs() <= 1e-12);
+    for (scaled, base) in scaled_delta_f.iter().zip(&delta_f) {
+        assert!(
+            (scaled - 4.0 * base).abs() <= 1e-12,
+            "{scaled} vs 4 * {base}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn explanation_opes_automatic_ladder_documents_equal_range_ends() -> Result<(), FluxError> {
+    let explanation = include_str!("../docs/orgmode/explanation.org");
+    let row = org_line_starting_with(explanation, "| =temp_steps = None= |");
+    assert!(
+        row.contains("\\(T_{\\min} = T_{\\max}\\)") && row.contains("single temperature"),
+        "the automatic ladder row must state that equal ends give one temperature:\n{row}"
+    );
+
+    let thermostat = ThermostatConfig::default().with_temperature(0.8);
+    let config = OpesMultithermalConfig::range(1.2, 1.2)
+        .with_pace(1)
+        .with_observation_steps(2);
+    let mut bias = OpesMultithermal::new(config, &thermostat)?;
+    for (step, u) in [0.4, 0.1, 0.7].into_iter().enumerate() {
+        bias.update(step as u64, u)?;
+    }
+    assert!(bias.is_initialized());
+    assert_eq!(bias.temperatures().len(), 1);
+    Ok(())
 }
 
 #[test]

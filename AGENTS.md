@@ -3,7 +3,8 @@
 ## Repository layout
 
 `src/` contains the Rust library. The public method modules are `pafi`,
-`ohtst`, `hyperplane`, `ffs`, `network`, `kappa`, `stats`, and `engine`.
+`ohtst`, `hyperplane`, `ffs`, `opes`, `network`, `kappa`, `stats`, and
+`engine`.
 Optional engine adapters live below `src/engine/`. Integration tests are in
 `tests/`. Canonical documentation sources are Org files in `docs/orgmode/`.
 Files in `docs/source/` are Sphinx support files and exported documentation
