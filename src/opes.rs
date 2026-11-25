@@ -401,7 +401,10 @@ impl OpesMultithermal {
     /// Build an uninitialized bias at the simulation temperature `T0`.
     ///
     /// `k_B` comes from `thermostat`, and `T0` from
-    /// [`OpesMultithermalConfig::temperature`] or the thermostat.
+    /// [`OpesMultithermalConfig::temperature`] or the thermostat. A target
+    /// temperature so far from `T0` that `beta_k - beta0`, or the
+    /// temperature recovered from it, is not finite returns
+    /// [`FluxError::NonFinite`].
     pub fn new(
         config: OpesMultithermalConfig,
         thermostat: &ThermostatConfig,
@@ -1049,9 +1052,25 @@ fn initial_ladder(
     temp0: f64,
     kbt: f64,
 ) -> Result<(Vec<f64>, bool), FluxError> {
-    let der_of = |t: f64| (temp0 / t - 1.0) / kbt;
+    // Valid temperatures far from T0 can overflow T0 / T or the division
+    // by k_B T0, or lose T in the rounding of T0 / (der k_B T0 + 1).
+    let der_of = |t: f64| {
+        let der = (temp0 / t - 1.0) / kbt;
+        let back = temp0 / (der * kbt + 1.0);
+        if der.is_finite() && back.is_finite() && back > 0.0 {
+            Ok(der)
+        } else {
+            Err(FluxError::NonFinite(
+                "OPES target temperature gives a non-finite beta_k - beta0",
+            ))
+        }
+    };
     if let Some(temps) = &config.temp_set_all {
-        return Ok((temps.iter().map(|&t| der_of(t)).collect(), false));
+        let der = temps
+            .iter()
+            .map(|&t| der_of(t))
+            .collect::<Result<Vec<_>, _>>()?;
+        return Ok((der, false));
     }
     let temp_min = config.temp_min.unwrap_or(temp0);
     let temp_max = config.temp_max.unwrap_or(temp0);
@@ -1060,8 +1079,8 @@ fn initial_ladder(
             "OPES temp_max must not be below temp_min",
         ));
     }
-    let lo = der_of(temp_min);
-    let hi = der_of(temp_max);
+    let lo = der_of(temp_min)?;
+    let hi = der_of(temp_max)?;
     let steps = match config.temp_steps {
         Some(n) => Some(n),
         None if temp_min == temp_max => Some(1),
@@ -2384,6 +2403,44 @@ mod tests {
             .with_temperature(1e-160);
         let bias = OpesMultithermal::new(config, &finite).expect("k_B T0 = 1e-300");
         assert!(bias.temperatures().iter().all(|t| t.is_finite()));
+    }
+
+    #[test]
+    fn new_rejects_a_target_temperature_whose_beta_offset_overflows() {
+        let message = Some(FluxError::NonFinite(
+            "OPES target temperature gives a non-finite beta_k - beta0",
+        ));
+        // k_B T0 = 1, so T0 / T = 1e310 overflows at T = 1e-10.
+        let cold = ThermostatConfig::default()
+            .with_boltzmann(1e-300)
+            .with_temperature(1e300);
+        for config in [
+            OpesMultithermalConfig::range(1e-10, 1.0).with_temp_steps(3),
+            OpesMultithermalConfig::range(1e-10, 1.0)
+                .with_temp_steps(3)
+                .with_spacing(TemperatureSpacing::LinearInverse),
+            OpesMultithermalConfig::range(1e-10, 1.0),
+            OpesMultithermalConfig::set_all(vec![1e-10, 1.0]),
+        ] {
+            assert_eq!(OpesMultithermal::new(config, &cold).err(), message);
+        }
+        // k_B T0 = 1, so T0 / T = 1e-310 rounds away in T0 / T - 1 and the
+        // recovered temperature is infinite.
+        let hot = ThermostatConfig::default()
+            .with_boltzmann(1e300)
+            .with_temperature(1e-300);
+        assert_eq!(
+            OpesMultithermal::new(OpesMultithermalConfig::set_all(vec![1.0, 1e10]), &hot).err(),
+            message
+        );
+        let bias = OpesMultithermal::new(
+            OpesMultithermalConfig::range(1e290, 1e300).with_temp_steps(3),
+            &cold,
+        )
+        .expect("T0 / T = 1e10");
+        let temperatures = bias.temperatures();
+        assert!((temperatures[0] / 1e290 - 1.0).abs() <= 1e-12);
+        assert!((temperatures[2] / 1e300 - 1.0).abs() <= 1e-12);
     }
 
     #[test]
