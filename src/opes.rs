@@ -401,7 +401,9 @@ impl OpesMultithermal {
     /// Build an uninitialized bias at the simulation temperature `T0`.
     ///
     /// `k_B` comes from `thermostat`, and `T0` from
-    /// [`OpesMultithermalConfig::temperature`] or the thermostat. A target
+    /// [`OpesMultithermalConfig::temperature`] or the thermostat; only these
+    /// two thermostat values are checked, and the thermostat temperature
+    /// only when the configuration does not override it. A target
     /// temperature so far from `T0` that `beta_k - beta0`, or the
     /// temperature recovered from it, is not finite returns
     /// [`FluxError::NonFinite`], and so does a ladder whose spacing
@@ -411,9 +413,19 @@ impl OpesMultithermal {
         thermostat: &ThermostatConfig,
     ) -> Result<Self, FluxError> {
         config.validate()?;
-        let _ = thermostat.thermal_energy()?;
         let boltzmann = thermostat.boltzmann;
+        if !boltzmann.is_finite() {
+            return Err(FluxError::NonFinite("ThermostatConfig::boltzmann"));
+        }
+        if boltzmann <= 0.0 {
+            return Err(FluxError::InvalidConfig(
+                "ThermostatConfig::boltzmann must be positive",
+            ));
+        }
         let temperature = config.temperature.unwrap_or(thermostat.temperature);
+        if !temperature.is_finite() {
+            return Err(FluxError::NonFinite("OPES simulation temperature"));
+        }
         if temperature <= 0.0 {
             return Err(FluxError::InvalidConfig(
                 "OPES simulation temperature must be positive",
@@ -2499,6 +2511,30 @@ mod tests {
             .with_temperature(1e-160);
         let bias = OpesMultithermal::new(config, &finite).expect("k_B T0 = 1e-300");
         assert!(bias.temperatures().iter().all(|t| t.is_finite()));
+    }
+
+    #[test]
+    fn new_checks_only_the_simulation_temperature_it_uses() {
+        let config = OpesMultithermalConfig::range(0.5, 2.0).with_temp_steps(3);
+        for unused in [f64::NAN, f64::INFINITY, -1.0, 0.0] {
+            let bias =
+                OpesMultithermal::new(config.clone().with_temperature(0.8), &thermostat(unused))
+                    .expect("the configured T0 replaces the thermostat temperature");
+            assert_eq!(bias.temperature(), 0.8);
+        }
+        assert_eq!(
+            OpesMultithermal::new(config.clone(), &thermostat(f64::NAN)).err(),
+            Some(FluxError::NonFinite("OPES simulation temperature"))
+        );
+        assert!(matches!(
+            OpesMultithermal::new(config.clone(), &thermostat(-1.0)),
+            Err(FluxError::InvalidConfig(_))
+        ));
+        let bad_kb = thermostat(0.8).with_boltzmann(f64::NAN);
+        assert_eq!(
+            OpesMultithermal::new(config.with_temperature(0.8), &bad_kb).err(),
+            Some(FluxError::NonFinite("ThermostatConfig::boltzmann"))
+        );
     }
 
     #[test]
