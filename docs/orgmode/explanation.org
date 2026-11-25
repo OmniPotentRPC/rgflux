@@ -220,6 +220,66 @@ Correlated MD and Markov-chain observables underestimate uncertainty when treate
 - =stats::batch_means= partitions a series of length \(n\) into \(a\) non-overlapping batches of width \(b\) (automatically choosing \(\max(\lceil 2\tau_{\mathrm{int}} \rceil, \lfloor \sqrt{n} \rfloor)\) subject to =min_batches= when =batch_size= is =None=) @@rst::cite:`flegalMcmcThirdSignificantFigure2008`@@. Series whose spread from the first sample lies within \(\text{SERIES\_FLAT\_TOL}\,(1 + |x_0|)\) return \(x_0\) directly with zero standard error so repeated non-dyadic IEEE-754 floats are never rounded to a neighboring value by summation.
 - =stats::check_stationarity= compares the leading =stationarity_first_fraction= (\(0.25\)) and trailing =stationarity_last_fraction= (\(0.50\)) sub-windows via Geweke's two-window \(z\)-score @@rst::cite:`gewekeEvaluatingAccuracy1992,choderaAutomatedEquilibration2016`@@ alongside the ordinary-least-squares linear drift slope.
 
+* Multithermal OPES (=opes=)
+
+** Theory
+
+On-the-fly probability enhanced sampling with an expanded-ensemble target @@rst::cite:`invernizziUnifiedApproach2020,invernizziRethinkingMetadynamics2020`@@ builds a bias whose stationary distribution is a uniform mixture of ensembles. In the multithermal case the ensembles are canonical at \(T_1 \le \dots \le T_N\), the run is thermostatted at \(T_0\), and \(\beta = 1 / (k_{\mathrm{B}} T)\). The expansion collective variables are
+
+\[
+\Delta u_k(\mathbf{x}) = (\beta_k - \beta_0)\, U(\mathbf{x}),
+\]
+
+with \(U\) the potential energy. After \(n\) updates the bias is
+
+\[
+V_n(U) = -\frac{1}{\beta_0} \ln \Biggl[ \frac{1}{N} \sum_{k=1}^{N} \exp\bigl(-\Delta u_k + \beta_0 \Delta F_n(k)\bigr) \Biggr],
+\]
+
+and the free-energy differences are the reweighted estimates over the samples taken every =pace= steps,
+
+\[
+e^{-\beta_0 \Delta F_n(k)} = \frac{\sum_{t \le n} e^{\beta_0 V_t}\, e^{-\Delta u_k(t)}}{\sum_{t \le n} e^{\beta_0 V_t}},
+\]
+
+where \(V_t\) is the bias in force when sample \(t\) was taken. At convergence \(\Delta F(k) = -\beta_0^{-1} \ln \bigl( Z(\beta_k) / Z(\beta_0) \bigr)\) with configurational partition functions \(Z\), in energy units as in the PLUMED =DELTAFS= file. Before the first update, \(\Delta F\) is initialized from =observation_steps= unbiased samples by the same expression with \(V_t = 0\), and that initialization counts as one sample in later updates. =rgflux= updates \(\Delta F\) with the incremental log-sum-exp recursion of PLUMED's =OPES_EXPANDED=, including the running constant \(\mathrm{rct} = \beta_0^{-1} \ln \langle e^{\beta_0 V} \rangle\), which matters only for restarts.
+
+The bias depends on the coordinates only through \(U\). With \(\mathbf{F} = -\nabla U\),
+
+\[
+-\nabla \bigl(U + V(U)\bigr) = \Bigl(1 + \frac{dV}{dU}\Bigr) \mathbf{F}, \qquad 1 + \frac{dV}{dU} = \sum_{k} w_k \frac{\beta_k}{\beta_0}, \qquad w_k = \frac{e^{-\Delta u_k + \beta_0 \Delta F(k)}}{\sum_j e^{-\Delta u_j + \beta_0 \Delta F(j)}},
+\]
+
+so the biased force is the unbiased force scaled by the mixture average of \(\beta_k / \beta_0\), and no collective variable gradient is needed. The factor lies between \(\beta_N / \beta_0\) and \(\beta_1 / \beta_0\). PLUMED applies the same factor in its =ENERGY= action as \(1 - f_U\), where \(f_U = -dV/dU\) is the force on the energy value. =OpesMultithermalSurface= returns \(U + V(U)\) as the engine energy and \((1 + dV/dU)\mathbf{F}\) as the force, so the two are an exact energy and gradient pair.
+
+A frame sampled with bias \(V_t\) reweights to any \(T \in [T_1, T_N]\) with
+
+\[
+\ln w_t(T) = \beta_0 V_t + (\beta_0 - \beta) U_t,
+\]
+
+which is the sum of the PLUMED =REWEIGHT_BIAS= and =REWEIGHT_TEMP_PRESS= log weights @@rst::cite:`tribelloPlumed2014,plumedConsortium2019`@@. =MultithermalReweighting::delta_f= applies the same weights to give \(\Delta F(T)\) at any temperature in the range. The reweighted mean \(\bar{A} = \sum_t w_t A_t\) is a ratio estimator. Its standard error is the batch-means error of \(n w_t (A_t - \bar{A})\), the linearization of that ratio, so the correlation between frames enters through =stats::batch_means=. The Kish effective sample size \((\sum_t w_t)^2 / \sum_t w_t^2\) @@rst::cite:`kishSurveySampling1965`@@ reports how many independent frames the weights retain at each target.
+
+** Temperature ladders
+
+| =OpesMultithermalConfig= | PLUMED keyword | Ladder |
+|---+---+---|
+| =temperature= | =TEMP= | Simulation temperature \(T_0\); =None= takes the thermostat temperature |
+| =temp_min=, =temp_max= | =TEMP_MIN=, =TEMP_MAX= | Range ends; an unset end is \(T_0\) |
+| =temp_steps= | =TEMP_STEPS= | Fixed count. With =TemperatureSpacing::Geometric= the ratio \(T_{k+1} / T_k\) is constant; with =LinearInverse= (=NO_GEOM_SPACING=) \(\beta\) is equally spaced. One step uses the midpoint in \(\beta\) |
+| =temp_steps = None= | omitted | Count estimated from the observations: at each end the Kish effective fraction of the observations reweighted by \(e^{-\Delta u}\) halves at a half width in \(\beta - \beta_0\), found by regula falsi to \(10^{-4}\); the count is \(\lceil \lvert \Delta\beta_{\mathrm{range}} \rvert / (\text{left} + \text{right half width}) \rceil\), at least 2 |
+| =temp_set_all= | =TEMP_SET_ALL= | Explicit non-decreasing list of at least two temperatures |
+| =pace=, =observation_steps=, =print_stride= | =PACE=, =OBSERVATION_STEPS=, =PRINT_STRIDE= | Update stride (default 500, the PLUMED example value), unbiased samples before the first bias (default 100), and updates between recorded estimates (default 100) |
+
+** Assumptions and engine wiring
+
+- The bias acts on the configurational energy at fixed volume. The engine thermostat must be canonical at \(T_0\): =run_opes_multithermal= returns =FluxError::InvalidConfig= when the thermostat \(k_{\mathrm{B}}T\) differs from the bias \(k_{\mathrm{B}}T_0\), and for white noise with \(\gamma = 0\).
+- =run_opes_multithermal= takes any =E: DynamicsEngine + ?Sized= whose forces come from an =OpesMultithermalSurface= sharing the same =SharedOpesMultithermal=, such as =NativeEngine= or an engine over =RgpotSurface=. It checks every step that the shared surface evaluated the engine's current positions and returned the energy the engine reports, and returns =FluxError::InvalidConfig= otherwise. Engines that integrate forces outside =rgflux=, such as =LammpcEngine=, cannot take the bias.
+- Step indexing follows PLUMED: the starting configuration is MD step =start_step=, the first call to =OpesMultithermal::update= after construction or restart is skipped unless =observation_steps= is 1, and the force at step \(n\) uses the estimates before that step's update. Updates act on absolute multiples of =pace=, so a restart restores the last step from the state and refuses a different =start_step=.
+- A state holds \(\Delta F\) and =rct= at one \(T_0\) and \(k_{\mathrm{B}}\). =rgflux= records both and the reweighting range in the state and refuses to restart under different values. PLUMED states lack these entries, and PLUMED itself does not check them.
+- The weights are only as good as the overlap between the sampled energies and each target. Read the Kish effective sample size at each target before trusting an average there. The frames before initialization are unbiased samples at \(T_0\) and reweight correctly, but an early stretch with a rapidly changing bias is usually discarded by reweighting a slice.
+- No =rgflux= module consumed reweighting weights before this one. =network::build_rate_table= is still unimplemented, so the per-frame weights are returned as plain =Vec<f64>= for downstream estimators.
+
 * Kinetic rate networks (=network=)
 
 =network= defines =NetworkConfig=, =RateTableConfig=, =RateEdge=, and =build_rate_table= for assembling elementary transition rates \(k_{i \to j}(T)\) @@rst::cite:`vineyardFrequencyFactors1957,henkelmanLongTimeScale2001`@@ into master-equation graphs and Bortz-Kalos-Lebowitz / Gillespie kinetic Monte Carlo (kMC) residence-time tables @@rst::cite:`goswamiEfficientExploration2025,goswamiConcurrencyAkmc2025,eon2901,bortzNewAlgorithmMonteCarlo1975,gillespieGeneralMethod1976`@@. =RateEdge::new= validates finite non-negative rate constants, while =build_rate_table= is not yet implemented and returns =FluxError::Unimplemented=.

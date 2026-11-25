@@ -508,6 +508,167 @@ fn main() -> Result<(), rgflux::FluxError> {
 
 The default integrates every half to =steps=. This example opts into early commitment only after specifying both parts of the criterion: =commit_checkpoints = 64= requires 64 consecutive steps (\(64 \times 0.05 = 3.2 > 1 / \lambda_+ \approx 1.65\)), while =commitment_distance = 0.25= requires every counted point to lie at least 0.25 length units from the dividing surface on the same side. Choose the distance inside a physically characterized basin and the window beyond its recrossing time. If either condition is uncertain, keep the default fixed-length shooting: even a long, deep excursion can return, and early commitment would hide that return.
 
+* Sample a temperature range with multithermal OPES and reweight frames
+
+Multithermal OPES @@rst::cite:`invernizziUnifiedApproach2020,invernizziRethinkingMetadynamics2020`@@ biases the potential energy \(U\) so that one run at the thermostat temperature \(T_0\) samples every canonical ensemble between \(T_{\min}\) and \(T_{\max}\). It is the method PLUMED provides as =OPES_EXPANDED= over =ECV_MULTITHERMAL= @@rst::cite:`tribelloPlumed2014,plumedConsortium2019`@@, with the same defaults and the same state file. The method and its equations are under /Multithermal OPES/ in the explanation page.
+
+1. Build an =opes::OpesMultithermal= from an =OpesMultithermalConfig= and the engine =ThermostatConfig=, which supplies \(k_{\mathrm{B}}\) and, unless =temperature= is set, \(T_0\). Give the range with =OpesMultithermalConfig::range=, fix the count with =with_temp_steps= or leave it =None= to estimate it from the =observation_steps= unbiased samples, or list the temperatures with =OpesMultithermalConfig::set_all=.
+2. Share it with =SharedOpesMultithermal::new=, wrap the unbiased surface in =OpesMultithermalSurface=, and build the engine over that surface.
+3. Call =run_opes_multithermal= with an =OpesRunConfig=. Every =frame_stride= steps it stores the unbiased energy \(U_t\), the bias in force \(V_t\), the force factor \(1 + dV/dU\), and the positions.
+4. Read =OpesTrajectory::delta_f= for \(\Delta F(T_k)\), and call =OpesTrajectory::weights= with any target temperature in \([T_{\min}, T_{\max}]\). The returned =Vec<f64>= sums to one and has one entry per stored frame, so it can be passed as =&[f64]= to downstream covariance, clustering, or Markov state model code. A target outside the range returns =FluxError::InvalidConfig=.
+
+The frame weights are
+
+\[
+w_t(T) = \frac{\exp\bigl(\beta_0 V_t + (\beta_0 - \beta) U_t\bigr)}{\sum_s \exp\bigl(\beta_0 V_s + (\beta_0 - \beta) U_s\bigr)}, \qquad \beta = \frac{1}{k_{\mathrm{B}} T},
+\]
+
+the product of the PLUMED =REWEIGHT_BIAS= and =REWEIGHT_TEMP_PRESS= weights. =MultithermalReweighting::average= returns the weighted mean of an observable with a batch-means standard error and the Kish effective sample size \((\sum_t w_t)^2 / \sum_t w_t^2\) @@rst::cite:`kishSurveySampling1965`@@. Discard an initial stretch of frames by building =MultithermalReweighting::from_bias= over a slice of the stored energies and biases.
+
+The example samples the 2D double well \(U = (x^2 - 1)^2 + y^2/2\) at \(T_0 = 0.3\) over \([0.3, 1.2]\) and reweights the frames to \(T = 0.8\). There \(\langle y^2 \rangle = k_{\mathrm{B}} T\) exactly, because \(y\) is a harmonic coordinate.
+
+#+begin_src rust
+use ndarray::{Array1, ArrayView1};
+use rgflux::engine::native::{NativeConfig, NativeEngine};
+use rgflux::engine::{DynamicsEngine, ThermostatConfig};
+use rgflux::opes::{
+    OpesMultithermal, OpesMultithermalConfig, OpesMultithermalSurface, OpesRunConfig,
+    SharedOpesMultithermal, run_opes_multithermal,
+};
+
+struct DoubleWell2D;
+
+impl rgsaddle::PointSurface for DoubleWell2D {
+    fn eval(&self, r: ArrayView1<f64>) -> Result<(f64, Array1<f64>), rgsaddle::SaddleError> {
+        let a = r[0] * r[0] - 1.0;
+        Ok((
+            a * a + 0.5 * r[1] * r[1],
+            Array1::from_vec(vec![4.0 * r[0] * a, r[1]]),
+        ))
+    }
+}
+
+/// Weighted covariance of two per-frame features, as downstream code takes it.
+fn weighted_covariance(weights: &[f64], a: &[f64], b: &[f64]) -> f64 {
+    let mean = |v: &[f64]| weights.iter().zip(v).map(|(w, x)| w * x).sum::<f64>();
+    let (ma, mb) = (mean(a), mean(b));
+    weights
+        .iter()
+        .zip(a.iter().zip(b))
+        .map(|(w, (x, y))| w * (x - ma) * (y - mb))
+        .sum()
+}
+
+fn main() -> Result<(), rgflux::FluxError> {
+    let thermostat = ThermostatConfig::default()
+        .with_temperature(0.3)
+        .with_gamma(1.0);
+    let config = OpesMultithermalConfig::range(0.3, 1.2)
+        .with_temp_steps(6)
+        .with_pace(50);
+    let shared = SharedOpesMultithermal::new(OpesMultithermal::new(config, &thermostat)?);
+    let surface = OpesMultithermalSurface::new(DoubleWell2D, shared.clone());
+    let mut engine = NativeEngine::new(
+        surface,
+        NativeConfig::default()
+            .with_masses(Array1::from_vec(vec![1.0, 1.0]))
+            .with_thermostat(thermostat)
+            .with_seed(11),
+    )?;
+    engine.set_positions(Array1::from_vec(vec![-1.0, 0.0]).view())?;
+    engine.shoot_velocities(11)?;
+
+    let run = OpesRunConfig::default()
+        .with_steps(1_000_000)
+        .with_time_step(0.01)
+        .with_frame_stride(50);
+    let trajectory = run_opes_multithermal(&mut engine, &shared, &run)?;
+    assert_eq!(trajectory.temperatures().len(), 6);
+    assert_eq!(trajectory.delta_f().len(), 6);
+
+    let weights: Vec<f64> = trajectory.weights(0.8)?;
+    assert_eq!(weights.len(), trajectory.positions.len());
+    let y: Vec<f64> = trajectory.positions.iter().map(|p| p[1]).collect();
+    let y_variance = weighted_covariance(&weights, &y, &y);
+    assert!((y_variance - 0.8).abs() < 0.05, "<y^2> = {y_variance}");
+    assert!(trajectory.weights(1.5).is_err());
+    Ok(())
+}
+#+end_src
+
+To continue a run, write =OpesMultithermal::write_state= at the end of one segment and rebuild the bias with =OpesMultithermal::from_state= and the same configuration and thermostat. The file has the layout of the PLUMED =STATE_WFILE=, with the temperature column named =ecv.ene=, so PLUMED can restart from an =rgflux= state and =rgflux= can restart from a PLUMED state.
+
+The restart keeps the update cadence and the thermodynamic reference:
+
+- The bias absorbs a sample only at MD steps that are multiples of =pace=, counted from step 0, so a continuation must keep the absolute step. The state records the last step the bias saw, =from_state= restores it as =OpesMultithermal::last_step=, and =run_opes_multithermal= with the default =OpesRunConfig::start_step= of =None= continues from it. An explicit =start_step= that differs from the restored step returns =FluxError::InvalidConfig= before any step is integrated, and so does an update at an earlier step. The configuration at the restored step is not absorbed a second time.
+- \(\Delta F\) and =rct= are free energies at \(T_0\) in units of \(k_{\mathrm{B}}\), so they do not carry over to another \(T_0\), \(k_{\mathrm{B}}\), or ladder. The state records \(T_0\), \(k_{\mathrm{B}}\), and the reweighting range \((T_{\min}, T_{\max})\) at full precision, and =from_state= returns =FluxError::InvalidConfig= when the configuration and thermostat differ from them beyond a relative \(64\varepsilon\), or when only some of the entries are present.
+
+These entries are comment lines of the form =# rgflux temperature 3e-1=, which PLUMED skips, so the file stays a valid PLUMED state. A state written by PLUMED has none of them: =from_state= then checks only the six-digit temperature labels, the caller must keep \(T_0\) and \(k_{\mathrm{B}}\) unchanged, and =run_opes_multithermal= requires an explicit =start_step=, since =last_step= is =None=.
+
+#+begin_src rust
+use ndarray::{Array1, ArrayView1};
+use rgflux::FluxError;
+use rgflux::engine::native::{NativeConfig, NativeEngine};
+use rgflux::engine::{DynamicsEngine, ThermostatConfig};
+use rgflux::opes::{
+    OpesMultithermal, OpesMultithermalConfig, OpesMultithermalSurface, OpesRunConfig,
+    SharedOpesMultithermal, run_opes_multithermal,
+};
+
+struct DoubleWell;
+
+impl rgsaddle::PointSurface for DoubleWell {
+    fn eval(&self, x: ArrayView1<f64>) -> Result<(f64, Array1<f64>), rgsaddle::SaddleError> {
+        let a = x[0] * x[0] - 1.0;
+        Ok((a * a, Array1::from_vec(vec![4.0 * x[0] * a])))
+    }
+}
+
+fn main() -> Result<(), rgflux::FluxError> {
+    let thermostat = ThermostatConfig::default().with_temperature(0.3);
+    let config = OpesMultithermalConfig::range(0.3, 1.0)
+        .with_temp_steps(4)
+        .with_pace(10)
+        .with_observation_steps(10);
+    let shared = SharedOpesMultithermal::new(OpesMultithermal::new(config.clone(), &thermostat)?);
+    let surface = OpesMultithermalSurface::new(DoubleWell, shared.clone());
+    let native = NativeConfig::default()
+        .with_thermostat(thermostat)
+        .with_seed(3);
+    let mut engine = NativeEngine::new(surface, native)?;
+    engine.set_positions(Array1::from_vec(vec![-1.0]).view())?;
+    let run = OpesRunConfig::default().with_steps(1_005).with_time_step(0.01);
+    let first = run_opes_multithermal(&mut engine, &shared, &run)?;
+
+    let mut state = Vec::new();
+    first.bias.write_state(&mut state, 1_005.0 * 0.01)?;
+
+    // Same configuration and thermostat; `start_step` stays `None`, so the
+    // second segment continues at the stored step 1005.
+    let restored = OpesMultithermal::from_state(config.clone(), &thermostat, &state[..])?;
+    assert_eq!(restored.last_step(), Some(1_005));
+    shared.with_bias_mut(|bias| *bias = restored)?;
+    let second = run_opes_multithermal(&mut engine, &shared, &run)?;
+    assert_eq!(second.steps[0], 1_005);
+    assert_eq!(second.last_step, 2_010);
+
+    // Restarting the step count or changing T0 is refused.
+    let shifted = run.clone().with_start_step(0);
+    assert!(matches!(
+        run_opes_multithermal(&mut engine, &shared, &shifted),
+        Err(FluxError::InvalidConfig(_))
+    ));
+    let warmer = thermostat.with_temperature(0.4);
+    assert!(matches!(
+        OpesMultithermal::from_state(config, &warmer, &state[..]),
+        Err(FluxError::InvalidConfig(_))
+    ));
+    Ok(())
+}
+#+end_src
+
+=tests/opes_plumed_oracle.rs= checks the implementation against PLUMED 2.10.2 built with =--enable-modules=opes=, using the input in =tests/data/opes_plumed/plumed.dat=. Set =RGFLUX_PLUMED= to a =plumed= executable to run it. Without one the test skips and prints why; with =RGFLUX_REQUIRE_PLUMED=1= it fails instead. The =plumed-oracle= CI job builds PLUMED from the release tarball, because the conda-forge package leaves out the =opes= module, and runs the test with skips disallowed. On the replayed double-well frames the two codes agree exactly on every printed \(\Delta F\) and every bias value, to \(4 \times 10^{-16}\) on the bias force, and to \(10^{-14}\) on the reweighted averages, both with fixed, automatic, and listed ladders and across restarts in either direction. PLUMED is needed only for that test.
+
 * Wrap an =rgmin= objective with =EindirSurface=
 
 Any =eindir_core::DifferentiableObjective<f64>= (such as =rgmin::Oracle=) can be adapted into a =ForceSurface= via =engine::EindirSurface= and passed to =NativeEngine=:
