@@ -1745,14 +1745,22 @@ impl MultithermalReweighting {
 
     /// Unnormalized logarithmic weights `beta0 V_t + (beta0 - beta) U_t`,
     /// one per frame.
+    ///
+    /// Finite energies and biases can still overflow these products, so a
+    /// non-finite log weight returns [`FluxError::NonFinite`].
     pub fn log_weights(&self, target_temperature: f64) -> Result<Vec<f64>, FluxError> {
         let beta = self.target_beta(target_temperature)?;
-        Ok(self
+        let log_weights: Vec<f64> = self
             .potential_energies
             .iter()
             .zip(&self.biases)
             .map(|(&u, &v)| self.beta0 * v + (self.beta0 - beta) * u)
-            .collect())
+            .collect();
+        validate_finite_slice(
+            ndarray::ArrayView1::from(&log_weights[..]),
+            "reweighting log weights",
+        )?;
+        Ok(log_weights)
     }
 
     /// Weights at `target_temperature` normalized to sum to one, aligned one
@@ -1768,6 +1776,10 @@ impl MultithermalReweighting {
         for w in weights.iter_mut() {
             *w /= sum;
         }
+        validate_finite_slice(
+            ndarray::ArrayView1::from(&weights[..]),
+            "reweighting weights",
+        )?;
         Ok(weights)
     }
 
@@ -1820,7 +1832,15 @@ impl MultithermalReweighting {
     pub fn delta_f(&self, target_temperature: f64) -> Result<f64, FluxError> {
         let target = self.log_weights(target_temperature)?;
         let reference: Vec<f64> = self.biases.iter().map(|&v| self.beta0 * v).collect();
-        Ok(-self.kbt * (log_sum_exp(&target) - log_sum_exp(&reference)))
+        validate_finite_slice(
+            ndarray::ArrayView1::from(&reference[..]),
+            "reweighting log weights",
+        )?;
+        let delta_f = -self.kbt * (log_sum_exp(&target) - log_sum_exp(&reference));
+        if !delta_f.is_finite() {
+            return Err(FluxError::NonFinite("reweighting Delta F"));
+        }
+        Ok(delta_f)
     }
 }
 
@@ -2383,5 +2403,34 @@ mod tests {
         assert!(rw.weights(2.5).is_err());
         let ess = rw.effective_sample_size(1.0).expect("ess");
         assert!(ess > 1.0 && ess <= 4.0);
+    }
+
+    #[test]
+    fn reweighting_refuses_log_weights_that_overflow() {
+        // beta0 = 2, so beta0 V_t = 2e308 overflows for finite inputs.
+        let rw =
+            MultithermalReweighting::new(vec![0.0, 0.0], vec![1e308, 1e308], 1.0, 0.5, 0.4, 1.0)
+                .expect("reweighting");
+        let message = Some(FluxError::NonFinite("reweighting log weights"));
+        assert_eq!(rw.log_weights(0.5).err(), message);
+        assert_eq!(rw.weights(0.5).err(), message);
+        assert_eq!(rw.effective_sample_size(0.5).err(), message);
+        assert_eq!(rw.delta_f(0.5).err(), message);
+        assert!(
+            rw.average(0.5, &[1.0, 2.0], &StatsConfig::default())
+                .is_err()
+        );
+
+        // (beta0 - beta) U_t overflows on its own at the cold end.
+        let rw = MultithermalReweighting::new(vec![1e308, 0.0], vec![0.0, 0.0], 1.0, 1.0, 0.1, 2.0)
+            .expect("reweighting");
+        assert_eq!(rw.weights(0.1).err(), message);
+        assert_eq!(rw.weights(1.0).expect("beta = beta0"), vec![0.5, 0.5]);
+
+        // Log weights far apart but finite still normalize.
+        let rw =
+            MultithermalReweighting::new(vec![0.0, 0.0], vec![4e307, -4e307], 1.0, 1.0, 0.5, 2.0)
+                .expect("reweighting");
+        assert_eq!(rw.weights(1.0).expect("weights"), vec![1.0, 0.0]);
     }
 }
