@@ -592,7 +592,7 @@ impl OpesMultithermal {
             return Ok(OpesUpdate::Observed);
         }
         let current = self.bias(energy)?.bias;
-        self.update_delta_f(current, energy);
+        self.update_delta_f(current, energy)?;
         let record = (self.counter - 1).is_multiple_of(self.config.print_stride as u64);
         Ok(OpesUpdate::Updated { record })
     }
@@ -634,8 +634,10 @@ impl OpesMultithermal {
         Ok(())
     }
 
-    fn update_delta_f(&mut self, bias: f64, energy: f64) {
-        self.counter += 1;
+    fn update_delta_f(&mut self, bias: f64, energy: f64) -> Result<(), FluxError> {
+        self.counter = self.counter.checked_add(1).ok_or(FluxError::InvalidConfig(
+            "OPES update counter overflows u64",
+        ))?;
         let kbt = self.kbt;
         let ln_prev = (self.counter as f64 - 1.0).ln();
         let arg = (bias - self.rct) / kbt - ln_prev;
@@ -653,6 +655,7 @@ impl OpesMultithermal {
             }
         }
         self.rct += increment + kbt * (-1.0 / self.counter as f64).ln_1p();
+        Ok(())
     }
 
     /// Write the PLUMED `STATE_WFILE` layout: `time`, `counter`, `rct`, and
@@ -703,7 +706,9 @@ impl OpesMultithermal {
     /// rows fixes an automatic ladder, and every temperature label must match
     /// the one this configuration produces. The last state in a file holding
     /// several is read. As in PLUMED, the first [`Self::update`] after a
-    /// restart is skipped.
+    /// restart is skipped. A `counter` of `0`, which no initialized bias
+    /// has, or `u64::MAX`, which the next update would overflow, returns
+    /// [`FluxError::InvalidConfig`].
     ///
     /// `Delta F` and `rct` hold only at the `T0` and `k_B` they were
     /// estimated at. A state from [`Self::write_state`] records both and the
@@ -958,9 +963,17 @@ fn parse_state<R: BufRead>(reader: R) -> Result<ParsedState, FluxError> {
             };
             match name {
                 "counter" => {
-                    block.counter = Some(value.parse().map_err(|_| {
+                    let counter: u64 = value.parse().map_err(|_| {
                         FluxError::InvalidConfig("OPES state counter is not an integer")
-                    })?);
+                    })?;
+                    // An initialized bias has counted at least the
+                    // observation phase, and the next update adds one.
+                    if counter == 0 || counter == u64::MAX {
+                        return Err(FluxError::InvalidConfig(
+                            "OPES state counter must lie between 1 and u64::MAX - 1",
+                        ));
+                    }
+                    block.counter = Some(counter);
                 }
                 "rct" => block.rct = Some(parse_finite(value, "OPES state rct")?),
                 _ => {}
@@ -2201,6 +2214,59 @@ mod tests {
             ),
             Err(FluxError::InvalidConfig(_))
         ));
+    }
+
+    #[test]
+    fn state_rejects_a_counter_of_zero_or_u64_max() {
+        let bias = initialized_bias();
+        let text = state_text(&bias);
+        let counter_line = format!("#! SET counter  {}", bias.counter());
+        assert!(text.contains(&counter_line));
+        let with_counter =
+            |counter: &str| text.replace(&counter_line, &format!("#! SET counter  {counter}"));
+        let restore = |state: &str| {
+            OpesMultithermal::from_state(bias.config().clone(), &thermostat(0.8), state.as_bytes())
+        };
+        for bad in ["0".to_owned(), u64::MAX.to_string()] {
+            assert_eq!(
+                restore(&with_counter(&bad)).err(),
+                Some(FluxError::InvalidConfig(
+                    "OPES state counter must lie between 1 and u64::MAX - 1"
+                )),
+                "counter {bad}"
+            );
+        }
+        for good in [1, u64::MAX - 1] {
+            let mut restored = restore(&with_counter(&good.to_string())).expect("counter in range");
+            assert_eq!(restored.counter(), good);
+            restored.update(4, 0.9).expect("skipped first update");
+            assert_eq!(
+                restored.update(5, 0.9),
+                Ok(OpesUpdate::Updated {
+                    record: (good % restored.config().print_stride as u64) == 0
+                })
+            );
+            assert_eq!(restored.counter(), good + 1);
+            assert!(restored.rct().is_finite());
+            assert!(restored.delta_f().iter().all(|df| df.is_finite()));
+        }
+    }
+
+    #[test]
+    fn an_update_past_the_largest_counter_is_refused() {
+        let mut bias = initialized_bias();
+        bias.counter = u64::MAX;
+        let delta_f = bias.delta_f().to_vec();
+        let rct = bias.rct();
+        assert_eq!(
+            bias.update(4, 0.9),
+            Err(FluxError::InvalidConfig(
+                "OPES update counter overflows u64"
+            ))
+        );
+        assert_eq!(bias.counter(), u64::MAX);
+        assert_eq!(bias.delta_f(), &delta_f[..]);
+        assert_eq!(bias.rct().to_bits(), rct.to_bits());
     }
 
     #[test]
