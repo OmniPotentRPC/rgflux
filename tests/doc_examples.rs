@@ -49,7 +49,7 @@ fn org_guide_rust_blocks_compile_and_run() {
 
     let howto = include_str!("../docs/orgmode/howto.org");
     let howto_blocks = extract_rust_blocks(howto);
-    assert_eq!(howto_blocks.len(), 9, "howto.org has 9 Rust blocks");
+    assert_eq!(howto_blocks.len(), 10, "howto.org has 10 Rust blocks");
     run_extracted_blocks("howto", &howto_blocks);
 }
 
