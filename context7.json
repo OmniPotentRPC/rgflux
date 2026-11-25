@@ -4,7 +4,8 @@
   "description": "Rare-event kinetics over rgsaddle and rgmin: PAFI, OH-TST, hyperplane sampling, Bennett-Chandler recrossing, FFS and rate networks.",
   "folders": [
     "docs/orgmode",
-    "examples"
+    "examples",
+    "src"
   ],
   "excludeFolders": [
     "docs/source",
@@ -12,7 +13,8 @@
     "tests",
     "scripts",
     "ci",
-    ".github"
+    ".github",
+    "src/data"
   ],
   "excludeFiles": [
     "CHANGELOG.md",
