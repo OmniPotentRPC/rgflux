@@ -416,7 +416,8 @@ impl OpesMultithermal {
             ));
         }
         let kbt = boltzmann * temperature;
-        if !kbt.is_finite() || kbt <= 0.0 {
+        // A subnormal k_B T0 is positive but has an infinite inverse.
+        if !kbt.is_finite() || kbt <= 0.0 || !(1.0 / kbt).is_finite() {
             return Err(FluxError::NonFinite("OPES thermal energy k_B * T0"));
         }
         let (der, automatic) = initial_ladder(&config, temperature, kbt)?;
@@ -2316,6 +2317,24 @@ mod tests {
         assert_eq!(bias.counter(), u64::MAX);
         assert_eq!(bias.delta_f(), &delta_f[..]);
         assert_eq!(bias.rct().to_bits(), rct.to_bits());
+    }
+
+    #[test]
+    fn new_rejects_a_subnormal_thermal_energy_with_an_infinite_inverse() {
+        // k_B T0 = 1e-320 is positive but subnormal, so 1 / (k_B T0) = inf.
+        let thermostat = ThermostatConfig::default()
+            .with_boltzmann(1e-160)
+            .with_temperature(1e-160);
+        let config = OpesMultithermalConfig::range(0.5e-160, 2e-160).with_temp_steps(3);
+        assert_eq!(
+            OpesMultithermal::new(config.clone(), &thermostat).err(),
+            Some(FluxError::NonFinite("OPES thermal energy k_B * T0"))
+        );
+        let finite = ThermostatConfig::default()
+            .with_boltzmann(1e-140)
+            .with_temperature(1e-160);
+        let bias = OpesMultithermal::new(config, &finite).expect("k_B T0 = 1e-300");
+        assert!(bias.temperatures().iter().all(|t| t.is_finite()));
     }
 
     #[test]
