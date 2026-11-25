@@ -404,7 +404,8 @@ impl OpesMultithermal {
     /// [`OpesMultithermalConfig::temperature`] or the thermostat. A target
     /// temperature so far from `T0` that `beta_k - beta0`, or the
     /// temperature recovered from it, is not finite returns
-    /// [`FluxError::NonFinite`].
+    /// [`FluxError::NonFinite`], and so does a ladder whose spacing
+    /// overflows between finite ends.
     pub fn new(
         config: OpesMultithermalConfig,
         thermostat: &ThermostatConfig,
@@ -1111,11 +1112,9 @@ fn ladder_steps(
             "OPES temp_steps > 1 needs temp_min != temp_max",
         ));
     }
-    if steps == 1 {
-        return Ok(vec![(lambda_min + lambda_max) / 2.0]);
-    }
     let last = (steps - 1) as f64;
     let ladder = match spacing {
+        _ if steps == 1 => vec![(lambda_min + lambda_max) / 2.0],
         TemperatureSpacing::Geometric => {
             let lo = lambda_min + shift;
             let hi = lambda_max + shift;
@@ -1133,6 +1132,12 @@ fn ladder_steps(
             .map(|k| lambda_min + k as f64 * (lambda_max - lambda_min) / last)
             .collect(),
     };
+    // Finite ends can still overflow their sum, their difference, or
+    // lambda + shift.
+    validate_finite_slice(
+        ndarray::ArrayView1::from(&ladder[..]),
+        "OPES temperature ladder",
+    )?;
     Ok(ladder)
 }
 
@@ -2441,6 +2446,39 @@ mod tests {
         let temperatures = bias.temperatures();
         assert!((temperatures[0] / 1e290 - 1.0).abs() <= 1e-12);
         assert!((temperatures[2] / 1e300 - 1.0).abs() <= 1e-12);
+    }
+
+    #[test]
+    fn new_rejects_a_ladder_that_overflows_between_finite_ends() {
+        // beta0 = 1e307 and beta_k - beta0 = 1.7e308 at T0 / 18 are finite,
+        // but their sum, the sum of equal ends, and the difference to the
+        // hot end near -1e307 are not.
+        let thermostat = ThermostatConfig::default()
+            .with_boltzmann(1e-307)
+            .with_temperature(1.0);
+        let cold = 1.0 / 18.0;
+        for config in [
+            OpesMultithermalConfig::range(cold, 1.0).with_temp_steps(3),
+            OpesMultithermalConfig::range(cold, cold),
+            OpesMultithermalConfig::range(cold, 1e10)
+                .with_temp_steps(3)
+                .with_spacing(TemperatureSpacing::LinearInverse),
+        ] {
+            assert_eq!(
+                OpesMultithermal::new(config, &thermostat).err(),
+                Some(FluxError::NonFinite("OPES temperature ladder"))
+            );
+        }
+        let bias = OpesMultithermal::new(
+            OpesMultithermalConfig::range(1.0 / 17.0, 1.0).with_temp_steps(3),
+            &thermostat,
+        )
+        .expect("beta_k = 1.7e308 at T0 / 17");
+        assert!(
+            bias.temperatures()
+                .iter()
+                .all(|t| t.is_finite() && *t > 0.0)
+        );
     }
 
     #[test]
