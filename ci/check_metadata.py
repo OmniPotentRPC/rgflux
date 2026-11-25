@@ -11,8 +11,8 @@ not depend on how the context URL in the file resolves. The check fails when
   for an ``@id``-typed term or for ``@type`` expands against the document
   base instead of a vocabulary.
 
-.zenodo.json is checked against the legacy Zenodo deposit schema, which
-rejects a ``version`` key.
+.zenodo.json may carry a ``version`` key; when present it must equal the
+release version in Cargo.toml, CITATION.cff and codemeta.json.
 
 Requires ``pyld`` (``python3 -m pip install pyld``).
 """
@@ -23,6 +23,7 @@ import argparse
 import json
 import re
 import sys
+import tomllib
 import urllib.request
 from pathlib import Path
 from typing import Any
@@ -30,6 +31,8 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 CODEMETA_PATH = ROOT / "codemeta.json"
 ZENODO_PATH = ROOT / ".zenodo.json"
+CARGO_PATH = ROOT / "Cargo.toml"
+CFF_PATH = ROOT / "CITATION.cff"
 
 CODEMETA_2_CONTEXT_URL = "https://raw.githubusercontent.com/codemeta/codemeta/2.0/codemeta.jsonld"
 CONTEXT_ALIASES = frozenset(
@@ -153,11 +156,24 @@ def check_codemeta(document: dict[str, Any], context_document: dict[str, Any]) -
     return errors
 
 
-def check_zenodo(document: dict[str, Any]) -> list[str]:
-    """Reject keys that the legacy Zenodo deposit schema does not accept."""
-    if "version" in document:
-        return ["'version' is not accepted by the legacy Zenodo deposit schema"]
-    return []
+def release_versions() -> dict[str, str | None]:
+    """Return the release version recorded in each source of truth."""
+    cargo = tomllib.loads(CARGO_PATH.read_text(encoding="utf-8"))["package"]["version"]
+    # CI installs no YAML parser; the top-level key is a single scalar line.
+    cff = re.search(r"""^version:\s*["']?([^"'\s]+)["']?\s*$""", CFF_PATH.read_text(encoding="utf-8"), re.M)
+    codemeta = json.loads(CODEMETA_PATH.read_text(encoding="utf-8")).get("version")
+    return {"Cargo.toml": cargo, "CITATION.cff": cff and cff.group(1), "codemeta.json": codemeta}
+
+
+def check_zenodo(document: dict[str, Any], versions: dict[str, str | None]) -> list[str]:
+    """Require an optional deposit ``version`` to match every release source."""
+    if "version" not in document:
+        return []
+    return [
+        f"'version' is {document['version']!r} but {source} has {version!r}"
+        for source, version in versions.items()
+        if document["version"] != version
+    ]
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -177,7 +193,7 @@ def main(argv: list[str] | None = None) -> int:
     codemeta = json.loads(CODEMETA_PATH.read_text(encoding="utf-8"))
     zenodo = json.loads(ZENODO_PATH.read_text(encoding="utf-8"))
     errors = [f"codemeta.json: {e}" for e in check_codemeta(codemeta, context_document)]
-    errors += [f".zenodo.json: {e}" for e in check_zenodo(zenodo)]
+    errors += [f".zenodo.json: {e}" for e in check_zenodo(zenodo, release_versions())]
     for error in errors:
         print(error, file=sys.stderr)
     if errors:

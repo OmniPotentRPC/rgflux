@@ -89,17 +89,24 @@ class ExpansionTests(unittest.TestCase):
 
 
 class ZenodoTests(unittest.TestCase):
-    def test_version_key_is_rejected(self) -> None:
-        self.assertEqual(len(check_metadata.check_zenodo({"title": "x", "version": "1"})), 1)
+    VERSIONS = {"Cargo.toml": "1.2.3", "CITATION.cff": "1.2.3", "codemeta.json": "1.2.3"}
 
-    def test_without_version_key_passes(self) -> None:
-        self.assertEqual(check_metadata.check_zenodo({"title": "x"}), [])
+    def test_matching_version_passes(self) -> None:
+        self.assertEqual(check_metadata.check_zenodo({"title": "x", "version": "1.2.3"}, self.VERSIONS), [])
 
-    def test_repository_file_has_no_version_key(self) -> None:
+    def test_mismatched_version_fails(self) -> None:
+        errors = check_metadata.check_zenodo({"title": "x", "version": "1.2.2"}, self.VERSIONS)
+        self.assertEqual(len(errors), 3, errors)
+        self.assertTrue(all("'1.2.2'" in e for e in errors), errors)
+
+    def test_missing_version_passes(self) -> None:
+        self.assertEqual(check_metadata.check_zenodo({"title": "x"}, self.VERSIONS), [])
+
+    def test_repository_file_matches_release_versions(self) -> None:
         import json
 
         zenodo = json.loads((ROOT / ".zenodo.json").read_text(encoding="utf-8"))
-        self.assertEqual(check_metadata.check_zenodo(zenodo), [])
+        self.assertEqual(check_metadata.check_zenodo(zenodo, check_metadata.release_versions()), [])
 
 
 if __name__ == "__main__":

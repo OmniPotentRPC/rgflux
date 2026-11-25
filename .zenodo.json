@@ -1,6 +1,7 @@
 {
   "title": "rgflux",
   "upload_type": "software",
+  "version": "0.2.1",
   "description": "rgflux computes rare-event kinetics on top of rgsaddle (bands, minimum-mode and index-1 saddle searches) and rgmin (first-order and Riemannian steppers), with rgpot static potentials, MD sessions, and direct lammpc sessions as optional features.",
   "creators": [
     {
@@ -10,6 +11,7 @@
     }
   ],
   "license": "mit",
+  "access_right": "open",
   "keywords": [
     "kinetics",
     "transition-state",
