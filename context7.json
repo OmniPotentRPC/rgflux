@@ -2,24 +2,21 @@
   "$schema": "https://context7.com/schema/context7.json",
   "projectTitle": "rgflux",
   "description": "Rare-event kinetics over rgsaddle and rgmin: PAFI, OH-TST, hyperplane sampling, Bennett-Chandler recrossing, FFS and rate networks.",
-  "folders": [
-    "docs/orgmode",
-    "examples",
-    "src"
-  ],
   "excludeFolders": [
     "docs/source",
     "docs/newsfragments",
+    "src/data",
     "tests",
     "scripts",
     "ci",
-    ".github",
-    "src/data"
+    ".github"
   ],
   "excludeFiles": [
     "CHANGELOG.md",
-    "CODE_OF_CONDUCT.md",
-    "LICENSE"
+    "LICENSE",
+    "llms.txt",
+    "llms-full.txt",
+    "requirements.txt"
   ],
   "rules": []
 }
