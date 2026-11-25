@@ -733,7 +733,8 @@ impl OpesMultithermal {
         Ok(())
     }
 
-    /// Restart from a state written by [`Self::write_state`] or by PLUMED.
+    /// Restart from a state written by [`Self::write_state`]; read a state
+    /// written by PLUMED with [`Self::from_plumed_state`].
     ///
     /// `config` and `thermostat` must describe the same ladder: the count of
     /// rows fixes an automatic ladder, and every temperature label must match
