@@ -479,7 +479,7 @@ stale, and refuses a hand-written count outside the block.
 ** Complete qualified Rust inventory
 
 # BEGIN GENERATED PUBLIC API
-This inventory lists 843 qualified public item paths.
+This inventory lists 844 qualified public item paths.
 
 *** =DynamicsEngine=
 
