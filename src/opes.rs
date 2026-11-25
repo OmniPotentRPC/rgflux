@@ -564,9 +564,10 @@ impl OpesMultithermal {
     /// Steps must not decrease. A repeat of [`Self::last_step`] is idle, so
     /// a run continuing from the last step does not absorb that
     /// configuration twice; an earlier step returns
-    /// [`FluxError::InvalidConfig`]. An update that returns an error leaves
-    /// the bias unchanged, including [`Self::last_step`], so the same step
-    /// can be retried.
+    /// [`FluxError::InvalidConfig`]. Finite inputs whose update overflows
+    /// `rct` or `Delta F` return [`FluxError::NonFinite`]. An update that
+    /// returns an error leaves the bias unchanged, including
+    /// [`Self::last_step`], so the same step can be retried.
     pub fn update(&mut self, step: u64, energy: f64) -> Result<OpesUpdate, FluxError> {
         if !energy.is_finite() {
             return Err(FluxError::NonFinite("OPES potential energy"));
@@ -650,27 +651,43 @@ impl OpesMultithermal {
         Ok(())
     }
 
+    /// Absorb one biased sample; on error nothing changes.
     fn update_delta_f(&mut self, bias: f64, energy: f64) -> Result<(), FluxError> {
-        self.counter = self.counter.checked_add(1).ok_or(FluxError::InvalidConfig(
+        let counter = self.counter.checked_add(1).ok_or(FluxError::InvalidConfig(
             "OPES update counter overflows u64",
         ))?;
         let kbt = self.kbt;
-        let ln_prev = (self.counter as f64 - 1.0).ln();
+        let ln_prev = (counter as f64 - 1.0).ln();
         let arg = (bias - self.rct) / kbt - ln_prev;
         let increment = if arg > 0.0 {
             kbt * (arg + (-arg).exp().ln_1p())
         } else {
             kbt * arg.exp().ln_1p()
         };
-        for (df, d) in self.delta_f.iter_mut().zip(&self.der) {
-            let diff = -(d * energy) + (bias - self.rct + *df) / kbt - ln_prev;
-            if diff > 0.0 {
-                *df += increment - kbt * (diff + (-diff).exp().ln_1p());
-            } else {
-                *df += increment - kbt * diff.exp().ln_1p();
-            }
+        let rct = self.rct + (increment + kbt * (-1.0 / counter as f64).ln_1p());
+        if !rct.is_finite() {
+            return Err(FluxError::NonFinite("OPES updated rct"));
         }
-        self.rct += increment + kbt * (-1.0 / self.counter as f64).ln_1p();
+        let delta_f: Vec<f64> = self
+            .delta_f
+            .iter()
+            .zip(&self.der)
+            .map(|(&df, d)| {
+                let diff = -(d * energy) + (bias - self.rct + df) / kbt - ln_prev;
+                if diff > 0.0 {
+                    df + (increment - kbt * (diff + (-diff).exp().ln_1p()))
+                } else {
+                    df + (increment - kbt * diff.exp().ln_1p())
+                }
+            })
+            .collect();
+        validate_finite_slice(
+            ndarray::ArrayView1::from(&delta_f[..]),
+            "OPES updated Delta F",
+        )?;
+        self.counter = counter;
+        self.delta_f = delta_f;
+        self.rct = rct;
         Ok(())
     }
 
@@ -2341,17 +2358,15 @@ mod tests {
     fn an_update_past_the_largest_counter_is_refused() {
         let mut bias = initialized_bias();
         bias.counter = u64::MAX;
-        let delta_f = bias.delta_f().to_vec();
-        let rct = bias.rct();
+        let before = bias.clone();
         assert_eq!(
             bias.update(4, 0.9),
             Err(FluxError::InvalidConfig(
                 "OPES update counter overflows u64"
             ))
         );
+        assert_eq!(bias, before);
         assert_eq!(bias.counter(), u64::MAX);
-        assert_eq!(bias.delta_f(), &delta_f[..]);
-        assert_eq!(bias.rct().to_bits(), rct.to_bits());
         assert_eq!(bias.last_step(), Some(3));
         // The refused step stays unabsorbed, so a retry once the counter
         // has room updates instead of idling as a repeat.
@@ -2364,6 +2379,51 @@ mod tests {
         );
         assert_eq!(bias.counter(), u64::MAX);
         assert_eq!(bias.last_step(), Some(4));
+    }
+
+    #[test]
+    fn an_update_that_overflows_rct_changes_nothing() {
+        let mut bias = initialized_bias();
+        // A finite rct of -f64::MAX, which a state file can hold, overflows
+        // (V - rct) / k_B T0, so rct and Delta F would both be non-finite.
+        bias.rct = -f64::MAX;
+        let before = bias.clone();
+        assert_eq!(
+            bias.update(4, 0.9),
+            Err(FluxError::NonFinite("OPES updated rct"))
+        );
+        assert_eq!(bias, before);
+        assert_eq!(bias.counter(), 1);
+        assert_eq!(bias.last_step(), Some(3));
+        // The refused step stays unabsorbed, so a retry is not a repeat.
+        assert_eq!(
+            bias.update(4, 0.9),
+            Err(FluxError::NonFinite("OPES updated rct"))
+        );
+        assert_eq!(bias, before);
+    }
+
+    #[test]
+    fn an_update_that_overflows_delta_f_alone_changes_nothing() {
+        let mut bias = initialized_bias();
+        bias.rct = -f64::MAX;
+        let before = bias.clone();
+        // At U = 1e308 the bias is finite and (V - rct) / k_B T0 = 1.5e308
+        // is too, so rct stays finite, but adding -(beta_k - beta0) U at
+        // the hot end of the ladder overflows Delta F there.
+        assert!(bias.bias(1e308).is_ok());
+        assert_eq!(
+            bias.update(4, 1e308),
+            Err(FluxError::NonFinite("OPES updated Delta F"))
+        );
+        assert_eq!(bias, before);
+        assert_eq!(bias.counter(), 1);
+        assert_eq!(bias.last_step(), Some(3));
+        assert_eq!(
+            bias.update(4, 1e308),
+            Err(FluxError::NonFinite("OPES updated Delta F"))
+        );
+        assert_eq!(bias, before);
     }
 
     #[test]
