@@ -1626,6 +1626,11 @@ impl MultithermalReweighting {
     /// Reweight frames with unbiased energies `potential_energies` and
     /// in-force biases `biases`, simulated at `temperature` with Boltzmann
     /// constant `boltzmann`, to temperatures in `[temp_min, temp_max]`.
+    ///
+    /// Besides each value being finite and positive, `k_B T` and
+    /// `1 / (k_B T)` must be finite and positive at `temperature`,
+    /// `temp_min`, and `temp_max`; otherwise [`FluxError::NonFinite`] is
+    /// returned instead of weights built on an invalid `beta`.
     pub fn new(
         potential_energies: Vec<f64>,
         biases: Vec<f64>,
@@ -1663,6 +1668,16 @@ impl MultithermalReweighting {
             return Err(FluxError::InvalidConfig(
                 "reweighting temp_max must not be below temp_min",
             ));
+        }
+        // Each factor can be finite and positive while the product
+        // underflows to zero or overflows, and a tiny k_B T overflows beta.
+        for t in [temperature, temp_min, temp_max] {
+            let thermal = boltzmann * t;
+            if !thermal.is_finite() || thermal <= 0.0 || !(1.0 / thermal).is_finite() {
+                return Err(FluxError::NonFinite(
+                    "reweighting k_B T and its inverse must be finite and positive",
+                ));
+            }
         }
         let kbt = boltzmann * temperature;
         Ok(Self {
@@ -1719,7 +1734,13 @@ impl MultithermalReweighting {
                 "reweighting target temperature lies outside the OPES ladder",
             ));
         }
-        Ok(1.0 / (self.boltzmann * target))
+        let beta = 1.0 / (self.boltzmann * target);
+        if !beta.is_finite() || beta <= 0.0 {
+            return Err(FluxError::NonFinite(
+                "reweighting target inverse temperature",
+            ));
+        }
+        Ok(beta)
     }
 
     /// Unnormalized logarithmic weights `beta0 V_t + (beta0 - beta) U_t`,
@@ -2309,6 +2330,35 @@ mod tests {
             (999999.5, "1e+06"),
         ] {
             assert_eq!(format_c_general(value), text);
+        }
+    }
+
+    #[test]
+    fn reweighting_rejects_a_zero_infinite_or_uninvertible_thermal_energy() {
+        let build = |kb: f64, t: f64, lo: f64, hi: f64| {
+            MultithermalReweighting::new(vec![0.1, 0.5], vec![0.0, -0.2], kb, t, lo, hi)
+        };
+        let message = Some(FluxError::NonFinite(
+            "reweighting k_B T and its inverse must be finite and positive",
+        ));
+        // k_B T underflows to zero, overflows to infinity, or is subnormal
+        // with an infinite beta, at T0 or at an end of the range.
+        assert_eq!(build(1e-200, 1e-200, 1e-200, 2e-200).err(), message);
+        assert_eq!(build(1e200, 1e200, 1e200, 2e200).err(), message);
+        assert_eq!(build(1e-160, 1e-160, 1e-160, 2e-160).err(), message);
+        assert_eq!(build(1e-300, 1e10, 1e-20, 1e10).err(), message);
+        assert_eq!(build(1e300, 1.0, 1.0, 1e10).err(), message);
+
+        let scaled = build(1e-150, 1e150, 0.5e150, 2e150).expect("k_B T = 1");
+        let reference = build(1.0, 1.0, 0.5, 2.0).expect("reference");
+        for (a, b) in scaled
+            .weights(1.5e150)
+            .expect("scaled weights")
+            .iter()
+            .zip(reference.weights(1.5).expect("weights"))
+        {
+            assert!(a.is_finite());
+            assert!((a - b).abs() <= 1e-12);
         }
     }
 
