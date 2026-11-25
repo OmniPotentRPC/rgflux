@@ -234,20 +234,32 @@ fn engine_over(
     engine
 }
 
-#[test]
-fn restart_continues_at_the_stored_step_and_rejects_another_start() {
+/// Thermostat at `T0`, the first run stopped at step 30_025, and its state.
+///
+/// 30_025 is not a multiple of pace 50, so absolute pace multiples after a
+/// restart (30_050, 30_100) differ from multiples counted from the restart
+/// step (30_075, 30_125). A restart from a multiple of pace gives the same
+/// steps either way and cannot tell the two apart.
+fn stopped_off_pace() -> (ThermostatConfig, OpesTrajectory, Vec<u8>) {
     let thermostat = ThermostatConfig::default()
         .with_temperature(T0)
         .with_gamma(1.0);
     let first = run(9, 30_025, ladder());
     assert_eq!(first.bias.last_step(), Some(30_025));
+    assert!(!30_025_usize.is_multiple_of(ladder().pace));
     let mut state = Vec::new();
     first.bias.write_state(&mut state, 300.25).expect("write");
+    (thermostat, first, state)
+}
+
+#[test]
+fn restart_continues_at_the_stored_step_and_rejects_another_start() {
+    let (thermostat, first, state) = stopped_off_pace();
     // print_stride 1 records every update, so the history lists the
     // steps the bias absorbed.
     let every_update = ladder().with_print_stride(1);
-    let restored = OpesMultithermal::from_state(every_update.clone(), &thermostat, &state[..])
-        .expect("restore");
+    let restored =
+        OpesMultithermal::from_state(every_update, &thermostat, &state[..]).expect("restore");
     assert_eq!(restored.last_step(), Some(30_025));
 
     let shared = SharedOpesMultithermal::new(restored.clone());
@@ -268,8 +280,11 @@ fn restart_continues_at_the_stored_step_and_rejects_another_start() {
     assert_eq!(resumed.steps[0], 30_025);
     assert_eq!(resumed.last_step, 30_125);
     assert_eq!(resumed.bias.counter(), first.bias.counter() + 2);
-    // Absolute multiples of pace 50; a cadence counted from the restart
-    // would give 30_075 and 30_125 instead.
+    // Guards against updates counted from the restart step, which would
+    // absorb at 30_075 and 30_125. A driver that passes `step - start_step`
+    // to `update` fails `resume` above with the earlier-step error instead,
+    // since the stored step is 30_025; the PLUMED state test below has no
+    // stored step and catches it here.
     assert_eq!(update_steps(&resumed), [30_050, 30_100]);
     let explicit = run_opes_multithermal(
         &mut engine,
@@ -282,7 +297,12 @@ fn restart_continues_at_the_stored_step_and_rejects_another_start() {
     assert_eq!(explicit.steps[0], 30_125);
     assert_eq!(explicit.bias.counter(), first.bias.counter() + 4);
     assert_eq!(update_steps(&explicit), [30_150, 30_200]);
+}
 
+#[test]
+fn restart_from_a_plumed_state_keeps_absolute_pace_multiples() {
+    let (thermostat, _, state) = stopped_off_pace();
+    let every_update = ladder().with_print_stride(1);
     let text = String::from_utf8(state).expect("utf8");
     let plumed: String = text
         .lines()
@@ -324,6 +344,10 @@ fn restart_continues_at_the_stored_step_and_rejects_another_start() {
     )
     .expect("explicit start from a PLUMED state");
     assert_eq!(resumed.steps[0], 30_025);
+    // Nothing here checks the step order, so this is the assertion that
+    // fails when updates are counted from the restart step, for example
+    // by a driver passing `step - start_step` to `update`: that absorbs at
+    // 30_075 and 30_125.
     assert_eq!(update_steps(&resumed), [30_050, 30_100]);
 }
 
