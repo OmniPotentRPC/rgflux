@@ -560,7 +560,9 @@ impl OpesMultithermal {
     /// Steps must not decrease. A repeat of [`Self::last_step`] is idle, so
     /// a run continuing from the last step does not absorb that
     /// configuration twice; an earlier step returns
-    /// [`FluxError::InvalidConfig`].
+    /// [`FluxError::InvalidConfig`]. An update that returns an error leaves
+    /// the bias unchanged, including [`Self::last_step`], so the same step
+    /// can be retried.
     pub fn update(&mut self, step: u64, energy: f64) -> Result<OpesUpdate, FluxError> {
         if !energy.is_finite() {
             return Err(FluxError::NonFinite("OPES potential energy"));
@@ -574,22 +576,25 @@ impl OpesMultithermal {
             StepRecord::At(last) => step == last,
             StepRecord::Fresh | StepRecord::Unknown => false,
         };
+        let outcome = self.absorb(step, energy, repeat)?;
+        self.first_step = false;
         self.step = StepRecord::At(step);
-        if self.first_step {
-            self.first_step = false;
-            if self.obs_steps != 1 {
-                return Ok(OpesUpdate::Idle);
-            }
+        Ok(outcome)
+    }
+
+    fn absorb(&mut self, step: u64, energy: f64, repeat: bool) -> Result<OpesUpdate, FluxError> {
+        if self.first_step && self.obs_steps != 1 {
+            return Ok(OpesUpdate::Idle);
         }
         if repeat || !step.is_multiple_of(self.config.pace as u64) {
             return Ok(OpesUpdate::Idle);
         }
         if self.obs_steps > 0 {
-            self.observations.push(energy);
-            if self.observations.len() == self.obs_steps {
-                self.init_from_observations()?;
+            if self.observations.len() + 1 == self.obs_steps {
+                self.init_from_observations(energy)?;
                 return Ok(OpesUpdate::Initialized);
             }
+            self.observations.push(energy);
             return Ok(OpesUpdate::Observed);
         }
         let current = self.bias(energy)?.bias;
@@ -598,25 +603,28 @@ impl OpesMultithermal {
         Ok(OpesUpdate::Updated { record })
     }
 
-    fn init_from_observations(&mut self) -> Result<(), FluxError> {
-        if self.automatic {
-            let steps = estimate_num_steps(self.der[0], self.der[1], &self.observations)?;
-            self.der = ladder_steps(
+    /// Fix the ladder and `Delta F` from the stored observations and `last`;
+    /// on error nothing changes.
+    fn init_from_observations(&mut self, last: f64) -> Result<(), FluxError> {
+        let obs: Vec<f64> = self.observations.iter().copied().chain([last]).collect();
+        let der = if self.automatic {
+            let steps = estimate_num_steps(self.der[0], self.der[1], &obs)?;
+            ladder_steps(
                 self.der[0],
                 self.der[1],
                 steps,
                 self.config.spacing,
                 1.0 / self.kbt,
-            )?;
-            self.automatic = false;
-        }
-        let obs = std::mem::take(&mut self.observations);
+            )?
+        } else {
+            self.der.clone()
+        };
         let kbt = self.kbt;
-        let mut delta_f: Vec<f64> = self.der.iter().map(|d| kbt * (d * obs[0])).collect();
+        let mut delta_f: Vec<f64> = der.iter().map(|d| kbt * (d * obs[0])).collect();
         for (t, &energy) in obs.iter().enumerate().skip(1) {
             let ln_t = (t as f64).ln();
             let shrink = (-1.0 / (1.0 + t as f64)).ln_1p();
-            for (df, d) in delta_f.iter_mut().zip(&self.der) {
+            for (df, d) in delta_f.iter_mut().zip(&der) {
                 let diff = -(d * energy) + *df / kbt - ln_t;
                 if diff > 0.0 {
                     *df -= kbt * (diff + (-diff).exp().ln_1p() + shrink);
@@ -629,6 +637,9 @@ impl OpesMultithermal {
             ndarray::ArrayView1::from(&delta_f[..]),
             "OPES initial Delta F",
         )?;
+        self.der = der;
+        self.automatic = false;
+        self.observations.clear();
         self.delta_f = delta_f;
         self.counter = 1;
         self.obs_steps = 0;
@@ -2317,6 +2328,44 @@ mod tests {
         assert_eq!(bias.counter(), u64::MAX);
         assert_eq!(bias.delta_f(), &delta_f[..]);
         assert_eq!(bias.rct().to_bits(), rct.to_bits());
+        assert_eq!(bias.last_step(), Some(3));
+        // The refused step stays unabsorbed, so a retry once the counter
+        // has room updates instead of idling as a repeat.
+        bias.counter = u64::MAX - 1;
+        assert_eq!(
+            bias.update(4, 0.9),
+            Ok(OpesUpdate::Updated {
+                record: (u64::MAX - 1).is_multiple_of(bias.config().print_stride as u64)
+            })
+        );
+        assert_eq!(bias.counter(), u64::MAX);
+        assert_eq!(bias.last_step(), Some(4));
+    }
+
+    #[test]
+    fn a_failed_initialization_keeps_the_observations_and_the_step() {
+        let config = OpesMultithermalConfig::range(0.1, 2.0)
+            .with_temp_steps(5)
+            .with_pace(1)
+            .with_observation_steps(2);
+        let mut bias = OpesMultithermal::new(config, &thermostat(0.8)).expect("bias");
+        assert_eq!(bias.update(0, 0.4), Ok(OpesUpdate::Idle));
+        assert_eq!(bias.update(1, 0.1), Ok(OpesUpdate::Observed));
+        // (beta_k - beta0) U overflows at T_k = 0.1, so the initial Delta F
+        // is not finite.
+        assert_eq!(
+            bias.update(2, -1e308),
+            Err(FluxError::NonFinite("OPES initial Delta F"))
+        );
+        assert!(!bias.is_initialized());
+        assert_eq!(bias.last_step(), Some(1));
+        assert_eq!(bias.update(2, 0.7), Ok(OpesUpdate::Initialized));
+        let mut reference =
+            OpesMultithermal::new(bias.config().clone(), &thermostat(0.8)).expect("bias");
+        for (step, u) in [0.4, 0.1, 0.7].into_iter().enumerate() {
+            reference.update(step as u64, u).expect("update");
+        }
+        assert_eq!(bias, reference);
     }
 
     #[test]
