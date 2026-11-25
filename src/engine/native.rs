@@ -487,6 +487,7 @@ impl<S: ForceSurface> DynamicsEngine for NativeEngine<S> {
             potential_energy,
             kinetic_energy,
             constraint_force,
+            constraint_metric: None,
         })
     }
 

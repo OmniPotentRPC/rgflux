@@ -38,11 +38,11 @@
 pub mod gle;
 #[cfg(feature = "lammpc")]
 pub mod lammpc;
+#[cfg(feature = "rgpot-md-session")]
+pub mod md_session;
 pub mod native;
 #[cfg(feature = "rgpot")]
 pub mod rgpot;
-#[cfg(feature = "rgpot-md-session")]
-pub mod md_session;
 #[cfg(feature = "rgpot-session")]
 pub mod rgpot_session;
 
@@ -384,9 +384,19 @@ pub struct StepReport {
     pub kinetic_energy: f64,
     /// Holonomic hyperplane Lagrange multiplier `lambda` (`<lambda> = dF/dc`) when constrained.
     pub constraint_force: Option<f64>,
+    /// Plane metric `Z` at the end of the step when the engine holds rigid
+    /// constraints, up to a constant factor. `None` when `Z` is constant.
+    pub constraint_metric: Option<f64>,
 }
 
 impl StepReport {
+    /// Attach the plane metric of the step.
+    #[must_use]
+    pub const fn with_constraint_metric(mut self, metric: Option<f64>) -> Self {
+        self.constraint_metric = metric;
+        self
+    }
+
     /// Build one end-of-step diagnostic report.
     #[must_use]
     pub const fn new(
@@ -398,6 +408,7 @@ impl StepReport {
             potential_energy,
             kinetic_energy,
             constraint_force,
+            constraint_metric: None,
         }
     }
 }

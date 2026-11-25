@@ -835,8 +835,10 @@ fn sample_plane<E: DynamicsEngine + ?Sized>(
     }
 
     let mut values = Vec::with_capacity(config.sample_steps);
+    let mut metric = None;
     for _ in 0..config.sample_steps {
         let report = engine.step(config.time_step)?;
+        require_constant_metric(&mut metric, report.constraint_metric)?;
         let lambda = report.constraint_force.ok_or(FluxError::InvalidConfig(
             "PAFI requires constraint force reporting on constrained steps",
         ))?;
@@ -848,6 +850,28 @@ fn sample_plane<E: DynamicsEngine + ?Sized>(
         )?);
     }
     Ok(values)
+}
+
+/// Relative change of the plane metric above which a plane is refused.
+const METRIC_TOLERANCE: f64 = 1e-6;
+
+/// Refuse a plane whose metric varies.
+///
+/// With rigid constraints in the engine the plane ensemble carries `Z^(1/2)`.
+/// A constant `Z` drops out. A normal that rotates a rigid group makes `Z`
+/// vary, and the mean multiplier alone is then not the free-energy gradient.
+fn require_constant_metric(first: &mut Option<f64>, now: Option<f64>) -> Result<(), FluxError> {
+    let Some(now) = now else { return Ok(()) };
+    if !now.is_finite() || now <= 0.0 {
+        return Err(FluxError::NonFinite("PAFI plane metric"));
+    }
+    let reference = *first.get_or_insert(now);
+    if (now - reference).abs() > METRIC_TOLERANCE * reference {
+        return Err(FluxError::InvalidConfig(
+            "the plane metric varies: the path rotates a rigid group",
+        ));
+    }
+    Ok(())
 }
 
 fn projected_force_sample<E: DynamicsEngine + ?Sized>(
@@ -7390,5 +7414,20 @@ mod tests {
             &adaptive.profile.arc_lengths,
             adaptive.profile.gradients(),
         );
+    }
+}
+
+#[cfg(test)]
+mod metric_tests {
+    use super::*;
+
+    #[test]
+    fn a_constant_metric_passes_and_a_varying_one_is_refused() {
+        let mut first = None;
+        assert!(require_constant_metric(&mut first, None).is_ok());
+        assert!(require_constant_metric(&mut first, Some(0.25)).is_ok());
+        assert!(require_constant_metric(&mut first, Some(0.25 * (1.0 + 1e-9))).is_ok());
+        assert!(require_constant_metric(&mut first, Some(0.26)).is_err());
+        assert!(require_constant_metric(&mut None, Some(f64::NAN)).is_err());
     }
 }

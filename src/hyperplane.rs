@@ -418,6 +418,7 @@ mod restore_tests {
                 potential_energy: 0.0,
                 kinetic_energy: 0.0,
                 constraint_force: Some(0.0),
+                constraint_metric: None,
             })
         }
 
