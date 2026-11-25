@@ -14,6 +14,7 @@ Optional Cargo features (for example `cargo add rgflux --features rgpot`):
 
 - `rgpot`: enables `engine::rgpot::RgpotSurface` and `RgpotConfig` wrapping `rgpot-core` DLPack potential callbacks.
 - `rgpot-session`: enables `engine::rgpot_session::RgpotSessionEngine`, `RgpotSessionConfig`, and `SessionEngineKind` (`openmm`, `nblib`, `lammps`).
+- `rgpot-md-session`: enables `engine::md_session::MdSessionEngine`, a live engine over `rgpot_core::md_session`. It needs an `rgpot-core` that carries that module.
 - `lammpc`: enables `engine::lammpc::LammpcEngine`, `LammpcConfig`, and `MASS_VELOCITY_TO_EV` over `liblammpc` (`lammpc_session_*`), and needs the `capnp` command-line tool at build time.
 
 ## Modules
