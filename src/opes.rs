@@ -1863,7 +1863,9 @@ impl MultithermalReweighting {
     ///
     /// The standard error is [`crate::stats::batch_means`] of
     /// `n w_t (A_t - mean)`, the linearization of the self-normalized ratio
-    /// estimator, so frame correlation enters through the batches.
+    /// estimator, so frame correlation enters through the batches. A
+    /// weighted mean, linearized deviation, or standard error that
+    /// overflows for finite observables returns [`FluxError::NonFinite`].
     pub fn average(
         &self,
         target_temperature: f64,
@@ -1883,13 +1885,23 @@ impl MultithermalReweighting {
         )?;
         let weights = self.weights(target_temperature)?;
         let mean: f64 = weights.iter().zip(observable).map(|(w, a)| w * a).sum();
+        if !mean.is_finite() {
+            return Err(FluxError::NonFinite("reweighted mean"));
+        }
         let n = weights.len() as f64;
         let linearized: Vec<f64> = weights
             .iter()
             .zip(observable)
             .map(|(w, a)| n * w * (a - mean))
             .collect();
+        validate_finite_slice(
+            ndarray::ArrayView1::from(&linearized[..]),
+            "reweighted observable deviations",
+        )?;
         let standard_error = batch_means(&linearized, stats)?.standard_error;
+        if !standard_error.is_finite() {
+            return Err(FluxError::NonFinite("reweighted standard error"));
+        }
         Ok(ReweightedAverage {
             mean,
             standard_error,
@@ -2710,6 +2722,40 @@ mod tests {
         assert!(rw.weights(2.5).is_err());
         let ess = rw.effective_sample_size(1.0).expect("ess");
         assert!(ess > 1.0 && ess <= 4.0);
+    }
+
+    #[test]
+    fn reweighted_averages_refuse_sums_that_overflow() {
+        let build = |biases: Vec<f64>| {
+            MultithermalReweighting::new(vec![0.0; biases.len()], biases, 1.0, 1.0, 0.5, 2.0)
+                .expect("reweighting")
+        };
+        let stats = StatsConfig::default();
+        let max = f64::MAX;
+        // Normalized weights can sum to slightly more than one, so the
+        // weighted mean of f64::MAX rounds up to infinity.
+        assert_eq!(
+            build(vec![0.0, 0.0, 0.024])
+                .average(1.0, &[max; 3], &stats)
+                .err(),
+            Some(FluxError::NonFinite("reweighted mean"))
+        );
+        // The mean is about max / 3, so -max - mean overflows.
+        assert_eq!(
+            build(vec![0.0; 3])
+                .average(1.0, &[max, max, -max], &stats)
+                .err(),
+            Some(FluxError::NonFinite("reweighted observable deviations"))
+        );
+        // Every deviation is finite, but their squares in the batch
+        // variance overflow.
+        let alternating: Vec<f64> = (0..8)
+            .map(|t| if t % 2 == 0 { 1e200 } else { -1e200 })
+            .collect();
+        assert_eq!(
+            build(vec![0.0; 8]).average(1.0, &alternating, &stats).err(),
+            Some(FluxError::NonFinite("reweighted standard error"))
+        );
     }
 
     #[test]
