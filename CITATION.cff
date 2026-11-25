@@ -1,0 +1,38 @@
+cff-version: 1.2.0
+message: "If you use rgflux, please cite it as below."
+type: software
+title: rgflux
+authors:
+  - family-names: Goswami
+    given-names: Rohit
+    email: rgoswami@ieee.org
+    orcid: "https://orcid.org/0000-0002-2393-8056"
+    affiliation: TurtleTech ehf
+repository-code: "https://github.com/OmniPotentRPC/rgflux"
+version: "0.2.1"
+date-released: 2026-11-22
+license: MIT
+keywords:
+  - kinetics
+  - transition-state
+  - rare-events
+  - molecular-dynamics
+abstract: >-
+  rgflux computes rare-event kinetics on top of rgsaddle (bands,
+  minimum-mode and index-1 saddle searches) and rgmin (first-order and
+  Riemannian steppers), with rgpot static potentials, MD sessions, and
+  direct lammpc sessions as optional features.
+references:
+  - type: article
+    title: "Sluggish diffusion in random equimolar FCC alloys"
+    authors:
+      - family-names: Daw
+        given-names: Murray S.
+      - family-names: Chandross
+        given-names: Michael
+    journal: Physical Review Materials
+    volume: 5
+    issue: "4"
+    start: "043603"
+    year: 2021
+    doi: 10.1103/PhysRevMaterials.5.043603

@@ -1,0 +1,34 @@
+{
+  "title": "rgflux",
+  "upload_type": "software",
+  "version": "0.2.1",
+  "description": "rgflux computes rare-event kinetics on top of rgsaddle (bands, minimum-mode and index-1 saddle searches) and rgmin (first-order and Riemannian steppers), with rgpot static potentials, MD sessions, and direct lammpc sessions as optional features.",
+  "creators": [
+    {
+      "name": "Goswami, Rohit",
+      "affiliation": "TurtleTech ehf",
+      "orcid": "0000-0002-2393-8056"
+    }
+  ],
+  "license": "mit",
+  "access_right": "open",
+  "keywords": [
+    "kinetics",
+    "transition-state",
+    "rare-events",
+    "molecular-dynamics"
+  ],
+  "related_identifiers": [
+    {
+      "identifier": "https://github.com/OmniPotentRPC/rgflux",
+      "relation": "isSupplementTo",
+      "scheme": "url"
+    },
+    {
+      "identifier": "10.1103/PhysRevMaterials.5.043603",
+      "relation": "references",
+      "scheme": "doi",
+      "resource_type": "publication-article"
+    }
+  ]
+}

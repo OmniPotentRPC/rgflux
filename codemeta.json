@@ -1,0 +1,60 @@
+{
+  "@context": "https://doi.org/10.5063/schema/codemeta-2.0",
+  "@type": "SoftwareSourceCode",
+  "name": "rgflux",
+  "description": "rgflux computes rare-event kinetics on top of rgsaddle (bands, minimum-mode and index-1 saddle searches) and rgmin (first-order and Riemannian steppers), with rgpot static potentials, MD sessions, and direct lammpc sessions as optional features.",
+  "version": "0.2.1",
+  "datePublished": "2026-11-22",
+  "license": "https://spdx.org/licenses/MIT",
+  "codeRepository": "https://github.com/OmniPotentRPC/rgflux",
+  "issueTracker": "https://github.com/OmniPotentRPC/rgflux/issues",
+  "programmingLanguage": "Rust",
+  "applicationCategory": "https://www.wikidata.org/wiki/Q336",
+  "keywords": [
+    "kinetics",
+    "transition-state",
+    "rare-events",
+    "molecular-dynamics"
+  ],
+  "author": [
+    {
+      "@type": "Person",
+      "@id": "https://orcid.org/0000-0002-2393-8056",
+      "givenName": "Rohit",
+      "familyName": "Goswami",
+      "email": "rgoswami@ieee.org",
+      "affiliation": {
+        "@type": "Organization",
+        "name": "TurtleTech ehf"
+      }
+    }
+  ],
+  "maintainer": {
+    "@id": "https://orcid.org/0000-0002-2393-8056"
+  },
+  "citation": [
+    {
+      "@type": "schema:ScholarlyArticle",
+      "@id": "https://doi.org/10.1103/PhysRevMaterials.5.043603",
+      "identifier": "https://doi.org/10.1103/PhysRevMaterials.5.043603",
+      "name": "Sluggish diffusion in random equimolar FCC alloys",
+      "author": [
+        {
+          "@type": "Person",
+          "givenName": "Murray S.",
+          "familyName": "Daw"
+        },
+        {
+          "@type": "Person",
+          "givenName": "Michael",
+          "familyName": "Chandross"
+        }
+      ],
+      "datePublished": "2021",
+      "isPartOf": {
+        "@type": "schema:Periodical",
+        "name": "Physical Review Materials"
+      }
+    }
+  ]
+}
