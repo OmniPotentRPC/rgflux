@@ -270,7 +270,7 @@ Construct with =OpesMultithermalConfig::range(temp_min, temp_max)=, =OpesMultith
 | =time_step= | =f64= | =0.005= | Integration timestep \(\Delta t > 0\), finite |
 | =frame_stride= | =usize= | =1= | MD steps between stored frames, \(\ge 1\); the starting configuration is always the first frame |
 | =record_positions= | =bool= | =true= | Store frame positions in =OpesTrajectory::positions= |
-| =start_step= | =Option<u64>= | =None= | MD step index of the starting configuration. =None= continues from =OpesMultithermal::last_step= of the shared bias, restored by =from_state=, or starts a new bias at 0. A value must equal that last step when the bias has one, otherwise =run_opes_multithermal= returns =FluxError::InvalidConfig= before integrating; a bias restored from a PLUMED state, which has no step, needs a value |
+| =start_step= | =Option<u64>= | =None= | MD step index of the starting configuration. =None= continues from =OpesMultithermal::last_step= of the shared bias, restored by =from_state=, or starts a new bias at 0. A value must equal that last step when the bias has one, otherwise =run_opes_multithermal= returns =FluxError::InvalidConfig= before integrating; a bias restored from a PLUMED state, which has no step, needs a value. The start step plus =steps= must not exceed =u64::MAX=, or the run returns =FluxError::InvalidConfig= before touching the engine |
 
 * Public output types, functions, and constants
 

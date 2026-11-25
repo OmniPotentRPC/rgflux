@@ -1379,7 +1379,9 @@ pub struct OpesRunConfig {
     /// has one; otherwise [`run_opes_multithermal`] returns
     /// [`FluxError::InvalidConfig`] before integrating, since the `pace`
     /// cadence counts absolute steps. A bias restored from a state without
-    /// a step, such as a PLUMED state, needs a value.
+    /// a step, such as a PLUMED state, needs a value. The start step plus
+    /// [`Self::steps`] must not exceed `u64::MAX`; otherwise the run returns
+    /// [`FluxError::InvalidConfig`] before touching the engine.
     ///
     /// Default: `None`.
     pub start_step: Option<u64>,
@@ -1513,6 +1515,12 @@ pub fn run_opes_multithermal<E: DynamicsEngine + ?Sized>(
         }
         (Some(step), _) => step,
     };
+    let end_step = u64::try_from(config.steps)
+        .ok()
+        .and_then(|steps| start_step.checked_add(steps))
+        .ok_or(FluxError::InvalidConfig(
+            "OPES run would step past u64::MAX; lower OpesRunConfig::steps or start_step",
+        ))?;
 
     let start = engine.positions().to_owned();
     engine.set_positions(start.view())?;
@@ -1558,12 +1566,12 @@ pub fn run_opes_multithermal<E: DynamicsEngine + ?Sized>(
     };
 
     process(engine, start_step, biased_energy)?;
-    for n in 1..=config.steps as u64 {
+    for previous in start_step..end_step {
         let report = engine.step(config.time_step)?;
-        process(engine, start_step + n, report.potential_energy)?;
+        process(engine, previous + 1, report.potential_energy)?;
     }
     trajectory.bias = shared.snapshot()?;
-    trajectory.last_step = start_step + config.steps as u64;
+    trajectory.last_step = end_step;
     Ok(trajectory)
 }
 

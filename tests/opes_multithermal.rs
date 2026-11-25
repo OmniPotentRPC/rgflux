@@ -385,6 +385,50 @@ fn restart_refuses_a_changed_temperature_or_boltzmann_constant() {
 }
 
 #[test]
+fn run_refuses_a_step_past_u64_max_before_touching_the_engine() {
+    let thermostat = ThermostatConfig::default()
+        .with_temperature(T0)
+        .with_gamma(1.0);
+    let fresh = || {
+        let shared = SharedOpesMultithermal::new(
+            OpesMultithermal::new(ladder(), &thermostat).expect("bias"),
+        );
+        let mut engine = engine_over(&shared, thermostat, 6);
+        engine.shoot_velocities(6).expect("velocities");
+        (shared, engine)
+    };
+    let (shared, mut engine) = fresh();
+    let positions = engine.positions().to_owned();
+    let velocities = engine.velocities().to_owned();
+    let bias = shared.snapshot().expect("snapshot");
+    let start = u64::MAX - 5;
+    let overflowing = OpesRunConfig::default()
+        .with_steps(6)
+        .with_start_step(start);
+    assert_eq!(
+        run_opes_multithermal(&mut engine, &shared, &overflowing).err(),
+        Some(FluxError::InvalidConfig(
+            "OPES run would step past u64::MAX; lower OpesRunConfig::steps or start_step"
+        ))
+    );
+    assert_eq!(engine.positions(), positions.view());
+    assert_eq!(engine.velocities(), velocities.view());
+    assert_eq!(shared.snapshot().expect("snapshot"), bias);
+    assert_eq!(shared.last_evaluation().expect("lock"), None);
+
+    // The refused call left the engine as a fresh one, random stream
+    // included, and the largest run that fits ends at u64::MAX.
+    let (twin_shared, mut twin) = fresh();
+    let fits = overflowing.with_steps(5).with_frame_stride(1);
+    let ran = run_opes_multithermal(&mut engine, &shared, &fits).expect("run to u64::MAX");
+    let twin_ran = run_opes_multithermal(&mut twin, &twin_shared, &fits).expect("twin run");
+    assert_eq!(ran.last_step, u64::MAX);
+    assert_eq!(ran.steps, (start..=u64::MAX).collect::<Vec<_>>());
+    assert_eq!(ran.potential_energies, twin_ran.potential_energies);
+    assert_eq!(ran.positions, twin_ran.positions);
+}
+
+#[test]
 fn run_refuses_a_thermostat_away_from_the_bias_temperature() {
     let bias_thermostat = ThermostatConfig::default().with_temperature(T0);
     let shared = SharedOpesMultithermal::new(
