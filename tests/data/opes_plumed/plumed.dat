@@ -1,0 +1,17 @@
+# PLUMED oracle input for tests/opes_plumed_oracle.rs.
+# Verified with PLUMED 2.10.2 configured with --enable-modules=opes and run as
+#   plumed driver --ixyz traj.xyz --plumed plumed.dat --timestep 1 \
+#     --trajectory-stride PACE --dump-forces FORCES --dump-forces-fmt %.17g
+# The test replaces the @...@ fields. Atom 1 holds (x, y, 0) of the rgflux
+# double well U = (x^2 - 1)^2 + y^2 / 2 in natural units (k_B = 1).
+@RESTART@
+UNITS NATURAL
+p: POSITION ATOM=1 NOPBC
+ene: CUSTOM ARG=p.x,p.y FUNC=(x^2-1)^2+0.5*y^2 PERIODIC=NO
+x2: CUSTOM ARG=p.x FUNC=x^2 PERIODIC=NO
+ecv: ECV_MULTITHERMAL ARG=ene TEMP=@TEMP@ @LADDER@
+opes: OPES_EXPANDED ARG=ecv.ene PACE=@PACE@ OBSERVATION_STEPS=@OBS@ PRINT_STRIDE=@PRINT@ FMT=%.17g FILE=DELTAFS STATE_WFILE=STATE STATE_WSTRIDE=@PACE@ @STATE_RFILE@
+rb: REWEIGHT_BIAS TEMP=@TEMP@ ARG=opes.bias
+@AVERAGES@
+PRINT ARG=ene,x2,opes.bias STRIDE=1 FILE=COLVAR FMT=%.17g
+PRINT ARG=@AVERAGE_ARGS@ STRIDE=1 FILE=AVERAGES FMT=%.17g

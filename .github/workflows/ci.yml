@@ -75,6 +75,51 @@ jobs:
       - name: Dependencies resolve from crates.io with caret requirements and one copy
         run: python3 ci/check_dependency_pins.py
 
+  # PLUMED is a development oracle, not a dependency. The conda-forge
+  # package leaves out the default-off opes module, so this job builds the
+  # release tarball with it. RGFLUX_REQUIRE_PLUMED turns a skip into a
+  # failure; the other jobs skip the oracle and print the reason.
+  plumed-oracle:
+    runs-on: ubuntu-latest
+    env:
+      PLUMED_VERSION: 2.10.2
+      PLUMED_SHA256: 42f097dd148275bbcd72034815655391d4743be06d1cea500ef848c84b8462dc
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop' }}
+      - name: Cache PLUMED
+        id: plumed-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/plumed
+          key: plumed-${{ env.PLUMED_VERSION }}-opes-${{ runner.os }}
+      - name: Build PLUMED with the opes module
+        if: steps.plumed-cache.outputs.cache-hit != 'true'
+        working-directory: ${{ runner.temp }}
+        run: |
+          set -euo pipefail
+          curl -fsSL -o plumed.tgz "https://github.com/plumed/plumed2/releases/download/v${PLUMED_VERSION}/plumed-src-${PLUMED_VERSION}.tgz"
+          echo "${PLUMED_SHA256}  plumed.tgz" | sha256sum -c -
+          tar xzf plumed.tgz
+          cd "plumed-${PLUMED_VERSION}"
+          ./configure --prefix="${RUNNER_TEMP}/plumed" --enable-modules=opes --disable-doc --disable-python --disable-mpi
+          make -j"$(nproc)"
+          make install
+      - name: PLUMED oracle (skips disallowed)
+        env:
+          RGFLUX_PLUMED: ${{ runner.temp }}/plumed/bin/plumed
+          RGFLUX_REQUIRE_PLUMED: "1"
+          LD_LIBRARY_PATH: ${{ runner.temp }}/plumed/lib
+        run: |
+          set -euo pipefail
+          "${RGFLUX_PLUMED}" config module opes | grep -qx "opes on"
+          cargo test --locked --test opes_plumed_oracle -- --nocapture 2>&1 | tee oracle.log
+          grep -q "^test result: ok\. 1 passed; 0 failed; 0 ignored" oracle.log
+          if grep -q "skipping the PLUMED oracle" oracle.log; then exit 1; fi
+
   msrv:
     runs-on: ubuntu-latest
     steps:
