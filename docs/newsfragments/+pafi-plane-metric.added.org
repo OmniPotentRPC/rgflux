@@ -1,0 +1,3 @@
+=StepReport= carries the plane metric of engines with rigid constraints, and
+PAFI refuses a plane on which it varies, because the mean multiplier alone is
+then not the free-energy gradient.

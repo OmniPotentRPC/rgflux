@@ -54,6 +54,7 @@ pub struct MdSessionEngine<S: MdSession> {
     cell: Option<[f64; 9]>,
     seed: u64,
     epoch: u64,
+    metrics: Vec<f64>,
 }
 
 impl<S: MdSession> MdSessionEngine<S> {
@@ -94,6 +95,7 @@ impl<S: MdSession> MdSessionEngine<S> {
             cell,
             seed: 1,
             epoch: 0,
+            metrics: Vec::new(),
         })
     }
 
@@ -180,7 +182,17 @@ impl<S: MdSession> MdSessionEngine<S> {
         if outcome.constraint_force.iter().any(|l| !l.is_finite()) {
             return Err(FluxError::NonFinite("MD session constraint force"));
         }
+        self.metrics = outcome.constraint_metric;
         Ok(outcome.constraint_force)
+    }
+
+    /// Plane metric of each step of the last [`Self::run`] in 1/amu, empty when
+    /// the engine does not report one.
+    ///
+    /// The free energy along the plane offset is the integral of the mean
+    /// multiplier minus `k_B T ln <Z^(-1/2)>`.
+    pub fn metrics(&self) -> &[f64] {
+        &self.metrics
     }
 }
 
@@ -296,11 +308,10 @@ impl<S: MdSession> DynamicsEngine for MdSessionEngine<S> {
 
     fn step(&mut self, dt: f64) -> Result<StepReport, FluxError> {
         let lambda = self.run(dt, 1)?.first().copied();
-        Ok(StepReport::new(
-            self.potential,
-            self.kinetic_energy(),
-            lambda,
-        ))
+        Ok(
+            StepReport::new(self.potential, self.kinetic_energy(), lambda)
+                .with_constraint_metric(self.metrics.first().copied()),
+        )
     }
 
     fn reseed(&mut self, seed: u64) -> Result<(), FluxError> {
@@ -420,6 +431,7 @@ mod tests {
                 self.offsets
                     .push(point.iter().zip(normal).map(|(p, n)| p * n).sum());
                 outcome.constraint_force = vec![0.25; steps];
+                outcome.constraint_metric = vec![0.0625; steps];
             }
             Ok(outcome)
         }
@@ -468,6 +480,7 @@ mod tests {
         engine.set_constraint(Some(plane)).expect("constraint");
         let report = engine.step(0.001).expect("step");
         assert_eq!(report.constraint_force, Some(0.25));
+        assert_eq!(report.constraint_metric, Some(0.0625));
         assert_relative_eq!(engine.session().offsets[0], 1.5);
     }
 
@@ -478,7 +491,15 @@ mod tests {
         let whole = Array1::from(vec![16.0 / norm, 0.0, 0.0, 1.0 / norm, 0.0, 0.0]);
         let single = Array1::from(vec![1.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
         let groups = [vec![0, 1]];
-        assert!(engine.check_rigid_translation(whole.view(), &groups).is_ok());
-        assert!(engine.check_rigid_translation(single.view(), &groups).is_err());
+        assert!(
+            engine
+                .check_rigid_translation(whole.view(), &groups)
+                .is_ok()
+        );
+        assert!(
+            engine
+                .check_rigid_translation(single.view(), &groups)
+                .is_err()
+        );
     }
 }

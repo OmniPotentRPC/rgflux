@@ -26,8 +26,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let shift: f64 = a[4].parse()?;
     let (burn, sample): (usize, usize) = (a[5].parse()?, a[6].parse()?);
     let seed: u64 = a[7].parse()?;
-    let dt: f64 = std::env::var("PAFI_DT_PS")
-        .map_or(Ok(0.001), |text| text.parse())?;
+    let dt: f64 = std::env::var("PAFI_DT_PS").map_or(Ok(0.001), |text| text.parse())?;
     let threads = std::env::var("OMP_NUM_THREADS").unwrap_or_else(|_| "1".into());
     // SAFETY: the engine is built from the rgpot tree this crate links.
     let session = unsafe {
