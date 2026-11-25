@@ -99,8 +99,9 @@ class ZenodoTests(unittest.TestCase):
         self.assertEqual(len(errors), 3, errors)
         self.assertTrue(all("'1.2.2'" in e for e in errors), errors)
 
-    def test_missing_version_passes(self) -> None:
-        self.assertEqual(check_metadata.check_zenodo({"title": "x"}, self.VERSIONS), [])
+    def test_missing_version_fails(self) -> None:
+        errors = check_metadata.check_zenodo({"title": "x"}, self.VERSIONS)
+        self.assertEqual(errors, ["'version' is missing"])
 
     def test_repository_file_matches_release_versions(self) -> None:
         import json

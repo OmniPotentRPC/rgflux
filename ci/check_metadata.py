@@ -11,8 +11,8 @@ not depend on how the context URL in the file resolves. The check fails when
   for an ``@id``-typed term or for ``@type`` expands against the document
   base instead of a vocabulary.
 
-.zenodo.json may carry a ``version`` key; when present it must equal the
-release version in Cargo.toml, CITATION.cff and codemeta.json.
+.zenodo.json must carry a ``version`` key equal to the release version in
+Cargo.toml, CITATION.cff and codemeta.json.
 
 Requires ``pyld`` (``python3 -m pip install pyld``).
 """
@@ -166,9 +166,9 @@ def release_versions() -> dict[str, str | None]:
 
 
 def check_zenodo(document: dict[str, Any], versions: dict[str, str | None]) -> list[str]:
-    """Require an optional deposit ``version`` to match every release source."""
+    """Require the deposit ``version`` to be present and match every release source."""
     if "version" not in document:
-        return []
+        return ["'version' is missing"]
     return [
         f"'version' is {document['version']!r} but {source} has {version!r}"
         for source, version in versions.items()
