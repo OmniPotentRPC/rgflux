@@ -1358,6 +1358,8 @@ impl SharedOpesMultithermal {
 ///
 /// Returns `U + V(U)` and `(1 + dV/dU) F`, the exact negative gradient of the
 /// biased energy, and stores the unbiased evaluation in the shared handle.
+/// A finite `U` and `V(U)` whose sum, or a scaled force, is not finite
+/// returns [`FluxError::NonFinite`] and stores nothing.
 pub struct OpesMultithermalSurface<S> {
     inner: S,
     shared: SharedOpesMultithermal,
@@ -1391,6 +1393,9 @@ impl<S: ForceSurface> ForceSurface for OpesMultithermalSurface<S> {
         let eval = state.bias.bias(energy)?;
         let scale = eval.force_scale();
         let biased_energy = energy + eval.bias;
+        if !biased_energy.is_finite() {
+            return Err(FluxError::NonFinite("OPES biased energy"));
+        }
         let biased_forces = forces.mapv(|f| scale * f);
         validate_finite_slice(biased_forces.view(), "OPES biased forces")?;
         state.last = Some(SurfaceEvaluation {
@@ -1969,6 +1974,31 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn surface_refuses_a_biased_energy_that_overflows() {
+        struct Flat(f64);
+        impl rgsaddle::PointSurface for Flat {
+            fn eval(
+                &self,
+                _: ArrayView1<f64>,
+            ) -> Result<(f64, Array1<f64>), rgsaddle::SaddleError> {
+                Ok((self.0, Array1::from_vec(vec![1.0])))
+            }
+        }
+        // At the cold end k_B T0 (beta_k - beta0) = 0.6, so V(U) is about
+        // 0.6 U for very negative U: U and V are finite and U + V is not.
+        let energy = -1.5e308;
+        let shared = SharedOpesMultithermal::new(initialized_bias());
+        assert!(shared.with_bias(|b| b.bias(energy)).expect("lock").is_ok());
+        let surface = OpesMultithermalSurface::new(Flat(energy), shared.clone());
+        let x = Array1::from_vec(vec![0.0]);
+        assert_eq!(
+            surface.energy_and_forces(x.view(), None).err(),
+            Some(FluxError::NonFinite("OPES biased energy"))
+        );
+        assert_eq!(shared.last_evaluation().expect("lock"), None);
     }
 
     #[test]
