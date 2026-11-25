@@ -603,7 +603,7 @@ The restart keeps the update cadence and the thermodynamic reference:
 - The bias absorbs a sample only at MD steps that are multiples of =pace=, counted from step 0, so a continuation must keep the absolute step. The state records the last step the bias saw, =from_state= restores it as =OpesMultithermal::last_step=, and =run_opes_multithermal= with the default =OpesRunConfig::start_step= of =None= continues from it. An explicit =start_step= that differs from the restored step returns =FluxError::InvalidConfig= before any step is integrated, and so does an update at an earlier step. The configuration at the restored step is not absorbed a second time.
 - \(\Delta F\) and =rct= are free energies at \(T_0\) in units of \(k_{\mathrm{B}}\), so they do not carry over to another \(T_0\), \(k_{\mathrm{B}}\), or ladder. The state records \(T_0\), \(k_{\mathrm{B}}\), and the reweighting range \((T_{\min}, T_{\max})\) at full precision, and =from_state= returns =FluxError::InvalidConfig= when the configuration and thermostat differ from them beyond a relative \(64\varepsilon\), or when only some of the entries are present.
 
-These entries are comment lines of the form =# rgflux temperature 3e-1=, which PLUMED skips, so the file stays a valid PLUMED state. A state written by PLUMED has none of them: =from_state= then checks only the six-digit temperature labels, the caller must keep \(T_0\) and \(k_{\mathrm{B}}\) unchanged, and =run_opes_multithermal= requires an explicit =start_step=, since =last_step= is =None=.
+These entries are comment lines of the form =# rgflux temperature 3e-1=, which PLUMED skips, so the file stays a valid PLUMED state. A state written by PLUMED has none of them, and its six-digit temperature labels can match a ladder built at another \(T_0\) or \(k_{\mathrm{B}}\), so =from_state= returns =FluxError::InvalidConfig= for it. Read it with =OpesMultithermal::from_plumed_state=, which takes the \(T_0\) and \(k_{\mathrm{B}}\) the PLUMED run used, for example its =TEMP= and the \(k_{\mathrm{B}}\) of its =UNITS=, and refuses them when they differ from the configuration and thermostat as =from_state= does for recorded entries. =run_opes_multithermal= then requires an explicit =start_step=, since =last_step= is =None=.
 
 #+begin_src rust
 use ndarray::{Array1, ArrayView1};
@@ -660,9 +660,21 @@ fn main() -> Result<(), rgflux::FluxError> {
     ));
     let warmer = thermostat.with_temperature(0.4);
     assert!(matches!(
-        OpesMultithermal::from_state(config, &warmer, &state[..]),
+        OpesMultithermal::from_state(config.clone(), &warmer, &state[..]),
         Err(FluxError::InvalidConfig(_))
     ));
+
+    // A PLUMED state has no rgflux entries; attest T0 and k_B to read it.
+    let text = String::from_utf8(state).expect("utf8");
+    let plumed: String = text
+        .lines()
+        .filter(|line| !line.starts_with("# rgflux"))
+        .map(|line| format!("{line}\n"))
+        .collect();
+    assert!(OpesMultithermal::from_state(config.clone(), &thermostat, plumed.as_bytes()).is_err());
+    let from_plumed =
+        OpesMultithermal::from_plumed_state(config, &thermostat, plumed.as_bytes(), 0.3, 1.0)?;
+    assert_eq!(from_plumed.last_step(), None);
     Ok(())
 }
 #+end_src

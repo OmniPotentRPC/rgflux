@@ -712,17 +712,77 @@ impl OpesMultithermal {
     /// [`FluxError::InvalidConfig`]; so does a state with only some of these
     /// entries. The stored step becomes [`Self::last_step`], which
     /// [`run_opes_multithermal`] continues from. A PLUMED state carries
-    /// none of these entries: it is accepted on the ladder check alone, the
-    /// caller must keep `T0` and `k_B` unchanged, and a run from it needs
-    /// [`OpesRunConfig::start_step`].
+    /// none of these entries, and the six-digit labels alone do not fix
+    /// `T0` or `k_B`, so it returns [`FluxError::InvalidConfig`] here; read
+    /// it with [`Self::from_plumed_state`].
     pub fn from_state<R: BufRead>(
         config: OpesMultithermalConfig,
         thermostat: &ThermostatConfig,
         reader: R,
     ) -> Result<Self, FluxError> {
+        Self::restore(config, thermostat, reader, None)
+    }
+
+    /// Restart from a PLUMED state, given the `T0` (`temperature`) and
+    /// `k_B` (`boltzmann`) it was written at.
+    ///
+    /// A PLUMED `STATE_WFILE` records neither, so the caller attests them,
+    /// for example from the `TEMP` and the units of the PLUMED input. Both
+    /// must be finite and positive and match the `T0` and `k_B` of `config`
+    /// and `thermostat` within a relative `64 * f64::EPSILON`; otherwise
+    /// [`FluxError::InvalidConfig`] is returned. The ladder is then checked
+    /// as in [`Self::from_state`]. A state that also carries the `rgflux`
+    /// entries is checked against them too. Without a stored step
+    /// [`Self::last_step`] is `None`, and a run from the bias needs
+    /// [`OpesRunConfig::start_step`].
+    pub fn from_plumed_state<R: BufRead>(
+        config: OpesMultithermalConfig,
+        thermostat: &ThermostatConfig,
+        reader: R,
+        temperature: f64,
+        boltzmann: f64,
+    ) -> Result<Self, FluxError> {
+        for value in [temperature, boltzmann] {
+            if !value.is_finite() {
+                return Err(FluxError::NonFinite("attested OPES state T0 and k_B"));
+            }
+            if value <= 0.0 {
+                return Err(FluxError::InvalidConfig(
+                    "attested OPES state T0 and k_B must be positive",
+                ));
+            }
+        }
+        Self::restore(config, thermostat, reader, Some((temperature, boltzmann)))
+    }
+
+    fn restore<R: BufRead>(
+        config: OpesMultithermalConfig,
+        thermostat: &ThermostatConfig,
+        reader: R,
+        attested: Option<(f64, f64)>,
+    ) -> Result<Self, FluxError> {
         let mut bias = Self::new(config, thermostat)?;
         let state = parse_state(reader)?;
         let meta = state.meta.thermal()?;
+        let stored = match (&meta, attested) {
+            (_, Some(pair)) => pair,
+            (Some(meta), None) => (meta.temperature, meta.boltzmann),
+            (None, None) => {
+                return Err(FluxError::InvalidConfig(
+                    "OPES state has no rgflux T0 and k_B entries; read a PLUMED state with from_plumed_state",
+                ));
+            }
+        };
+        if !same_value(stored.0, bias.temperature) {
+            return Err(FluxError::InvalidConfig(
+                "OPES state was written at a different simulation temperature T0",
+            ));
+        }
+        if !same_value(stored.1, bias.boltzmann) {
+            return Err(FluxError::InvalidConfig(
+                "OPES state was written with a different Boltzmann constant k_B",
+            ));
+        }
         if let Some(meta) = &meta {
             if !same_value(meta.temperature, bias.temperature) {
                 return Err(FluxError::InvalidConfig(
@@ -2048,24 +2108,85 @@ mod tests {
         );
     }
 
-    #[test]
-    fn state_without_rgflux_entries_restores_with_an_unknown_step() {
-        let bias = initialized_bias();
-        let text = state_text(&bias);
-        let plumed: String = text
-            .lines()
+    fn without_rgflux_entries(text: &str) -> String {
+        text.lines()
             .filter(|line| !line.starts_with(STATE_META_PREFIX))
             .map(|line| format!("{line}\n"))
-            .collect();
-        let restored = OpesMultithermal::from_state(
-            bias.config().clone(),
-            &thermostat(0.8),
-            plumed.as_bytes(),
-        )
-        .expect("PLUMED layout");
+            .collect()
+    }
+
+    #[test]
+    fn state_without_rgflux_entries_needs_attested_t0_and_boltzmann() {
+        let bias = initialized_bias();
+        let plumed = without_rgflux_entries(&state_text(&bias));
+        let config = bias.config().clone();
+        assert_eq!(
+            OpesMultithermal::from_state(config.clone(), &thermostat(0.8), plumed.as_bytes()).err(),
+            Some(FluxError::InvalidConfig(
+                "OPES state has no rgflux T0 and k_B entries; read a PLUMED state with from_plumed_state"
+            ))
+        );
+        // The labels match a thermostat at 0.9 as well, so only the
+        // attestation tells the two apart.
+        let attest = |thermostat: &ThermostatConfig, t0: f64, kb: f64| {
+            OpesMultithermal::from_plumed_state(
+                config.clone(),
+                thermostat,
+                plumed.as_bytes(),
+                t0,
+                kb,
+            )
+        };
+        assert!(attest(&thermostat(0.9), 0.9, 1.0).is_ok());
+        assert_eq!(
+            attest(&thermostat(0.9), 0.8, 1.0).err(),
+            Some(FluxError::InvalidConfig(
+                "OPES state was written at a different simulation temperature T0"
+            ))
+        );
+        let other_kb = thermostat(0.8).with_boltzmann(2.0);
+        assert_eq!(
+            attest(&other_kb, 0.8, 1.0).err(),
+            Some(FluxError::InvalidConfig(
+                "OPES state was written with a different Boltzmann constant k_B"
+            ))
+        );
+        assert!(matches!(
+            attest(&thermostat(0.8), f64::NAN, 1.0),
+            Err(FluxError::NonFinite(_))
+        ));
+        assert!(matches!(
+            attest(&thermostat(0.8), 0.8, 0.0),
+            Err(FluxError::InvalidConfig(_))
+        ));
+
+        let restored = attest(&thermostat(0.8), 0.8, 1.0).expect("attested PLUMED state");
         assert_eq!(restored.delta_f(), bias.delta_f());
+        assert_eq!(restored.rct().to_bits(), bias.rct().to_bits());
+        assert_eq!(restored.counter(), bias.counter());
         assert_eq!(restored.last_step(), None);
         assert_eq!(restored.step, StepRecord::Unknown);
+
+        let text = state_text(&bias);
+        let with_entries = OpesMultithermal::from_plumed_state(
+            config.clone(),
+            &thermostat(0.8),
+            text.as_bytes(),
+            0.8,
+            1.0,
+        )
+        .expect("attested rgflux state");
+        assert_eq!(with_entries.last_step(), Some(3));
+        assert!(matches!(
+            OpesMultithermal::from_plumed_state(
+                config.with_temperature(0.9),
+                &thermostat(0.8),
+                text.as_bytes(),
+                0.9,
+                1.0
+            ),
+            Err(FluxError::InvalidConfig(_))
+        ));
 
         let partial: String = text
             .lines()

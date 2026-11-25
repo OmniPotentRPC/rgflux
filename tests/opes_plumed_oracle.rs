@@ -365,9 +365,14 @@ fn plumed_opes_expanded_agrees_with_rgflux() {
         let c1 = compare_replay(&dir1, &first, 0);
 
         let plumed_state = fs::read(dir1.join("STATE")).expect("PLUMED state");
-        let from_plumed =
-            OpesMultithermal::from_state(case.config.clone(), &thermostat, &plumed_state[..])
-                .expect("rgflux reads the PLUMED state");
+        let from_plumed = OpesMultithermal::from_plumed_state(
+            case.config.clone(),
+            &thermostat,
+            &plumed_state[..],
+            T0,
+            thermostat.boltzmann,
+        )
+        .expect("rgflux reads the PLUMED state");
         assert_eq!(from_plumed.counter(), first.bias.counter());
         assert_eq!(from_plumed.last_step(), None);
         assert_eq!(from_plumed.temperatures(), first.bias.temperatures());
@@ -388,10 +393,12 @@ fn plumed_opes_expanded_agrees_with_rgflux() {
         write_frames(&dir2.join("traj.xyz"), &second);
         run_plumed(&plumed, &dir2, &case, Some(&rgflux_state));
         let c2 = compare_replay(&dir2, &second, HALF_STEPS as u64);
-        let final_plumed = OpesMultithermal::from_state(
+        let final_plumed = OpesMultithermal::from_plumed_state(
             case.config.clone(),
             &thermostat,
             &fs::read(dir2.join("STATE")).expect("state")[..],
+            T0,
+            thermostat.boltzmann,
         )
         .expect("final PLUMED state");
         assert_eq!(final_plumed.counter(), second.bias.counter());

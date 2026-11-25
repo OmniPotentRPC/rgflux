@@ -282,8 +282,18 @@ fn restart_continues_at_the_stored_step_and_rejects_another_start() {
         .filter(|line| !line.starts_with("# rgflux"))
         .map(|line| format!("{line}\n"))
         .collect();
-    let from_plumed =
-        OpesMultithermal::from_state(ladder(), &thermostat, plumed.as_bytes()).expect("restore");
+    assert!(matches!(
+        OpesMultithermal::from_state(ladder(), &thermostat, plumed.as_bytes()),
+        Err(FluxError::InvalidConfig(_))
+    ));
+    let from_plumed = OpesMultithermal::from_plumed_state(
+        ladder(),
+        &thermostat,
+        plumed.as_bytes(),
+        T0,
+        thermostat.boltzmann,
+    )
+    .expect("restore");
     assert_eq!(from_plumed.last_step(), None);
     let shared = SharedOpesMultithermal::new(from_plumed);
     let mut engine = engine_over(&shared, thermostat, 4);
@@ -337,6 +347,39 @@ fn restart_refuses_a_changed_temperature_or_boltzmann_constant() {
         restore(ladder().with_temp_max(1.200_000_1), &thermostat),
         Some(FluxError::InvalidConfig(
             "OPES state was written for a different temperature range"
+        ))
+    );
+
+    let text = String::from_utf8(state.clone()).expect("utf8");
+    let plumed: String = text
+        .lines()
+        .filter(|line| !line.starts_with("# rgflux"))
+        .map(|line| format!("{line}\n"))
+        .collect();
+    let warmer = thermostat.with_temperature(0.35);
+    assert_eq!(
+        OpesMultithermal::from_state(ladder(), &warmer, plumed.as_bytes()).err(),
+        Some(FluxError::InvalidConfig(
+            "OPES state has no rgflux T0 and k_B entries; read a PLUMED state with from_plumed_state"
+        ))
+    );
+    assert_eq!(
+        OpesMultithermal::from_plumed_state(ladder(), &warmer, plumed.as_bytes(), T0, 1.0).err(),
+        Some(FluxError::InvalidConfig(
+            "OPES state was written at a different simulation temperature T0"
+        ))
+    );
+    assert_eq!(
+        OpesMultithermal::from_plumed_state(
+            ladder(),
+            &thermostat.with_boltzmann(2.0),
+            plumed.as_bytes(),
+            T0,
+            1.0
+        )
+        .err(),
+        Some(FluxError::InvalidConfig(
+            "OPES state was written with a different Boltzmann constant k_B"
         ))
     );
 }
