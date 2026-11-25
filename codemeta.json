@@ -9,7 +9,7 @@
   "codeRepository": "https://github.com/OmniPotentRPC/rgflux",
   "issueTracker": "https://github.com/OmniPotentRPC/rgflux/issues",
   "programmingLanguage": "Rust",
-  "applicationCategory": "science",
+  "applicationCategory": "https://www.wikidata.org/wiki/Q336",
   "keywords": [
     "kinetics",
     "transition-state",
@@ -34,7 +34,7 @@
   },
   "citation": [
     {
-      "@type": "ScholarlyArticle",
+      "@type": "schema:ScholarlyArticle",
       "@id": "https://doi.org/10.1103/PhysRevMaterials.5.043603",
       "identifier": "https://doi.org/10.1103/PhysRevMaterials.5.043603",
       "name": "Sluggish diffusion in random equimolar FCC alloys",
@@ -52,7 +52,7 @@
       ],
       "datePublished": "2021",
       "isPartOf": {
-        "@type": "Periodical",
+        "@type": "schema:Periodical",
         "name": "Physical Review Materials"
       }
     }
