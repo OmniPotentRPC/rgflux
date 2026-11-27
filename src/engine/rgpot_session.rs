@@ -57,8 +57,8 @@ use ndarray::{Array1, ArrayView1};
 
 use crate::engine::{
     DynamicsEngine, HyperplaneConstraint, StepReport, SurfaceVelocityPolicy, ThermostatConfig,
-    draw_maxwell_boltzmann_velocities, reflect_velocity_in_place, validate_finite_slice,
-    validate_masses, validate_unit_normal,
+    draw_maxwell_boltzmann_velocities, rattle_velocities_in_place, reflect_velocity_in_place,
+    shake_positions_in_place, validate_finite_slice, validate_masses, validate_unit_normal,
 };
 use crate::error::FluxError;
 
@@ -201,12 +201,22 @@ impl RgpotSessionEngine {
             }
         }
         let rgpot_abi_major = rgpot_core::version::rgpot_version_major();
-        Ok(Self {
+        let mut engine = Self {
             positions: Array1::zeros(dof),
             velocities: Array1::zeros(dof),
             config,
             rgpot_abi_major,
-        })
+        };
+        engine.project_state_onto_constraint()?;
+        Ok(engine)
+    }
+
+    fn project_state_onto_constraint(&mut self) -> Result<(), FluxError> {
+        if let Some(plane) = self.config.constraint.clone() {
+            shake_positions_in_place(&mut self.positions, self.config.masses.view(), &plane)?;
+            rattle_velocities_in_place(&mut self.velocities, self.config.masses.view(), &plane);
+        }
+        Ok(())
     }
 
     /// Selected `rgpot` session backend kind.
@@ -257,6 +267,9 @@ impl DynamicsEngine for RgpotSessionEngine {
         }
         validate_finite_slice(positions, "RgpotSessionEngine positions")?;
         self.positions.assign(&positions);
+        if let Some(plane) = self.config.constraint.clone() {
+            shake_positions_in_place(&mut self.positions, self.config.masses.view(), &plane)?;
+        }
         Ok(())
     }
 
@@ -274,6 +287,9 @@ impl DynamicsEngine for RgpotSessionEngine {
         }
         validate_finite_slice(velocities, "RgpotSessionEngine velocities")?;
         self.velocities.assign(&velocities);
+        if let Some(plane) = self.config.constraint.clone() {
+            rattle_velocities_in_place(&mut self.velocities, self.config.masses.view(), &plane);
+        }
         Ok(())
     }
 
@@ -322,7 +338,7 @@ impl DynamicsEngine for RgpotSessionEngine {
             }
         }
         self.config.constraint = constraint;
-        Ok(())
+        self.project_state_onto_constraint()
     }
 
     fn energy_and_forces(&mut self) -> Result<(f64, Array1<f64>), FluxError> {
@@ -348,6 +364,9 @@ impl DynamicsEngine for RgpotSessionEngine {
     fn shoot_velocities(&mut self, seed: u64) -> Result<(), FluxError> {
         let kbt = self.config.thermostat.thermal_energy()?;
         self.velocities = draw_maxwell_boltzmann_velocities(self.masses(), kbt, seed)?;
+        if let Some(plane) = self.config.constraint.clone() {
+            rattle_velocities_in_place(&mut self.velocities, self.config.masses.view(), &plane);
+        }
         Ok(())
     }
 
@@ -436,6 +455,60 @@ mod tests {
                     if message.contains("reseed is unsupported")
             ));
         }
+    }
+
+    #[test]
+    fn constraint_writes_are_projected_onto_the_plane() {
+        let plane =
+            HyperplaneConstraint::from_direction(Array1::from_vec(vec![1.0, 0.0, 0.0]).view(), 1.0)
+                .expect("unit plane");
+        let masses = Array1::from_elem(3, 2.0);
+        let engine = RgpotSessionEngine::new(
+            RgpotSessionConfig::default()
+                .with_masses(masses.clone())
+                .with_constraint(plane.clone()),
+        )
+        .expect("constrained origin");
+        assert!(
+            (rgmin::vecops::dot(plane.normal.view(), engine.positions()) - plane.offset).abs()
+                < 1.0e-12,
+            "new must SHAKE the origin onto the plane"
+        );
+
+        let mut engine =
+            RgpotSessionEngine::new(RgpotSessionConfig::default().with_masses(masses.clone()))
+                .expect("unconstrained engine");
+        engine
+            .set_positions(Array1::from_vec(vec![4.0, 1.0, -2.0]).view())
+            .expect("positions");
+        engine
+            .set_velocities(Array1::from_vec(vec![3.0, -1.0, 0.5]).view())
+            .expect("velocities");
+        engine
+            .set_constraint(Some(plane.clone()))
+            .expect("install plane");
+        let positions = engine.positions();
+        assert!((positions[0] - 1.0).abs() < 1.0e-12);
+        assert!((positions[1] - 1.0).abs() < 1.0e-12);
+        assert!((positions[2] + 2.0).abs() < 1.0e-12);
+        let velocities = engine.velocities();
+        assert!(velocities[0].abs() < 1.0e-12);
+        assert!((velocities[1] + 1.0).abs() < 1.0e-12);
+        assert!((velocities[2] - 0.5).abs() < 1.0e-12);
+
+        engine
+            .set_positions(Array1::from_vec(vec![4.0, 1.0, -2.0]).view())
+            .expect("reprojected positions");
+        assert!((engine.positions()[0] - 1.0).abs() < 1.0e-12);
+        engine
+            .set_velocities(Array1::from_vec(vec![3.0, -1.0, 0.5]).view())
+            .expect("reprojected velocities");
+        assert!(engine.velocities()[0].abs() < 1.0e-12);
+        engine.shoot_velocities(7).expect("shoot");
+        assert!(
+            rgmin::vecops::dot(plane.normal.view(), engine.velocities()).abs() < 1.0e-12,
+            "shoot_velocities must RATTLE the draw"
+        );
     }
 
     #[test]

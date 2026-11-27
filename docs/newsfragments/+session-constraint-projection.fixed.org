@@ -1,0 +1,1 @@
+Project RgpotSessionEngine positions and velocities onto an active hyperplane in the constructor, in set_positions, set_velocities, set_constraint, and shoot_velocities.
