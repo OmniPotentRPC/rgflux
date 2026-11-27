@@ -15,6 +15,9 @@
 //! positions and plane/wall coordinates in Angstrom, velocities in Angstrom/ps,
 //! forces in eV/Angstrom, potential and kinetic energies and `kT` in eV,
 //! time steps in ps, Langevin friction in `1/ps`, and masses in amu.
+//! Kinetic energy and Maxwell-Boltzmann draws multiply those masses by the
+//! metal-unit factor `0.00010364269656262175`, so `amu * (Å/ps)^2` is eV.
+//! SHAKE and RATTLE keep the bare masses, because a global mass scale cancels.
 //!
 //! - **Lifecycle and engine dispatch**:
 //!   `rgpot_md_session_create(engine, engine_path, spec, spec_len, options, err, err_len)`,
@@ -61,6 +64,12 @@ use crate::engine::{
     shake_positions_in_place, validate_finite_slice, validate_masses, validate_unit_normal,
 };
 use crate::error::FluxError;
+
+/// Metal-unit factor: `amu * (Å/ps)^2` equals this many eV.
+///
+/// The same digits are `engine::lammpc::MASS_VELOCITY_TO_EV`. SHAKE and RATTLE
+/// keep the bare masses, because a global mass scale cancels.
+const METAL_MASS_VELOCITY_TO_EV: f64 = 0.000_103_642_696_562_621_75;
 
 /// Engine selector passed to `rgpot_md_session_create`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -361,9 +370,21 @@ impl DynamicsEngine for RgpotSessionEngine {
         ))
     }
 
+    fn kinetic_energy(&self) -> f64 {
+        let mut ke = 0.0_f64;
+        for i in 0..self.velocities.len() {
+            ke += 0.5 * self.config.masses[i] * self.velocities[i] * self.velocities[i];
+        }
+        ke * METAL_MASS_VELOCITY_TO_EV
+    }
+
     fn shoot_velocities(&mut self, seed: u64) -> Result<(), FluxError> {
         let kbt = self.config.thermostat.thermal_energy()?;
-        self.velocities = draw_maxwell_boltzmann_velocities(self.masses(), kbt, seed)?;
+        let dynamical_masses = self
+            .config
+            .masses
+            .mapv(|mass| mass * METAL_MASS_VELOCITY_TO_EV);
+        self.velocities = draw_maxwell_boltzmann_velocities(dynamical_masses.view(), kbt, seed)?;
         if let Some(plane) = self.config.constraint.clone() {
             rattle_velocities_in_place(&mut self.velocities, self.config.masses.view(), &plane);
         }
@@ -509,6 +530,40 @@ mod tests {
             rgmin::vecops::dot(plane.normal.view(), engine.velocities()).abs() < 1.0e-12,
             "shoot_velocities must RATTLE the draw"
         );
+    }
+
+    #[test]
+    fn kinetic_energy_uses_the_metal_unit_mass_factor() {
+        let mut engine = RgpotSessionEngine::new(
+            RgpotSessionConfig::default().with_masses(Array1::from_elem(3, 2.0)),
+        )
+        .expect("engine");
+        engine
+            .set_velocities(Array1::from_vec(vec![1.0, 0.0, -2.0]).view())
+            .expect("velocities");
+        let bare = 0.5 * 2.0 * (1.0 + 4.0);
+        let metal = 0.000_103_642_696_562_621_75;
+        assert!(
+            (engine.kinetic_energy() - bare * metal).abs() <= 1.0e-18,
+            "kinetic energy {}, expected {}",
+            engine.kinetic_energy(),
+            bare * metal
+        );
+    }
+
+    #[test]
+    fn shoot_velocities_draws_with_metal_unit_masses() {
+        let masses = Array1::from_elem(3, 2.0);
+        let mut engine =
+            RgpotSessionEngine::new(RgpotSessionConfig::default().with_masses(masses.clone()))
+                .expect("engine");
+        let kbt = engine.thermostat().thermal_energy().expect("kT");
+        engine.shoot_velocities(11).expect("shoot");
+        let metal = 0.000_103_642_696_562_621_75;
+        let scaled = masses.mapv(|mass| mass * metal);
+        let expected =
+            draw_maxwell_boltzmann_velocities(scaled.view(), kbt, 11).expect("scaled draw");
+        assert_eq!(engine.velocities().to_owned(), expected);
     }
 
     #[test]
