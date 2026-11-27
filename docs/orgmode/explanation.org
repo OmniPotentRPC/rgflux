@@ -196,6 +196,22 @@ The numerator and denominator in step 3 are energies in the engine's energy unit
 - Adaptive placement is not guaranteed to reduce force calls. In the deterministic regression cases, the localized symmetric double well uses 15 adaptive planes and 670 force calls versus 27 uniform planes and 329 calls at matched barrier error; the asymmetric barrier uses 15 adaptive planes, 670 calls and \(6.45\times10^{-3}\) error versus 10 uniform planes, 125 calls and \(1.01\times10^{-3}\) error. These examples establish placement behavior and tradeoffs, not universal efficiency.
 - When replicates are collected on a shared plane grid (such as in the FCC Cu EAM vacancy benchmark @@rst::cite:`mishinCopperEam2001,sivakCopperDefectDiffusion2021`@@), =pool_pafi_replicates= pools the per-plane mean constraint forces across replicates before integrating \(F(s)\) and evaluating \(\exp(-F(s^*)/k_{\mathrm{B}}T) / Z_R\), avoiding the positive Jensen bias \(\mathbb{E}[\exp(-F^*/k_{\mathrm{B}}T)] > \exp(-\mathbb{E}[F^*]/k_{\mathrm{B}}T)\) of averaging per-replicate rates. Its delta-method rate error combines the pooled barrier uncertainty and between-replicate reactant-frequency uncertainty in quadrature.
 
+** Displacement between two atom groups
+
+=group_displacement_scan= fixes a different coordinate on a cell that the scan does not change. For atom groups \(A\) and \(B\) with masses \(M_A\) and \(M_B\) and mass-weighted centres \(\mathbf{R}_A\) and \(\mathbf{R}_B\),
+
+\[
+s = \mathbf{n}\cdot(\mathbf{R}_B - \mathbf{R}_A),
+\]
+
+where \(\mathbf{n}\) is the supplied direction after normalisation. The Cartesian gradient is \((m_i/M_B)\mathbf{n}\) on an atom of \(B\), \(-(m_i/M_A)\mathbf{n}\) on an atom of \(A\), and zero on every other atom. A uniform translation cancels. The existing hyperplane sampler constrains the unit vector \(\boldsymbol{\nu} = \nabla s / \lVert\nabla s\rVert_2\) at offset \(s / \lVert\nabla s\rVert_2\). Its multiplier satisfies \(\langle\lambda\rangle = dF/dc\), and the scan reports
+
+\[
+\frac{dF}{ds} = \frac{\langle\lambda\rangle}{\lVert\nabla s\rVert_2}.
+\]
+
+The sign is the Sprik-Ciccotti sign: \(\lambda\) is positive when the potential increases with \(s\). The window values of \(dF/ds\) are integrated with the same cubic Hermite rule as the path profile. A periodic cell keeps one reference per window, \(\mathbf{d}_{\mathrm{ref}} = s\mathbf{n}\), and replaces \(\mathbf{R}_B-\mathbf{R}_A\) by \(\mathbf{d}_{\mathrm{ref}}\) plus the minimum image of the residual, using the restricted triclinic unwrapping of the engine cell. Atoms of one rigid constraint group must lie wholly in \(A\), wholly in \(B\), or wholly in neither.
+
 * Reactive-flux recrossing (=kappa= and =kappa::bennett_chandler=)
 
 Transition state theory overcounts the true transition rate whenever trajectories recross the dividing surface before thermalizing. In the Bennett-Chandler reactive-flux formalism @@rst::cite:`goswamiEfficientExploration2025,goswamiAdaptivePruning2026,bennettMolecularDynamics1977,chandlerStatisticalMechanics1978,andersonStatisticalTheories1973,vanErpNovelPath2003`@@, trajectories launched from the dividing surface \(\sigma(\mathbf{x}) = \mathbf{n} \cdot \mathbf{x} - c = 0\) with initial normal velocity \(v_n(0) = \mathbf{n} \cdot \mathbf{v}(0)\) and post-launch side indicator \(\theta(s(t)) \in \{0, 1\}\) define the time-dependent transmission coefficient

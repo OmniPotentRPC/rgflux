@@ -429,6 +429,56 @@ Points to adapt for a real path:
 - *Thermostat*: The engine needs a supported canonical thermostat. White noise requires \(\gamma > 0\); its \(\gamma = 0\) NVE mode returns =FluxError::InvalidConfig=. A supported colored-noise thermostat can remain canonical at \(\gamma = 0\). Any canonical setting targets the same profile, so choose the thermostat parameters for the standard error and the burn-in.
 - *Engine*: =pafi_profile_dyn= accepts =&mut dyn DynamicsEngine=. The engine is restored on return, with the stochastic stream the only exception.
 
+* Scan the displacement between two atom groups
+
+=pafi::group_displacement_scan= fixes \(s = \mathbf{n}\cdot(\mathbf{R}_B-\mathbf{R}_A)\) on each window and lets the other degrees of freedom relax. Indices are 0-based atom indices. Pass =&[]= for =rigid_groups= when no rigid constraint is installed. The sampling arguments are a =HyperplaneConfig=. The reported mean force is the hyperplane multiplier divided by the Euclidean norm of \(\nabla s\), and =free_energy= is its cubic Hermite integral @@rst::cite:`sprikFreeEnergyConstrained1998,swinburneUnsupervisedCalculation2018`@@.
+
+#+begin_src rust
+use ndarray::{Array1, ArrayView1};
+use rgflux::engine::native::{NativeConfig, NativeEngine};
+use rgflux::engine::{DynamicsEngine, ThermostatConfig};
+use rgflux::hyperplane::HyperplaneConfig;
+use rgflux::pafi::group_displacement_scan;
+
+struct PairSpring;
+
+impl rgsaddle::PointSurface for PairSpring {
+    fn eval(&self, x: ArrayView1<f64>) -> Result<(f64, Array1<f64>), rgsaddle::SaddleError> {
+        let s = x[3] - x[0];
+        let mut gradient = Array1::zeros(6);
+        gradient[0] = -s;
+        gradient[3] = s;
+        Ok((0.5 * s * s, gradient))
+    }
+}
+
+fn main() -> Result<(), rgflux::FluxError> {
+    let mut engine = NativeEngine::new(
+        PairSpring,
+        NativeConfig::default()
+            .with_masses(Array1::from_elem(6, 1.0))
+            .with_thermostat(ThermostatConfig::default().with_gamma(1.0).with_temperature(0.0)),
+    )?;
+    engine.set_positions(Array1::from_vec(vec![0.0, 0.0, 0.0, 0.5, 0.0, 0.0]).view())?;
+    let config = HyperplaneConfig::default()
+        .with_burn_in_steps(0)
+        .with_sample_steps(2)
+        .with_time_step(0.05);
+    let profile = group_displacement_scan(
+        &mut engine,
+        &[0],
+        &[1],
+        Array1::from_vec(vec![1.0, 0.0, 0.0]).view(),
+        &[0.0, 0.5],
+        &[],
+        &config,
+    )?;
+    assert!((profile.mean_forces[1] - 0.5).abs() < 1.0e-8);
+    assert!(engine.constraint().is_none());
+    Ok(())
+}
+#+end_src
+
 * Shoot Bennett-Chandler reactive-flux trajectories and compare with Kramers
 
 Combine =hyperplane::sample_hyperplane= (to harvest thermalized configurations on the dividing surface \(x = 0\)) with =kappa::bennett_chandler::shoot_bennett_chandler= and compare the resulting plateau transmission coefficient against =kappa::kramers_transmission_coefficient= @@rst::cite:`goswamiEfficientExploration2025,bennettMolecularDynamics1977,chandlerStatisticalMechanics1978,kramersBrownianMotion1940`@@:
