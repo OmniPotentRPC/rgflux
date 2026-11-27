@@ -336,8 +336,7 @@ impl LammpcEngine {
         validate_lammps_command_text(&config.boundary, "LammpcConfig::boundary")?;
         validate_lammps_command_text(&config.suffix, "LammpcConfig::suffix")?;
         for command in &config.extra_setup {
-            validate_lammps_command_text(command, "LammpcConfig::extra_setup")?;
-            validate_extra_setup_directive(command)?;
+            validate_extra_setup_line(command)?;
         }
         let _ = validate_lammpc_thermostat(&config.thermostat)?;
 
@@ -1283,6 +1282,14 @@ fn neigh_modify_include_keyword_ranges(command: &str) -> Vec<std::ops::Range<usi
     ranges
 }
 
+/// Reject command-text separators before the forbidden-word scan.
+///
+/// `LammpcEngine::new` uses this order for every `extra_setup` line.
+fn validate_extra_setup_line(command: &str) -> Result<(), FluxError> {
+    validate_lammps_command_text(command, EXTRA_SETUP_FIELD)?;
+    validate_extra_setup_directive(command)
+}
+
 fn validate_extra_setup_directive(command: &str) -> Result<(), FluxError> {
     // Reject every non-ASCII byte first, before a later substitution can
     // rewrite characters in the line.
@@ -1730,6 +1737,36 @@ mod tests {
             );
         }
         assert!(validate_lammps_command_text("lj/cut 8.5", "LammpcConfig::pair_style").is_ok());
+    }
+
+    #[test]
+    fn extra_setup_command_text_runs_before_the_forbidden_word_scan() {
+        for command in ["shell;touch", "shell\ntouch"] {
+            assert_eq!(
+                validate_extra_setup_line(command),
+                Err(invalid()),
+                "{command:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn extra_setup_line_rejects_forbidden_words_that_reach_the_scan() {
+        for (command, directive) in [
+            ("shell touch", "shell"),
+            ("include setup.in", "include"),
+            ("if 1 then shell", "if"),
+            ("shell#touch", "shell"),
+            ("SHELL touch", "shell"),
+            ("label a", "label"),
+            ("if 1 then \"shell touch X\"", "if"),
+        ] {
+            assert_eq!(
+                validate_extra_setup_line(command),
+                Err(forbidden(directive)),
+                "{command:?}"
+            );
+        }
     }
 
     #[test]
