@@ -6,6 +6,8 @@
 //! It samples the constrained dynamics on hyperplanes orthogonal to a spline
 //! through the path images and integrates the mean constraint force along the
 //! path (Swinburne and Marinica, 2018).
+//! [`group_displacement_scan`] fixes the signed displacement between the
+//! mass-weighted centres of mass of two atom groups.
 //!
 //! ## Theory
 //!
@@ -264,6 +266,10 @@ use crate::engine::{
 };
 use crate::error::FluxError;
 use crate::stats::{StatsConfig, batch_means};
+
+#[path = "group_displacement.rs"]
+mod group_displacement;
+pub use group_displacement::{GroupDisplacementProfile, group_displacement_scan};
 
 /// Number of planes in the default [`PafiConfig`].
 const DEFAULT_PLANES: usize = 9;
