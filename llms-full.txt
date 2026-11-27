@@ -864,7 +864,7 @@ fn main() -> Result<(), rgflux::FluxError> {
 | `kappa::bennett_chandler` | Engine-free reactive-flux estimator and `DynamicsEngine` trajectory shooter | Implemented (including opt-in `KappaConfig::commit_checkpoints` early-commitment stopping) |
 | `kappa` | Kramers analytical barrier-recrossing factor and Bennett-Chandler surface shooting | `kramers_transmission_coefficient` and the trajectory shooter are implemented; fixed-length shooting is the default, while opt-in early commitment requires consecutive samples beyond an explicit signed-distance threshold |
 | `hyperplane` | Constrained hyperplane sampling (`sample_hyperplane`) and zero-variance control variates | Mean constraint force and configuration retention implemented; the in-plane virial, torque, and control variates are not yet implemented |
-| `pafi` | Projected Average Force Integration along reaction paths (`PafiConfig`, `FreeEnergyProfile`, `IntegralEstimate`, `MeanForceIntegral`, `HermiteIntegral`, `SimpsonIntegral`, `pafi_profile`, `pafi_profile_dyn`) | Implemented: mass-metric spline planes with not-a-knot ends, zero-temperature trapezoid path-force check, burn-in and batch-means sampling per plane, adaptive rounds to a target error, cubic Hermite free-energy profile, global interpolant maximum, doubled-trapezoid reactant partition, projected reactant frequency, barrier, and normalized rate with log-space propagated errors; the engine is restored on return |
+| `pafi` | Projected Average Force Integration along reaction paths (`PafiConfig`, `FreeEnergyProfile`, `IntegralEstimate`, `MeanForceIntegral`, `HermiteIntegral`, `SimpsonIntegral`, `pafi_profile`, `pafi_profile_dyn`) and the fixed-cell two-group displacement scan (`group_displacement_scan`) | Implemented: mass-metric spline planes with not-a-knot ends, zero-temperature trapezoid path-force check, burn-in and batch-means sampling per plane, adaptive rounds to a target error, cubic Hermite free-energy profile, global interpolant maximum, doubled-trapezoid reactant partition, projected reactant frequency, barrier, and normalized rate with log-space propagated errors; the two-group scan reuses the hyperplane sampler and the Hermite rule; the engine is restored on return |
 | `ohtst` | OH-TST with a fixed hyperplane normal (`optimize_hyperplane`, `optimize_hyperplane_from_minimum`) and reactant relaxation (`relax_reactant`) | Implemented for a fixed normal with `rgsaddle::flux_mass`; normal optimization is not yet implemented |
 | `ffs` | Forward Flux Sampling across ordered interfaces (`forward_flux_rate`) | Implemented: flux collection, staged trials, and uncertainty propagation. Exit restores positions, velocities, the periodic cell, the thermostat, and the constraint; the stochastic stream is left where the run put it |
 | `opes` | Multithermal OPES expanded-ensemble bias on the potential energy (`OpesMultithermal`, `OpesMultithermalConfig`), biased `ForceSurface` (`OpesMultithermalSurface`), `DynamicsEngine` driver (`run_opes_multithermal`), PLUMED-compatible state files, and per-frame temperature reweighting (`MultithermalReweighting`) | Implemented: PLUMED `OPES_EXPANDED` over `ECV_MULTITHERMAL` defaults, fixed, automatic, and listed ladders, restarts in either direction with PLUMED, and per-frame weights for any temperature in the ladder; multiple walkers, multibaric expansions, and the `CALC_WORK` output are not implemented |
@@ -877,7 +877,7 @@ fn main() -> Result<(), rgflux::FluxError> {
 
 | API area | Reference entry | Method guide and theory |
 |---+---+---|
-| `pafi` | This page, `PafiConfig`, `FreeEnergyProfile`, functions, and generated inventory | `howto.org`, /Compute a free-energy profile, barrier and rate along a reaction path/; `explanation.org`, /Projected Average Force Integration (PAFI)/ |
+| `pafi` | This page, `PafiConfig`, `FreeEnergyProfile`, `GroupDisplacementProfile`, functions, and generated inventory | `howto.org`, /Compute a free-energy profile, barrier and rate along a reaction path/ and /Scan the displacement between two atom groups/; `explanation.org`, /Projected Average Force Integration (PAFI)/ |
 | `ohtst` | This page, `OhtstConfig`, `OhtstEstimate`, `ReactantMinimum`, and generated inventory | `howto.org`, /Place a fixed-normal OH-TST dividing hyperplane and evaluate the rate/; `explanation.org`, /Holonomic hyperplane sampling and fixed-normal OH-TST/ |
 | `hyperplane` | This page, `HyperplaneConfig`, `HyperplaneSample`, and generated inventory | `howto.org`, /Sample holonomic hyperplane mean forces and configurations/; `explanation.org`, /Holonomic hyperplane sampling and fixed-normal OH-TST/ |
 | `ffs` | This page, `FfsConfig`, `FfsEstimate`, and generated inventory | `howto.org`, /Compute a transition rate with direct Forward Flux Sampling/; `explanation.org`, /Forward Flux Sampling (FFS)/ |
@@ -1191,6 +1191,8 @@ Construct with `OpesMultithermalConfig::range(temp_min, temp_max)`, `OpesMultith
 | `ohtst::relax_reactant` | Mutable engine and `OhtstConfig` | `ReactantMinimum` relaxed by `rgmin::Lbfgs` to `reactant_fmax`; the engine is restored. `FluxError::ReactantNotRelaxed` when the relaxation ends above the tolerance; shared-reactant guide in `howto.org` |
 | `ohtst::optimize_hyperplane_from_minimum` | Mutable engine, seed plane, `ReactantMinimum`, and `OhtstConfig` | `OhtstEstimate` from the supplied minimum without relaxing it. `FluxError::ReactantNotRelaxed` when the declared force, checked before the engine is touched, or the force the engine measures there exceeds `reactant_fmax`; `FluxError::InvalidConfig` when the declared force is negative or not finite, or the minimum is not a minimum along the seed normal |
 | `ffs::forward_flux_rate` | Mutable engine, order parameter, and `FfsConfig` | `FfsEstimate`; direct FFS guide in `howto.org` |
+| `pafi::group_displacement_scan` | Mutable engine, two 0-based atom-index slices, a 3-vector direction, strictly increasing windows of \(s\), rigid-group slices, and `HyperplaneConfig` | `GroupDisplacementProfile`. \(s = \mathbf{n}\cdot(\mathbf{R}_B-\mathbf{R}_A)\) for the mass-weighted centres of mass. The reported mean force is the plane multiplier divided by \(\lVert\nabla s\rVert_2\). Empty groups, overlapping groups, and a direction that splits a rigid group are rejected. The cell is held fixed and supplies the periodic reference |
+| `pafi::GroupDisplacementProfile` | `displacements`, `mean_forces`, `standard_errors`, `free_energy`, `free_energy_error` | Output of `pafi::group_displacement_scan`. `free_energy` is the cubic Hermite integral of `mean_forces`, starting at 0 |
 | `pafi::pafi_profile` | Mutable engine, path image matrix, and `PafiConfig` | `FreeEnergyProfile`; PAFI guide in `howto.org` |
 | `pafi::pafi_profile_dyn` | Mutable `dyn DynamicsEngine`, path image matrix, and `PafiConfig` | Trait-object form of `pafi_profile` with identical estimator and restoration semantics |
 | `pafi::HermiteIntegral::cumulative` | Plane arc lengths and plane mean forces of equal length | `IntegralEstimate` from the cubic Hermite rule; errors on mismatched lengths, fewer than 2 planes, non-finite forces, or arc lengths that do not strictly increase |
@@ -1333,7 +1335,7 @@ stale, and refuses a hand-written count outside the block.
 ### Complete qualified Rust inventory
 
 # BEGIN GENERATED PUBLIC API
-This inventory lists 844 qualified public item paths.
+This inventory lists 851 qualified public item paths.
 
 #### `DynamicsEngine`
 
@@ -2133,6 +2135,12 @@ This inventory lists 844 qualified public item paths.
 - `rgflux::pafi::FreeEnergyProfile::reactant_log_partition`
 - `rgflux::pafi::FreeEnergyProfile::reactant_partition`
 - `rgflux::pafi::FreeEnergyProfile::standard_error`
+- `rgflux::pafi::GroupDisplacementProfile`
+- `rgflux::pafi::GroupDisplacementProfile::displacements`
+- `rgflux::pafi::GroupDisplacementProfile::free_energy`
+- `rgflux::pafi::GroupDisplacementProfile::free_energy_error`
+- `rgflux::pafi::GroupDisplacementProfile::mean_forces`
+- `rgflux::pafi::GroupDisplacementProfile::standard_errors`
 - `rgflux::pafi::HermiteIntegral`
 - `rgflux::pafi::HermiteIntegral::cumulative`
 - `rgflux::pafi::IntegralEstimate`
@@ -2187,6 +2195,7 @@ This inventory lists 844 qualified public item paths.
 - `rgflux::pafi::SpectralTailReport::tail_indicator`
 - `rgflux::pafi::estimate_spectral_tail`
 - `rgflux::pafi::estimate_spectral_tail_with_errors`
+- `rgflux::pafi::group_displacement_scan`
 - `rgflux::pafi::pafi_profile`
 - `rgflux::pafi::pafi_profile_adaptive`
 - `rgflux::pafi::pafi_profile_adaptive_dyn`
