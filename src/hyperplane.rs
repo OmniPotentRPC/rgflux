@@ -37,8 +37,9 @@
 //!   thermostat. White noise requires `gamma > 0`; a supported colored-noise
 //!   thermostat may sample canonically with `gamma == 0`. NVE dynamics
 //!   samples an energy shell and returns [`crate::FluxError::InvalidConfig`].
-//! - Every constrained [`crate::engine::DynamicsEngine::step`] call populates
-//!   [`crate::engine::StepReport::constraint_force`] with a finite `Some(lambda)`.
+//! - Every constrained [`crate::engine::DynamicsEngine::step`] call, including
+//!   burn-in, populates [`crate::engine::StepReport::constraint_force`] with a
+//!   finite `Some(lambda)`.
 //!
 //! ## Units
 //!
@@ -141,7 +142,7 @@ pub use crate::engine::HyperplaneConstraint;
 
 use ndarray::Array2;
 
-use crate::engine::{DynamicsEngine, EngineSnapshot};
+use crate::engine::{DynamicsEngine, EngineSnapshot, StepReport};
 use crate::error::FluxError;
 use crate::stats::{StatsConfig, batch_means};
 
@@ -211,6 +212,16 @@ pub struct HyperplaneSample {
     pub configurations: Array2<f64>,
 }
 
+fn constraint_multiplier(report: &StepReport) -> Result<f64, FluxError> {
+    let lambda = report.constraint_force.ok_or(FluxError::InvalidConfig(
+        "DynamicsEngine::step must report constraint_force when constrained",
+    ))?;
+    if !lambda.is_finite() {
+        return Err(FluxError::NonFinite("hyperplane constraint force"));
+    }
+    Ok(lambda)
+}
+
 /// Sample a hyperplane through `engine`.
 ///
 /// # Errors
@@ -219,7 +230,8 @@ pub struct HyperplaneSample {
 ///   `time_step <= 0` or non-finite, the engine thermostat does not provide
 ///   canonical sampling (including white noise with `gamma == 0`) or has
 ///   invalid parameters, or
-///   [`crate::engine::StepReport::constraint_force`] is `None`.
+///   [`crate::engine::StepReport::constraint_force`] is `None` on a burn-in
+///   or production step.
 /// - [`FluxError::Shape`] when `plane.normal.len() != engine.dof()`.
 /// - [`FluxError::NonFinite`] when a sampled constraint force is NaN or infinite.
 /// - Any [`FluxError`] propagated by `engine` during setup, stepping, or snapshot
@@ -262,7 +274,8 @@ pub fn sample_hyperplane<E: DynamicsEngine + ?Sized>(
         engine.shoot_velocities(config.seed)?;
 
         for _ in 0..config.burn_in_steps {
-            engine.step(config.time_step)?;
+            let report = engine.step(config.time_step)?;
+            constraint_multiplier(&report)?;
         }
 
         let mut force_series = Vec::with_capacity(config.sample_steps);
@@ -270,13 +283,7 @@ pub fn sample_hyperplane<E: DynamicsEngine + ?Sized>(
         let mut retained_count = 0_usize;
         for step_idx in 0..config.sample_steps {
             let report = engine.step(config.time_step)?;
-            let lambda = report.constraint_force.ok_or(FluxError::InvalidConfig(
-                "DynamicsEngine::step must report constraint_force when constrained",
-            ))?;
-            if !lambda.is_finite() {
-                return Err(FluxError::NonFinite("hyperplane constraint force"));
-            }
-            force_series.push(lambda);
+            force_series.push(constraint_multiplier(&report)?);
 
             if step_idx % config.retention_stride == 0 {
                 retained_flat.extend(engine.positions().iter().copied());
@@ -316,6 +323,7 @@ mod restore_tests {
         constraint: Option<HyperplaneConstraint>,
         fail_step: bool,
         reject_position_writes: bool,
+        silent_constraint_steps: usize,
     }
 
     impl ScriptedEngine {
@@ -328,6 +336,7 @@ mod restore_tests {
                 constraint: None,
                 fail_step,
                 reject_position_writes,
+                silent_constraint_steps: 0,
             }
         }
     }
@@ -414,10 +423,16 @@ mod restore_tests {
             if self.fail_step {
                 return Err(FluxError::InvalidConfig("scripted step failed"));
             }
+            let constraint_force = if self.silent_constraint_steps > 0 {
+                self.silent_constraint_steps -= 1;
+                None
+            } else {
+                Some(0.0)
+            };
             Ok(StepReport {
                 potential_energy: 0.0,
                 kinetic_energy: 0.0,
-                constraint_force: Some(0.0),
+                constraint_force,
             })
         }
 
@@ -511,5 +526,26 @@ mod restore_tests {
         let mut engine = ScriptedEngine::new(true, true);
         let err = sample_hyperplane(&mut engine, &plane, &config).unwrap_err();
         assert_eq!(err, FluxError::InvalidConfig("scripted step failed"));
+    }
+
+    #[test]
+    fn burn_in_rejects_a_missing_constraint_multiplier() {
+        let plane =
+            HyperplaneConstraint::from_direction(Array1::from_vec(vec![1.0]).view(), 0.2).unwrap();
+        let config = HyperplaneConfig::default()
+            .with_burn_in_steps(1)
+            .with_sample_steps(2)
+            .with_retention_stride(1)
+            .with_time_step(0.01)
+            .with_seed(9);
+        let mut engine = ScriptedEngine::new(false, false);
+        engine.silent_constraint_steps = 1;
+        let err = sample_hyperplane(&mut engine, &plane, &config).unwrap_err();
+        assert_eq!(
+            err,
+            FluxError::InvalidConfig(
+                "DynamicsEngine::step must report constraint_force when constrained"
+            )
+        );
     }
 }
