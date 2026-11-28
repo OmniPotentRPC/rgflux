@@ -1644,6 +1644,26 @@ c
             .energy_and_forces(distant.view(), None)
             .expect("atoms at 0, 50 and 80 have no neighbor inside the cutoff");
         assert_eq!(energy, 0.0);
+
+        let mut plateau = vec![0.0; 8];
+        plateau[4] = 1.0e154;
+        plateau[5] = 1.0e154;
+        plateau[6] = 1.0e154;
+        plateau[7] = 1.0e154;
+        let mut embedding = vec![0.0; 8];
+        embedding[7] = 1.0;
+        let cfg = RgpotConfig::default()
+            .with_atomic_numbers(vec![29, 29, 29])
+            .with_default_cell(pair_cell());
+        let overflow = RgpotSurface::from_eam_table_memory(
+            29, 1.0e145, 0.5, 3.0, &embedding, &plateau, &zeros, false, 0.0, cfg,
+        )
+        .expect("overflowing discriminant opens");
+        let centre = Array1::from_vec(vec![-2.17895, 0.0, 0.0, 0.0, 0.0, 0.0, 2.17895, 0.0, 0.0]);
+        match overflow.energy_and_forces(centre.view(), None) {
+            Err(FluxError::Surface(msg)) => assert!(msg.contains("place index"), "{msg}"),
+            other => panic!("discriminant overflow returned {other:?}"),
+        }
     }
 
     #[test]

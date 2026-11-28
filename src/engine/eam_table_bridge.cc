@@ -147,38 +147,75 @@ void require_table_shape(const rgpot::EAMTable &table) {
 
 /// Maximum of |left + c5 p + c4 p^2 + c3 p^3| on [0, 1]. That is the value
 /// cubic of PairEAM::interpolate. Endpoints and the critical points of the
-/// derivative give the maximum. A few ulps of padding keep the bound above
-/// the Horner value the spline evaluates, so a place() cast that fits the
-/// bound fits the density one neighbor can contribute.
+/// derivative give the maximum. The derivative is scaled before its
+/// discriminant, so a product of large slopes does not drop those critical
+/// points. When the scaled discriminant is still not finite, the bound is
+/// the sum of the absolute coefficients, which contains the cubic on [0, 1].
+/// A few ulps of padding keep a finite bound above the Horner value the
+/// spline evaluates.
 double segment_abs_max(double c3, double c4, double c5, double left) {
+  if (!std::isfinite(c3) || !std::isfinite(c4) || !std::isfinite(c5) ||
+      !std::isfinite(left)) {
+    return std::numeric_limits<double>::infinity();
+  }
   const double right = left + c5 + c4 + c3;
   double bound = std::max(std::abs(left), std::abs(right));
-  const double a = 3.0 * c3;
-  const double b = 2.0 * c4;
-  const double c = c5;
   auto consider = [&](double p) {
     if (!(p > 0.0) || !(p < 1.0) || !std::isfinite(p)) {
       return;
     }
     const double value = ((c3 * p + c4) * p + c5) * p + left;
-    if (std::isfinite(value)) {
-      bound = std::max(bound, std::abs(value));
+    if (!std::isfinite(value)) {
+      bound = std::numeric_limits<double>::infinity();
+      return;
     }
+    bound = std::max(bound, std::abs(value));
   };
-  if (a == 0.0) {
-    if (b != 0.0) {
-      consider(-c / b);
+  const double a = 3.0 * c3;
+  const double b = 2.0 * c4;
+  const double c = c5;
+  bool solved = false;
+  if (!std::isfinite(a) || !std::isfinite(b)) {
+    solved = false;
+  } else if (a == 0.0) {
+    if (b == 0.0) {
+      solved = true;
+    } else {
+      const double p = -c / b;
+      if (std::isfinite(p)) {
+        consider(p);
+        solved = true;
+      }
     }
   } else {
-    const double disc = b * b - 4.0 * a * c;
-    if (std::isfinite(disc) && disc >= 0.0) {
-      const double root = std::sqrt(disc);
-      const double denom = 2.0 * a;
-      consider((-b + root) / denom);
-      consider((-b - root) / denom);
+    const double scale = std::max(std::abs(a), std::max(std::abs(b), std::abs(c)));
+    if (std::isfinite(scale) && scale > 0.0) {
+      const double as = a / scale;
+      const double bs = b / scale;
+      const double cs = c / scale;
+      const double disc = bs * bs - 4.0 * as * cs;
+      if (std::isfinite(disc)) {
+        solved = true;
+        if (disc >= 0.0) {
+          const double root = std::sqrt(disc);
+          const double denom = 2.0 * as;
+          consider((-bs + root) / denom);
+          consider((-bs - root) / denom);
+        }
+      }
     }
   }
-  if (std::isfinite(bound) && bound > 0.0) {
+  if (!solved) {
+    const double coef = std::abs(left) + std::abs(c5) + std::abs(c4) + std::abs(c3);
+    if (!std::isfinite(coef)) {
+      return std::numeric_limits<double>::infinity();
+    }
+    bound = std::max(bound, coef);
+  }
+  if (!std::isfinite(bound)) {
+    return bound;
+  }
+  if (bound > 0.0) {
     const double pad = 1.0 + 16.0 * std::numeric_limits<double>::epsilon();
     bound = std::nextafter(bound * pad, std::numeric_limits<double>::infinity());
   }
