@@ -1693,6 +1693,43 @@ c
             Err(FluxError::Surface(msg)) => assert!(msg.contains("place index"), "{msg}"),
             other => panic!("discriminant overflow returned {other:?}"),
         }
+
+        // Negated eight-knot row. b*b overflows on the interior cubic, the
+        // knots still fit, and one neighbor makes the place cast miss int.
+        let raw = [
+            1.6848978999193908e199,
+            -4.629903741144443e199,
+            -9.67137533819585e199,
+            6.13767193282331e199,
+            -2.456458098164722e199,
+            8.918230826063796e199,
+            4.069341781847155e199,
+            -3.879906489180879e199,
+        ];
+        let density: Vec<f64> = raw.iter().map(|value| -value).collect();
+        let mut tall = vec![0.0; 8];
+        tall[7] = 1000.0;
+        let cfg = RgpotConfig::default()
+            .with_atomic_numbers(vec![29, 29])
+            .with_default_cell(pair_cell());
+        let squared = RgpotSurface::from_eam_table_memory(
+            29,
+            4.50358510679778e190,
+            0.5,
+            4.0,
+            &tall,
+            &density,
+            &zeros,
+            false,
+            0.0,
+            cfg,
+        )
+        .expect("squared overflow opens");
+        let close = Array1::from_vec(vec![0.0, 0.0, 0.0, 0.911875, 0.0, 0.0]);
+        match squared.energy_and_forces(close.view(), None) {
+            Err(FluxError::Surface(msg)) => assert!(msg.contains("place index"), "{msg}"),
+            other => panic!("squared overflow returned {other:?}"),
+        }
     }
 
     #[test]
