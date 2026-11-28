@@ -54,6 +54,7 @@ rgmin = { version = "=0.7.0", git = "https://github.com/OmniPotentRPC/rgmin", re
 rgpot-core = { version = "3.7.0", optional = true }
 eindir-core = "0.6.0"
 ndarray = "0.17"
+rayon = "1.12"
 rand = "0.9"
 thiserror = "2"
 capnp = { version = "0.20.6", optional = true }

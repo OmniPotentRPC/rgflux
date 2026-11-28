@@ -28,9 +28,11 @@
 //! - [`pafi`]: Projected Average Force Integration along reaction paths
 //!   ([`pafi::PafiConfig`], [`pafi::FreeEnergyProfile`], [`pafi::pafi_profile`],
 //!   [`pafi::group_displacement_scan`], [`pafi::MeanForceIntegral`]).
-//! - [`ohtst`]: OH-TST with a fixed hyperplane normal via
-//!   [`ohtst::optimize_hyperplane`]; variational normal optimization is not
-//!   yet implemented.
+//! - [`ohtst`]: optimal hyperplanar transition state theory. The plane is
+//!   moved and turned until its free energy is a maximum
+//!   ([`ohtst::PlaneOptimizer`]), and [`ohtst::ohtst_rate`] combines the basin
+//!   density, the reversible work to the optimum and the flux through it.
+//!   [`adaptive_ohtst`] places the sampling along a string of planes.
 //! - [`ffs`]: direct Forward Flux Sampling across ordered interfaces via
 //!   [`ffs::forward_flux_rate`].
 //! - [`opes`]: multithermal OPES expanded-ensemble bias on the potential
@@ -94,6 +96,7 @@
 #[macro_use]
 mod config;
 
+pub mod adaptive_ohtst;
 pub mod cu_reference;
 pub mod engine;
 pub mod error;

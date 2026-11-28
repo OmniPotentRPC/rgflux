@@ -12,10 +12,6 @@ use rgflux::kappa::bennett_chandler::{
     shoot_bennett_chandler,
 };
 use rgflux::kappa::{KappaConfig, kramers_transmission_coefficient};
-use rgflux::ohtst::{
-    OhtstConfig, ReactantMinimum, optimize_hyperplane, optimize_hyperplane_from_minimum,
-    relax_reactant,
-};
 use rgflux::opes::{OpesMultithermal, OpesMultithermalConfig};
 use rgflux::pafi::{PafiConfig, pafi_profile};
 use rgflux::stats::StatsConfig;
@@ -50,7 +46,7 @@ fn org_guide_rust_blocks_compile_and_run() {
 
     let howto = include_str!("../docs/orgmode/howto.org");
     let howto_blocks = extract_rust_blocks(howto);
-    assert_eq!(howto_blocks.len(), 12, "howto.org has 12 Rust blocks");
+    assert_eq!(howto_blocks.len(), 10, "howto.org has 10 Rust blocks");
     run_extracted_blocks("howto", &howto_blocks);
 }
 
@@ -110,11 +106,11 @@ edition = "2024"
 
 [dependencies]
 ndarray = "0.17"
-rgsaddle = {{ version = "0.5.0", default-features = false }}
-rgmin = {{ version = "0.6.0", default-features = false }}
-rgflux = {{ path = "{}" }}
+rgsaddle = {{ git = "https://github.com/OmniPotentRPC/rgsaddle", rev = "e890b05f9be348a5a9b4ee5e3a76bd7b49be8320", default-features = false, features = ["ohtst"] }}
+rgmin = {{ version = "=0.7.0", git = "https://github.com/OmniPotentRPC/rgmin", rev = "f2527782713dcf4b4d5d91af9da1bba80c32bc0c", default-features = false }}
+rgflux = {{ path = "{root}" }}
 "#,
-        env!("CARGO_MANIFEST_DIR")
+        root = env!("CARGO_MANIFEST_DIR")
     );
     fs::write(sandbox.join("Cargo.toml"), manifest).expect("write sandbox manifest");
 }
@@ -374,42 +370,6 @@ fn getting_started_bennett_chandler_example_runs() -> Result<(), FluxError> {
 }
 
 #[test]
-fn getting_started_ohtst_example_runs() -> Result<(), FluxError> {
-    struct QuarticDoubleWell1D;
-
-    impl rgsaddle::PointSurface for QuarticDoubleWell1D {
-        fn eval(&self, x: ArrayView1<f64>) -> Result<(f64, Array1<f64>), rgsaddle::SaddleError> {
-            let u = x[0];
-            let well = u * u - 1.0;
-            Ok((0.25 * well * well, Array1::from_vec(vec![u * well])))
-        }
-    }
-
-    let cfg = NativeConfig::default()
-        .with_masses(Array1::from_vec(vec![1.0]))
-        .with_thermostat(
-            ThermostatConfig::default()
-                .with_gamma(1.0)
-                .with_temperature(0.1),
-        )
-        .with_seed(17);
-    let mut engine = NativeEngine::new(QuarticDoubleWell1D, cfg)?;
-    engine.set_positions(Array1::from_vec(vec![-1.0]).view())?;
-
-    let seed_plane = HyperplaneConstraint::from_direction(Array1::from_vec(vec![1.0]).view(), 0.0)?;
-    let ohtst_cfg = OhtstConfig::default()
-        .with_burn_in_steps(64)
-        .with_min_sample_steps(128)
-        .with_sample_step_factor(4)
-        .with_seed(17);
-    let estimate = optimize_hyperplane(&mut engine, &seed_plane, &ohtst_cfg)?;
-
-    assert_eq!(estimate.plane.offset, 0.0);
-    assert!(estimate.rate > 0.0 && estimate.standard_error.is_finite());
-    Ok(())
-}
-
-#[test]
 fn howto_hyperplane_sampling_example_runs() -> Result<(), FluxError> {
     struct DoubleWell2D;
 
@@ -451,107 +411,6 @@ fn howto_hyperplane_sampling_example_runs() -> Result<(), FluxError> {
     assert!(sample.standard_error >= 0.0);
     assert_eq!(sample.configurations.dim(), (20, 2));
     assert!(engine.constraint().is_none());
-    Ok(())
-}
-
-#[test]
-fn howto_ohtst_oblique_example_runs() -> Result<(), FluxError> {
-    struct ObliqueDoubleWell2D;
-
-    impl rgsaddle::PointSurface for ObliqueDoubleWell2D {
-        fn eval(&self, r: ArrayView1<f64>) -> Result<(f64, Array1<f64>), rgsaddle::SaddleError> {
-            let u = 0.6 * r[0] + 0.8 * r[1];
-            let v = -0.8 * r[0] + 0.6 * r[1];
-            let well = u * u - 1.0;
-            let du = u * well;
-            let dv = 2.0 * v;
-            Ok((
-                0.25 * well * well + v * v,
-                Array1::from_vec(vec![0.6 * du - 0.8 * dv, 0.8 * du + 0.6 * dv]),
-            ))
-        }
-    }
-
-    let mut engine = NativeEngine::new(
-        ObliqueDoubleWell2D,
-        NativeConfig::default()
-            .with_masses(Array1::from_vec(vec![2.0, 8.0]))
-            .with_thermostat(
-                ThermostatConfig::default()
-                    .with_gamma(1.0)
-                    .with_temperature(0.1),
-            )
-            .with_seed(33),
-    )?;
-    engine.set_positions(Array1::from_vec(vec![-0.6, -0.8]).view())?;
-
-    let seed_plane =
-        HyperplaneConstraint::from_direction(Array1::from_vec(vec![3.0, 4.0]).view(), -0.4)?;
-    let cfg = OhtstConfig::default()
-        .with_max_outer_steps(16)
-        .with_max_translation(0.25)
-        .with_burn_in_steps(64)
-        .with_min_sample_steps(128)
-        .with_sample_step_factor(8)
-        .with_time_step(0.01)
-        .with_seed(33);
-
-    let est = optimize_hyperplane(&mut engine, &seed_plane, &cfg)?;
-    assert!(est.plane.offset.abs() < 1e-12);
-    assert!(est.rate > 0.0 && est.standard_error.is_finite());
-    Ok(())
-}
-
-#[test]
-fn howto_ohtst_shared_reactant_example_runs() -> Result<(), FluxError> {
-    struct TwoExitWell;
-
-    impl rgsaddle::PointSurface for TwoExitWell {
-        fn eval(&self, r: ArrayView1<f64>) -> Result<(f64, Array1<f64>), rgsaddle::SaddleError> {
-            let (wx, wy) = (r[0] * r[0] - 1.0, r[1] * r[1] - 1.0);
-            Ok((
-                0.25 * (wx * wx + wy * wy),
-                Array1::from_vec(vec![r[0] * wx, r[1] * wy]),
-            ))
-        }
-    }
-
-    let mut engine = NativeEngine::new(
-        TwoExitWell,
-        NativeConfig::default()
-            .with_masses(Array1::from_vec(vec![1.0, 1.0]))
-            .with_thermostat(
-                ThermostatConfig::default()
-                    .with_gamma(1.0)
-                    .with_temperature(0.1),
-            )
-            .with_seed(7),
-    )?;
-    engine.set_positions(Array1::from_vec(vec![-0.8, -1.3]).view())?;
-    let cfg = OhtstConfig::default()
-        .with_reactant_fmax(1e-8)
-        .with_burn_in_steps(64)
-        .with_min_sample_steps(128)
-        .with_sample_step_factor(8)
-        .with_seed(7);
-
-    let reactant = relax_reactant(&mut engine, &cfg)?;
-    assert!(reactant.fmax <= 1e-8);
-    for direction in [[1.0, 0.0], [0.0, 1.0]] {
-        let exit =
-            HyperplaneConstraint::from_direction(Array1::from_vec(direction.to_vec()).view(), 0.0)?;
-        let est = optimize_hyperplane_from_minimum(&mut engine, &exit, &reactant, &cfg)?;
-        assert!(est.rate > 0.0 && est.standard_error.is_finite());
-    }
-
-    let exit = HyperplaneConstraint::from_direction(Array1::from_vec(vec![1.0, 0.0]).view(), 0.0)?;
-    let external = ReactantMinimum::new(Array1::from_vec(vec![-1.0, -1.0]), 0.0);
-    assert!(optimize_hyperplane_from_minimum(&mut engine, &exit, &external, &cfg).is_ok());
-    let loose = ReactantMinimum::new(Array1::from_vec(vec![-1.0, -1.0]), 1e-3);
-    assert!(matches!(
-        optimize_hyperplane_from_minimum(&mut engine, &exit, &loose, &cfg),
-        Err(FluxError::ReactantNotRelaxed { .. })
-    ));
     Ok(())
 }
 
