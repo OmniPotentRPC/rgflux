@@ -295,7 +295,7 @@ struct HeaderGrid {
 /// operator>>. Doubles are parsed with strtod, which accepts inf and nan
 /// (iostream on this libstdc++ rejects them) and a trailing suffix the
 /// extractor would leave unread, such as the x in 4.0x. Counts are decimal
-/// integers, matching operator>> into int.
+/// integers, matching operator>> into int, including the most negative int.
 struct Scan {
   const std::string &text;
   std::size_t pos = 0;
@@ -341,17 +341,27 @@ struct Scan {
         std::isdigit(static_cast<unsigned char>(text[pos])) == 0) {
       return false;
     }
-    int value = 0;
+    // The magnitude of the most negative int does not fit in a positive
+    // int. operator>> accepts that value, so the accumulator is unsigned.
+    const unsigned int limit =
+        sign < 0 ? static_cast<unsigned int>(std::numeric_limits<int>::max()) + 1u
+                 : static_cast<unsigned int>(std::numeric_limits<int>::max());
+    unsigned int value = 0;
     while (pos < text.size() &&
            std::isdigit(static_cast<unsigned char>(text[pos])) != 0) {
-      const int digit = text[pos] - '0';
-      if (value > (std::numeric_limits<int>::max() - digit) / 10) {
+      const unsigned int digit = static_cast<unsigned int>(text[pos] - '0');
+      if (value > (limit - digit) / 10u) {
         return false;
       }
-      value = value * 10 + digit;
+      value = value * 10u + digit;
       ++pos;
     }
-    out = sign < 0 ? -value : value;
+    if (sign < 0 &&
+        value == static_cast<unsigned int>(std::numeric_limits<int>::max()) + 1u) {
+      out = std::numeric_limits<int>::min();
+    } else {
+      out = sign < 0 ? -static_cast<int>(value) : static_cast<int>(value);
+    }
     return true;
   }
 
@@ -536,9 +546,10 @@ void *rgflux_eam_table_open_file(const char *path, int format, int periodic,
     const std::string text = copied.str();
     const auto kind = to_format(format);
     const HeaderGrid header = sniff_grid(text, kind);
-    if (header.ok) {
-      require_header(header);
+    if (!header.ok) {
+      throw std::invalid_argument("EAM table header could not be read");
     }
+    require_header(header);
     require_finite_numeric_tokens(text, kind);
     std::istringstream table_in(text);
     auto table = rgpot::read_eam_table(table_in, kind);

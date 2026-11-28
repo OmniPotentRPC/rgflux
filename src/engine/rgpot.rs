@@ -1606,6 +1606,35 @@ c
     }
 
     #[test]
+    fn eam_table_int_min_header_is_checked_before_the_reader() {
+        let expect = |name: &str, text: String, message: &str| {
+            let path = write_table(name, &text);
+            let opened = open_table(&path, EamTableFormat::Funcfl);
+            let _ = std::fs::remove_file(&path);
+            let msg = assert_surface_err(opened, name);
+            assert_eq!(msg, message, "{name}: {msg}");
+        };
+
+        let nrho = 306783379;
+        let spline = "EAM spline index does not fit in int";
+        expect(
+            "int-min-spline",
+            format!("comment\n{} 63.546\n{nrho} 0.1 5 1.0 4.0\n", i32::MIN),
+            spline,
+        );
+        expect(
+            "z29-spline",
+            format!("comment\n29 63.546\n{nrho} 0.1 5 1.0 4.0\n"),
+            spline,
+        );
+        expect(
+            "int-min-span",
+            format!("comment\n{} 63.546\n5 1e308 5 1.0 4.0\n", i32::MIN),
+            "EAM grid span is not finite",
+        );
+    }
+
+    #[test]
     fn eam_table_place_bound_is_the_cubic_maximum() {
         let dr = 0.5;
         let cutoff = 4.0;
