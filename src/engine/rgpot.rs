@@ -678,6 +678,15 @@ mod tests {
     use super::*;
     use std::os::raw::c_void;
 
+    unsafe extern "C" {
+        fn rgflux_eam_pair_block_count(
+            nel: c_int,
+            format: c_int,
+            err_buf: *mut c_char,
+            err_cap: usize,
+        ) -> c_int;
+    }
+
     unsafe extern "C" fn harmonic_callback(
         user_data: *mut c_void,
         input: *const rgpot_force_input_t,
@@ -2135,5 +2144,35 @@ c
                 "{name}: {msg}"
             );
         }
+    }
+
+    #[test]
+    fn eam_pair_block_count_is_exact_for_large_element_counts() {
+        let count = |nel: i32, format: EamTableFormat| -> Result<i32, String> {
+            let mut err_buf = [0 as c_char; 256];
+            let value = unsafe {
+                rgflux_eam_pair_block_count(nel, format.code(), err_buf.as_mut_ptr(), err_buf.len())
+            };
+            if value < 0 {
+                let msg = unsafe { CStr::from_ptr(err_buf.as_ptr()) }
+                    .to_string_lossy()
+                    .into_owned();
+                return Err(msg);
+            }
+            Ok(value)
+        };
+        let fs = EamTableFormat::FinnisSinclair;
+        let setfl = EamTableFormat::Setfl;
+        assert_eq!(count(46340, fs).expect("nel 46340"), 1_073_720_970);
+        let old = count(46341, fs).expect_err("nel 46341");
+        assert!(old.contains("does not fit"), "density index refusal: {old}");
+        assert_eq!(count(46341, setfl).expect("setfl 46341"), 1_073_767_311);
+        assert_eq!(count(46342, setfl).expect("setfl 46342"), 1_073_813_653);
+        assert_eq!(count(65535, setfl).expect("setfl 65535"), 2_147_450_880);
+        let refused = count(65536, setfl).expect_err("setfl 65536");
+        assert!(
+            refused.contains("does not fit"),
+            "pair count refusal: {refused}"
+        );
     }
 }

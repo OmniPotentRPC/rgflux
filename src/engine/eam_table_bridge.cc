@@ -9,6 +9,7 @@
 #include <array>
 #include <cctype>
 #include <cmath>
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <exception>
@@ -500,6 +501,37 @@ bool read_grid_line(Scan &scan, int &nrho, int &nr) {
   return true;
 }
 
+/// Pair blocks are nel*(nel+1)/2. The product uses a wide unsigned type.
+/// A product that overflows that type, or a count that does not fit in int,
+/// is refused instead of skipping the scan. Finnis-Sinclair indexes a
+/// density row with b * nd + a % nd and nd = nel. The last index is
+/// nel * nel - 1, and that index is refused when it does not fit in int.
+/// Setfl uses nd = 1, so the index is the element number and the pair
+/// count is the limit.
+int pair_block_count(int nel, rgpot::EAMTableFormat format) {
+  if (nel < 0) {
+    throw std::invalid_argument("EAM pair block count does not fit in int");
+  }
+  const auto n = static_cast<std::uint64_t>(nel);
+  if (format == rgpot::EAMTableFormat::FinnisSinclair && n > 0) {
+    // n * n - 1 <= INT_MAX iff n * n <= INT_MAX + 1.
+    const auto square_limit =
+        static_cast<std::uint64_t>(std::numeric_limits<int>::max()) + 1;
+    if (n > square_limit / n) {
+      throw std::invalid_argument("EAM pair block count does not fit in int");
+    }
+  }
+  if (n == std::numeric_limits<std::uint64_t>::max() ||
+      (n > 0 && (n + 1) > std::numeric_limits<std::uint64_t>::max() / n)) {
+    throw std::invalid_argument("EAM pair block count does not fit in int");
+  }
+  const auto pairs = n * (n + 1) / 2;
+  if (pairs > static_cast<std::uint64_t>(std::numeric_limits<int>::max())) {
+    throw std::invalid_argument("EAM pair block count does not fit in int");
+  }
+  return static_cast<int>(pairs);
+}
+
 /// After the comment lines, check the numbers read_eam_table keeps. The rest
 /// of an element line is discarded, so a word there is not a knot. An element
 /// line that does not parse is refused. Every knot token, including the last,
@@ -546,10 +578,7 @@ void require_finite_numeric_tokens(const std::string &text, rgpot::EAMTableForma
       }
     }
   }
-  if (nel > (std::numeric_limits<int>::max() - 1) / 2) {
-    return;
-  }
-  const int pairs = nel * (nel + 1) / 2;
+  const int pairs = pair_block_count(nel, format);
   for (int p = 0; p < pairs; ++p) {
     if (!require_knot_block(scan, nr)) {
       return;
@@ -864,6 +893,18 @@ int refuse_overflowing_place(const EamBridge &bridge, std::size_t n_atoms, const
 } // namespace
 
 extern "C" {
+
+int rgflux_eam_pair_block_count(int nel, int format, char *err_buf, std::size_t err_cap) {
+  try {
+    return pair_block_count(nel, to_format(format));
+  } catch (const std::exception &ex) {
+    write_error(err_buf, err_cap, ex.what());
+    return -1;
+  } catch (...) {
+    write_error(err_buf, err_cap, "unknown C++ exception in EAM pair block count");
+    return -1;
+  }
+}
 
 void *rgflux_eam_table_open_file(const char *path, int format, int periodic,
                                  double skin, char *err_buf,
