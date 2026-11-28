@@ -43,9 +43,11 @@ rgpot::EAMTableFormat to_format(int code) {
 }
 
 /// rgpot place() sets q = x * (1/step) + 1 and static_casts q to int before
-/// it clamps the bin. A quotient outside the int range is undefined; on this
-/// platform the cast collapses to the first cubic, so the linear extension
-/// above rhomax is the wrong finite value. No rgpot patch here.
+/// it clamps the bin. A quotient outside the int range makes that cast
+/// undefined. Without optimization the conversion has yielded the most
+/// negative int, and this bridge is compiled at -O3, where it has saturated
+/// at the most positive int. The bridge refuses before that cast. No rgpot
+/// patch here.
 bool place_cast_defined(double x, double step) {
   if (!std::isfinite(x) || !std::isfinite(step) || !(step > 0.0)) {
     return false;
