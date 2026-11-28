@@ -11,7 +11,7 @@ if [[ -n "${RGPOT_DIR:-}" ]]; then
   exit 0
 fi
 
-pin=424629e5ba9c0948b8d6224f5b49c014ffb4ac7c
+pin=ae6a2cfec686b06cb5921f027b6b56763c67bd91
 root="$(cd "$(dirname "$0")/.." && pwd)/target/rgpot-cpp"
 marker="$root/CppCore/rgpot/EAMTable/EAMTablePot.cc"
 current=""

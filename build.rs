@@ -91,7 +91,7 @@ fn cpp_core_at(path: &std::path::Path) -> Option<std::path::PathBuf> {
 
 /// CppCore revision ci/fetch_rgpot_cpp.sh checks out. A cargo git checkout
 /// is used only when its HEAD is this revision.
-const RGPOT_CPP_PIN: &str = "424629e5ba9c0948b8d6224f5b49c014ffb4ac7c";
+const RGPOT_CPP_PIN: &str = "ae6a2cfec686b06cb5921f027b6b56763c67bd91";
 
 fn checkout_is_pin(path: &std::path::Path) -> bool {
     let Ok(output) = std::process::Command::new("git")
