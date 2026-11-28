@@ -1576,6 +1576,42 @@ c
     }
 
     #[test]
+    fn eam_table_element_line_discards_an_unused_nan() {
+        let mut text = String::from("c\nc\nc\n1\n");
+        text.push_str("8 0.1 8 0.25 4.0\n29 63.546 Cu nan\n");
+        text.push_str("0 0 0 0 0 0 0 0\n");
+        text.push_str("0 0 0 0 0 0 0 0\n");
+        text.push_str("0 0 0 0 0 0 0 0\n");
+        let path = write_table("element-nan", &text);
+        let opened = open_table(&path, EamTableFormat::Setfl);
+        let _ = std::fs::remove_file(&path);
+        match opened {
+            Ok(surf) => {
+                let pos = Array1::from_vec(vec![0.0, 0.0, 0.0, 2.0, 0.0, 0.0]);
+                let (energy, _) = surf
+                    .energy_and_forces(pos.view(), None)
+                    .expect("discarded element word still evaluates");
+                assert_eq!(energy, 0.0);
+            }
+            Err(FluxError::Surface(msg)) => {
+                panic!("unused element word was refused: {msg}");
+            }
+            Err(other) => panic!("unused element word: {other}"),
+        }
+
+        let mut used = String::from("c\nc\nc\n1\n");
+        used.push_str("8 0.1 8 0.25 4.0\n29 63.546 Cu\n");
+        used.push_str("0 0 0 0 0 0 0 nan\n");
+        used.push_str("0 0 0 0 0 0 0 0\n");
+        used.push_str("0 0 0 0 0 0 0 0\n");
+        let path = write_table("used-nan", &used);
+        let opened = open_table(&path, EamTableFormat::Setfl);
+        let _ = std::fs::remove_file(&path);
+        let msg = assert_surface_err(opened, "nan knot");
+        assert!(msg.contains("finite"), "{msg}");
+    }
+
+    #[test]
     fn eam_table_header_refuses_inf_nan_and_hex_floats() {
         let expect = |name: &str, text: String, format: EamTableFormat| {
             let path = write_table(name, &text);

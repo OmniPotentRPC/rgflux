@@ -383,6 +383,30 @@ struct Scan {
     out = value;
     return true;
   }
+
+  /// The rest of the line operator>> leaves for getline.
+  void discard_line() {
+    const std::size_t end = text.find('\n', pos);
+    if (end == std::string::npos) {
+      pos = text.size();
+    } else {
+      pos = end + 1;
+    }
+  }
+
+  bool read_word(std::string &out) {
+    skip_ws();
+    if (pos >= text.size()) {
+      return false;
+    }
+    const std::size_t start = pos;
+    while (pos < text.size() &&
+           std::isspace(static_cast<unsigned char>(text[pos])) == 0) {
+      ++pos;
+    }
+    out.assign(text, start, pos - start);
+    return true;
+  }
 };
 
 /// read_eam_table consumes funcfl's one comment line, or the three setfl
@@ -425,21 +449,101 @@ HeaderGrid sniff_grid(const std::string &text, rgpot::EAMTableFormat format) {
   return grid;
 }
 
+void require_knot_word(const std::string &word) {
+  char *end = nullptr;
+  const double value = std::strtod(word.c_str(), &end);
+  if (end != word.c_str() && *end == '\0' && !std::isfinite(value)) {
+    throw std::invalid_argument("EAM table knots must be finite");
+  }
+}
+
+/// A missing knot is left for the reader. A present non-finite knot is refused.
+bool require_knot_block(Scan &scan, int n) {
+  if (n < 0) {
+    return false;
+  }
+  for (int i = 0; i < n; ++i) {
+    std::string word;
+    if (!scan.read_word(word)) {
+      return false;
+    }
+    require_knot_word(word);
+  }
+  return true;
+}
+
+bool read_element_line(Scan &scan) {
+  int z = 0;
+  double mass = 0.0;
+  if (!scan.extract_int(z) || !scan.extract_double(mass)) {
+    return false;
+  }
+  // mass is parsed and dropped. Words after it are not knots.
+  scan.discard_line();
+  return true;
+}
+
+bool read_grid_line(Scan &scan, int &nrho, int &nr) {
+  double drho = 0.0;
+  double dr = 0.0;
+  double cutoff = 0.0;
+  if (!scan.extract_int(nrho) || !scan.extract_double(drho) || !scan.extract_int(nr) ||
+      !scan.extract_double(dr) || !scan.extract_double(cutoff)) {
+    return false;
+  }
+  scan.discard_line();
+  return true;
+}
+
+/// After the comment lines, check the numbers read_eam_table keeps. The rest
+/// of an element line is discarded, so a word there is not a knot.
 void require_finite_numeric_tokens(const std::string &text, rgpot::EAMTableFormat format) {
-  std::istringstream in(text);
+  Scan scan{text, 0};
   std::string line;
   const int comments = format == rgpot::EAMTableFormat::Funcfl ? 1 : 3;
   for (int k = 0; k < comments; ++k) {
-    if (!std::getline(in, line)) {
+    if (!scan.getline(line)) {
       return;
     }
   }
-  std::string word;
-  while (in >> word) {
-    char *end = nullptr;
-    const double value = std::strtod(word.c_str(), &end);
-    if (end != word.c_str() && *end == '\0' && !std::isfinite(value)) {
-      throw std::invalid_argument("EAM table knots must be finite");
+  int nrho = 0;
+  int nr = 0;
+  if (format == rgpot::EAMTableFormat::Funcfl) {
+    if (!read_element_line(scan) || !read_grid_line(scan, nrho, nr)) {
+      return;
+    }
+    if (!require_knot_block(scan, nrho) || !require_knot_block(scan, nr) ||
+        !require_knot_block(scan, nr)) {
+      return;
+    }
+    return;
+  }
+  int nel = 0;
+  if (!scan.extract_int(nel) || nel < 1) {
+    return;
+  }
+  scan.discard_line();
+  if (!read_grid_line(scan, nrho, nr)) {
+    return;
+  }
+  const int nd = format == rgpot::EAMTableFormat::FinnisSinclair ? nel : 1;
+  for (int b = 0; b < nel; ++b) {
+    if (!read_element_line(scan) || !require_knot_block(scan, nrho)) {
+      return;
+    }
+    for (int k = 0; k < nd; ++k) {
+      if (!require_knot_block(scan, nr)) {
+        return;
+      }
+    }
+  }
+  if (nel > (std::numeric_limits<int>::max() - 1) / 2) {
+    return;
+  }
+  const int pairs = nel * (nel + 1) / 2;
+  for (int p = 0; p < pairs; ++p) {
+    if (!require_knot_block(scan, nr)) {
+      return;
     }
   }
 }
