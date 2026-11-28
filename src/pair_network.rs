@@ -17,9 +17,9 @@
 //! hop class, the direction, and the source state.
 //!
 //! [`PairNetwork::sites`] turns the network into [`VolumeSite`] rows for
-//! [`rgflux::defect_pair::kinetic_recombination_volume`] and returns the hops that leave
+//! [`crate::defect_pair::kinetic_recombination_volume`] and returns the hops that leave
 //! the enumerated region as [`PairExit`] rows, which a host may hand to
-//! [`rgflux::defect_pair::embed_sphere_return`].
+//! [`crate::defect_pair::embed_sphere_return`].
 
 use std::collections::BTreeMap;
 
