@@ -1897,40 +1897,33 @@ c
     }
 
     #[test]
-    fn eam_table_cancelled_critical_sample_is_refused() {
+    fn eam_table_critical_sample_above_bernstein_is_refused() {
+        // Bernstein control points of this row fit in the place cast. The
+        // critical-point sample is one ulp higher and does not.
         let density = [
-            101222.78926303517,
-            -1.1930726680185628e-16,
-            -3340.9470975651357,
-            202986064.250324,
-            202986064.250324,
-            13302505.579372644,
-            93140925.68529058,
-            -28091.831237726492,
+            f64::from_bits(0x4604_2187_0a54_5392),
+            f64::from_bits(0x48b3_e34c_68a2_eacd),
+            f64::from_bits(0x46a4_25ce_3f1d_8188),
+            f64::from_bits(0xc2e6_821c_a0bb_a49a),
+            f64::from_bits(0x4432_2b68_b5f1_1f35),
+            f64::from_bits(0xcb35_0f69_7257_2940),
+            f64::from_bits(0xc2d7_2dc8_4f4c_087b),
+            f64::from_bits(0xc834_5608_c69c_02b8),
         ];
-        let mut embedding = vec![0.0; density.len()];
-        embedding[1] = 100.0;
+        let embedding = vec![0.0; density.len()];
         let pair = vec![0.0; density.len()];
+        let drho = f64::from_bits(0x4945_0f69_7281_482a);
         let cfg = RgpotConfig::default()
             .with_atomic_numbers(vec![29, 29])
             .with_default_cell(pair_cell());
         let opened = RgpotSurface::from_eam_table_memory(
-            29,
-            0.11011303154958862,
-            1.0,
-            6.0,
-            &embedding,
-            &density,
-            &pair,
-            false,
-            0.0,
-            cfg,
+            29, drho, 1.0, 6.0, &embedding, &density, &pair, false, 0.0, cfg,
         )
-        .expect("cancelled critical sample opens");
+        .expect("critical sample opens");
         let pos = Array1::from_vec(vec![0.0, 0.0, 0.0, 3.5, 0.0, 0.0]);
         match opened.energy_and_forces(pos.view(), None) {
             Err(FluxError::Surface(msg)) => assert!(msg.contains("place index"), "{msg}"),
-            other => panic!("cancelled critical sample returned {other:?}"),
+            other => panic!("critical sample returned {other:?}"),
         }
     }
 
