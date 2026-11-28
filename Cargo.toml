@@ -49,8 +49,8 @@ lammpc = ["dep:rgpot-core", "rgpot-core/profile", "rgpot-core/schema", "dep:capn
 # patch releases. Every dependency, and `Cargo.lock`, resolves from
 # crates.io; there is no `[patch.crates-io]` table.
 # `ci/check_dependency_pins.py` enforces this.
-rgsaddle = { version = "0.5.0", default-features = false }
-rgmin = { version = "0.6.0", default-features = false }
+rgsaddle = { version = "0.6.0", git = "https://github.com/OmniPotentRPC/rgsaddle", rev = "e890b05f9be348a5a9b4ee5e3a76bd7b49be8320", default-features = false, features = ["ohtst"] }
+rgmin = { version = "=0.7.0", git = "https://github.com/OmniPotentRPC/rgmin", rev = "f2527782713dcf4b4d5d91af9da1bba80c32bc0c", default-features = false }
 rgpot-core = { version = "3.7.0", optional = true }
 eindir-core = "0.6.0"
 ndarray = "0.17"
