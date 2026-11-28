@@ -152,7 +152,9 @@ void require_table_shape(const rgpot::EAMTable &table) {
 /// points. When the scaled discriminant is still not finite, the bound is
 /// the sum of the absolute coefficients, which contains the cubic on [0, 1].
 /// A few ulps of padding keep a finite bound above the Horner value the
-/// spline evaluates.
+/// spline evaluates. That padding does not cover an interior extremum, so a
+/// non-finite discriminant still contributes its critical points or the
+/// coefficient sum.
 double segment_abs_max(double c3, double c4, double c5, double left) {
   if (!std::isfinite(c3) || !std::isfinite(c4) || !std::isfinite(c5) ||
       !std::isfinite(left)) {

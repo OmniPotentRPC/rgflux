@@ -1667,6 +1667,49 @@ c
     }
 
     #[test]
+    fn eam_table_sign_flipped_density_refuses_an_overflowing_place() {
+        // Negated eight-knot row. The interior cubic exceeds every knot, and
+        // the derivative discriminant is not finite. One neighbor at this
+        // distance makes the place cast miss int; the endpoint magnitude fits.
+        let raw = [
+            -7.65731413582964e179,
+            -5.590789262643429e179,
+            5.891659434211519e179,
+            -3.349277015606891e179,
+            6.318261930673191e179,
+            -7.987849595678076e179,
+            -7.072830221753923e179,
+            3.953412803824776e179,
+        ];
+        let rhor: Vec<f64> = raw.iter().map(|value| -value).collect();
+        let mut embedding = vec![0.0; 8];
+        embedding[7] = 100.0;
+        let zeros = vec![0.0; 8];
+        let knot_max = rhor.iter().fold(0.0_f64, |acc, value| acc.max(value.abs()));
+        let cfg = RgpotConfig::default()
+            .with_atomic_numbers(vec![29, 29])
+            .with_default_cell(pair_cell());
+        let opened = RgpotSurface::from_eam_table_memory(
+            29,
+            knot_max / 1.9e9,
+            1.0,
+            8.0,
+            &embedding,
+            &rhor,
+            &zeros,
+            false,
+            0.0,
+            cfg,
+        )
+        .expect("sign-flipped density opens");
+        let pos = Array1::from_vec(vec![0.0, 0.0, 0.0, 5.3713, 0.0, 0.0]);
+        match opened.energy_and_forces(pos.view(), None) {
+            Err(FluxError::Surface(msg)) => assert!(msg.contains("place index"), "{msg}"),
+            other => panic!("sign-flipped density returned {other:?}"),
+        }
+    }
+
+    #[test]
     fn eam_table_place_uses_neighbors_inside_cutoff() {
         let dr = 4.0 / 15.0;
         let cutoff = 4.0;
