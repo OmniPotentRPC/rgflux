@@ -450,9 +450,19 @@ HeaderGrid sniff_grid(const std::string &text, rgpot::EAMTableFormat format) {
 }
 
 void require_knot_word(const std::string &word) {
+  const char *start = word.c_str();
   char *end = nullptr;
-  const double value = std::strtod(word.c_str(), &end);
-  if (end != word.c_str() && *end == '\0' && !std::isfinite(value)) {
+  const double value = std::strtod(start, &end);
+  const char *scan = start;
+  if (*scan == '+' || *scan == '-') {
+    ++scan;
+  }
+  const bool hex = scan[0] == '0' && (scan[1] == 'x' || scan[1] == 'X');
+  const bool full = end != start && *end == '\0';
+  if (hex || !full) {
+    throw std::invalid_argument("EAM table knot is not a decimal number");
+  }
+  if (!std::isfinite(value)) {
     throw std::invalid_argument("EAM table knots must be finite");
   }
 }
@@ -496,7 +506,8 @@ bool read_grid_line(Scan &scan, int &nrho, int &nr) {
 }
 
 /// After the comment lines, check the numbers read_eam_table keeps. The rest
-/// of an element line is discarded, so a word there is not a knot.
+/// of an element line is discarded, so a word there is not a knot. Every knot
+/// token, including the last, must be a finite decimal that strtod consumes.
 void require_finite_numeric_tokens(const std::string &text, rgpot::EAMTableFormat format) {
   Scan scan{text, 0};
   std::string line;

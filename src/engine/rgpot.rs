@@ -1612,6 +1612,20 @@ c
     }
 
     #[test]
+    fn eam_table_refuses_a_hex_float_as_the_last_knot() {
+        let mut text = String::from("c\nc\nc\n1\n");
+        text.push_str("8 0.1 8 0.25 4.0\n29 63.546 Cu\n");
+        text.push_str("0 0 0 0 0 0 0 0\n");
+        text.push_str("0 0 0 0 0 0 0 0\n");
+        text.push_str("0 0 0 0 0 0 0 0x1p+3\n");
+        let path = write_table("last-hex", &text);
+        let opened = open_table(&path, EamTableFormat::Setfl);
+        let _ = std::fs::remove_file(&path);
+        let msg = assert_surface_err(opened, "last knot 0x1p+3");
+        assert!(msg.contains("decimal"), "{msg}");
+    }
+
+    #[test]
     fn eam_table_header_refuses_inf_nan_and_hex_floats() {
         let expect = |name: &str, text: String, format: EamTableFormat| {
             let path = write_table(name, &text);
