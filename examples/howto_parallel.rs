@@ -19,7 +19,8 @@ use std::time::Instant;
 use ndarray::{Array1, ArrayView1, array};
 use rayon::prelude::*;
 use rgflux::ohtst::{BasinConfig, LangevinConfig, basin_density};
-use rgsaddle::{ArcPath, PafiConfig, PointSurface, SaddleError, pafi_profile};
+use rgflux::pafi::cartesian::{PafiConfig, pafi_profile};
+use rgsaddle::{ArcPath, PointSurface, SaddleError};
 
 /// Same surface as `examples/pafi_tutorial.rs`.
 struct CurvedWell;

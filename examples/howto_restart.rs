@@ -20,7 +20,8 @@
 
 use ndarray::{Array1, ArrayView1, array};
 use rgflux::ohtst::{Hyperplane, LangevinConfig, sample_plane};
-use rgsaddle::{ArcPath, PafiConfig, PointSurface, SaddleError, pafi_profile};
+use rgflux::pafi::cartesian::{PafiConfig, pafi_profile};
+use rgsaddle::{ArcPath, PointSurface, SaddleError};
 
 /// Same surface as `examples/pafi_tutorial.rs`: `V = (x^2 - 1)^2 + k(x)
 /// y^2 / 2`, `k(x) = 2.5 + 1.5 x`. The transverse stiffness varies with

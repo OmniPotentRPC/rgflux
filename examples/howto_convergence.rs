@@ -29,7 +29,8 @@ use rgflux::ohtst::{
     AnalyticSurfaceSampler, Hyperplane, LangevinConfig, PlanePath, ReversibleWorkConfig,
     reversible_work_along, sample_plane,
 };
-use rgsaddle::{ArcPath, PafiConfig, PointSurface, SaddleError, pafi_profile};
+use rgflux::pafi::cartesian::{PafiConfig, pafi_profile};
+use rgsaddle::{ArcPath, PointSurface, SaddleError};
 
 /// Same surface as `examples/pafi_tutorial.rs`.
 struct CurvedWell;

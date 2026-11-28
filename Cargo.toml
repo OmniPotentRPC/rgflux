@@ -42,6 +42,7 @@ rgpot-session = ["dep:rgpot-core"]
 # engine uses the Cap'n Proto profile wire format, so only it enables the
 # rgpot-core `profile` and `schema` features, whose build script needs the
 # `capnp` CLI.
+pafi-repro = ["dep:capnp", "dep:rgpot-core", "rgpot-core/profile"]
 lammpc = ["dep:rgpot-core", "rgpot-core/profile", "rgpot-core/schema", "dep:capnp"]
 
 [dependencies]
@@ -61,6 +62,10 @@ capnp = { version = "0.20.6", optional = true }
 
 [dev-dependencies]
 approx = "0.5"
+flate2 = "1"
+sha2 = "0.10"
+# Tag v3.6.0, as in rgsaddle: the copper tests evaluate its pair kernels.
+rgpot-pair = { version = "=3.6.0", git = "https://github.com/OmniPotentRPC/rgpot", rev = "20c58fe5a2859cd0a79a3e06d64d567f96d0ccbe" }
 proptest = "1.6"
 
 [lints.rust]

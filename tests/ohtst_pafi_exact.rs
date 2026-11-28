@@ -7,7 +7,8 @@ use rgflux::ohtst::{
     LangevinConfig, PlaneOptimizer, PlaneOptimizerConfig, ReversibleWorkConfig, TransmissionConfig,
     ohtst_rate, reactant_density, reversible_work, transmission_coefficient,
 };
-use rgsaddle::{ArcPath, PafiConfig, pafi_profile};
+use rgflux::pafi::cartesian::{PafiConfig, pafi_profile};
+use rgsaddle::ArcPath;
 
 include!(concat!(
     env!("CARGO_MANIFEST_DIR"),

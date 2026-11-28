@@ -98,6 +98,7 @@ mod config;
 
 pub mod adaptive_ohtst;
 pub mod cu_reference;
+pub mod defect_pair;
 pub mod engine;
 pub mod error;
 pub mod ffs;
@@ -107,6 +108,7 @@ pub mod network;
 pub mod ohtst;
 pub mod opes;
 pub mod pafi;
+pub mod pair_network;
 pub mod stats;
 
 pub use engine::{

@@ -1,0 +1,5 @@
+source,case,temperature_k,barrier_ev,error_ev,location
+tomswinburne/pafi@1661a1d,EAM-VAC-W,0,1.97,0.00,doc/test_output.png
+tomswinburne/pafi@1661a1d,EAM-VAC-W,1000,2.07,0.04,doc/test_output.png
+tomswinburne/pafi@1661a1d,EAM-VAC-W,2000,1.82,0.09,doc/test_output.png
+PhysRevLett.120.135503,W-double-kink,0,1.67,,Figure 2 and pages 135503-4--5

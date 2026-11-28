@@ -1,0 +1,7 @@
+kind,shell,orientation,hop,direction,temperature_K,dE0_eV,zero_T_eV,dF_eV,dF_error_eV,nu_Hz,rate_Hz,outcome,band_force,note
+pafi,isolated,100,translate,toward,500,0.089835,0.089742,0.077602,0.007838,1.41550957e12,2.60426594e10,rated,0.00168,kappa 0.111420 error 0.177887; normal from reactant to product; free-energy maximum
+pafi,isolated,100,translate,toward,300,0.093469,0.093342,0.081816,0.005393,1.43812778e12,1.35083827e10,rated,0.00184,kappa 0.222458 error 0.364392; normal from reactant to product; free-energy maximum
+pafi,isolated,100,rotate,tangential,500,0.225534,0.225284,0.138397,0.014175,1.41430561e12,1.57915817e10,rated,0.00139,kappa 0.277242 error 0.578333; normal from reactant to product; free-energy maximum
+pafi,isolated,100,rotate,tangential,300,0.230041,0.229786,0.166127,0.010056,1.43421620e12,7.03333985e8,rated,0.00140,kappa 0.302943 error 0.321545; normal from reactant to product; free-energy maximum
+pafi,isolated,100,rotate,tangential,700,0.218804,0.218458,0.114213,0.015344,1.39456476e12,5.69372722e10,rated,0.00180,kappa 0.271179 error 0.581080; normal from reactant to product; free-energy maximum
+pafi,isolated,100,translate,toward,700,0.085890,0.085849,0.067188,0.010256,1.39463499e12,6.52350146e10,rated,0.00150,kappa 0.142481 error 0.442833; normal from reactant to product; free-energy maximum

@@ -37,11 +37,11 @@
 
 use std::f64::consts::TAU;
 
+use crate::kappa::surface::{ShootingConfig, Transmission, bennett_chandler};
 use crate::ohtst::reactant::ReactantDensity;
 use crate::ohtst::sample::PlaneSample;
 use crate::ohtst::transmission::TransmissionEstimate;
 use crate::ohtst::work::ReversibleWork;
-use rgsaddle::bennett::{ShootingConfig, Transmission, bennett_chandler};
 use rgsaddle::error::SaddleError;
 use rgsaddle::minmode::PointSurface;
 use rgsaddle::projector::Hyperplane;

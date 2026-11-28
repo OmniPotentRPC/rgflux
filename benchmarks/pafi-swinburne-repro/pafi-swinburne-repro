@@ -1,0 +1,85 @@
+#!/usr/bin/env bash
+# Full public-code PAFI regression through the canonical rgpot/lammpc stack.
+set -euo pipefail
+
+PAFI_COMMIT=1661a1d61b2ccbbd33ec4c9656d60947b8b74cc1
+# lammpc fix/embed-profile-abi (OmniPotentRPC/lammpc#4) on main 88cb40a2.
+LAMMPC_COMMIT=56b3c696e0f7009bf5411b43d94ff1667f01336d
+LAMMPS_TAG=stable_22Jul2025
+ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
+WORK=$(mktemp -d)
+cleanup() {
+  find "${WORK:?}" -depth -delete
+}
+trap cleanup EXIT
+
+JOBS=${BENCHBOT_JOBS:-$(getconf _NPROCESSORS_ONLN)}
+OUTPUT=${PAFI_REPRO_OUTPUT:-"${ROOT}/benchmarks/pafi-swinburne-repro/full-results.csv"}
+CC=${BENCHBOT_CC:-gcc}
+CXX=${BENCHBOT_CXX:-g++}
+
+git clone --quiet https://github.com/tomswinburne/pafi "${WORK}/pafi"
+git -C "${WORK}/pafi" checkout --quiet "${PAFI_COMMIT}"
+git clone --quiet https://github.com/OmniPotentRPC/lammpc "${WORK}/lammpc"
+git -C "${WORK}/lammpc" fetch --quiet origin "${LAMMPC_COMMIT}"
+git -C "${WORK}/lammpc" checkout --quiet "${LAMMPC_COMMIT}"
+
+curl -fsSL --retry 4 \
+  "https://github.com/lammps/lammps/archive/refs/tags/${LAMMPS_TAG}.tar.gz" \
+  -o "${WORK}/lammps.tar.gz"
+tar -C "${WORK}" -xzf "${WORK}/lammps.tar.gz"
+mapfile -t LAMMPS_SOURCES < <(compgen -G "${WORK}/lammps-*")
+if [ "${#LAMMPS_SOURCES[@]}" -ne 1 ]; then
+  printf 'expected one LAMMPS source tree, found %s\n' "${#LAMMPS_SOURCES[@]}" >&2
+  exit 1
+fi
+LAMMPS_SOURCE=${LAMMPS_SOURCES[0]}
+LAMMPS_ROOT="${WORK}/lammps-install"
+cmake -S "${LAMMPS_SOURCE}/cmake" -B "${WORK}/lammps-build" \
+  -DCMAKE_C_COMPILER="${CC}" \
+  -DCMAKE_CXX_COMPILER="${CXX}" \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DBUILD_MPI=no \
+  -DBUILD_OMP=no \
+  -DBUILD_SHARED_LIBS=on \
+  -DBUILD_TOOLS=no \
+  -DPKG_MANYBODY=yes \
+  -DCMAKE_INSTALL_PREFIX="${LAMMPS_ROOT}"
+cmake --build "${WORK}/lammps-build" -j "${JOBS}"
+cmake --install "${WORK}/lammps-build"
+ln -s "${LAMMPS_SOURCE}/src" "${LAMMPS_ROOT}/include-src"
+
+CC="${CC}" CXX="${CXX}" meson setup "${WORK}/lammpc-build" "${WORK}/lammpc" \
+  --buildtype=release \
+  --prefix="${WORK}/lammpc-install" \
+  --libdir=lib \
+  -Dwith_lammps=true \
+  -Dwith_tests=false \
+  -Dlammps_root="${LAMMPS_ROOT}"
+meson compile -C "${WORK}/lammpc-build" -j "${JOBS}"
+meson install -C "${WORK}/lammpc-build"
+
+cd "${ROOT}"
+START_SECONDS=${SECONDS}
+if RGSADDLE_PAFI_REFERENCE="${WORK}/pafi/examples/systems" \
+  LAMMPC_LIBRARY="${WORK}/lammpc-install/lib/liblammpc.so" \
+  LD_LIBRARY_PATH="${LAMMPS_ROOT}/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}" \
+  RAYON_NUM_THREADS="${BENCHBOT_RAYON_THREADS:-1}" \
+  PAFI_NEB_STEPS="${PAFI_NEB_STEPS:-2000}" \
+  PAFI_TRAJECTORIES="${PAFI_TRAJECTORIES:-100}" \
+  PAFI_THERMALIZE="${PAFI_THERMALIZE:-2000}" \
+  PAFI_SAMPLES="${PAFI_SAMPLES:-5000}" \
+  PAFI_REPRO_OUTPUT="${OUTPUT}" \
+  cargo test --release --no-default-features --features pafi-repro --test pafi_swinburne_full \
+    w_vacancy_matches_public_code_output -- --ignored --exact --nocapture
+then
+  STATUS=0
+else
+  STATUS=$?
+fi
+
+printf 'result: %s\n' "${OUTPUT}"
+printf 'elapsed_seconds: %s\n' "$((SECONDS - START_SECONDS))"
+printf '%s\n' \
+  'Question: do all three rows pass the predeclared combined-error criterion without protocol tuning?'
+exit "${STATUS}"

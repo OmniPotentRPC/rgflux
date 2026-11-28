@@ -15,12 +15,14 @@ use rgflux::ohtst::{
     mass_weighted_rigid_translations, ohtst_rate, plane_transmission, reactant_density,
     reversible_work_along, transmission_coefficient,
 };
+use rgflux::pafi::cartesian::{
+    PafiConfig, integrate_profile, pafi_profile, zero_temperature_barrier,
+};
 use rgmin::Method;
 use rgsaddle::{
-    ArcPath, HyperplaneSampleBudget, HyperplaneSampler, PafiConfig, PlanarBoundary, PointSurface,
-    Region, SaddleError, THERMODYNAMIC_DERIVATIVE, ThermodynamicIntegrationConfig, flux_mass,
-    integrate_profile, pafi_profile, restricted_thermodynamic_integration,
-    thermodynamic_integration, zero_temperature_barrier,
+    ArcPath, HyperplaneSampleBudget, HyperplaneSampler, PlanarBoundary, PointSurface, Region,
+    SaddleError, THERMODYNAMIC_DERIVATIVE, ThermodynamicIntegrationConfig, flux_mass,
+    restricted_thermodynamic_integration, thermodynamic_integration,
 };
 
 include!("common/ohtst_surfaces.rs");
@@ -388,7 +390,7 @@ fn transmission_quench_permutation_and_quenched_region() {
     let bc = plane_transmission(
         &SkewedWell,
         &sample,
-        &rgsaddle::ShootingConfig::default()
+        &rgflux::kappa::surface::ShootingConfig::default()
             .with_thermal(0.1)
             .with_shots(16),
     )

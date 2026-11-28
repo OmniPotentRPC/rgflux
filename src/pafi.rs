@@ -267,6 +267,8 @@ use crate::engine::{
 use crate::error::FluxError;
 use crate::stats::{StatsConfig, batch_means};
 
+#[path = "pafi_cartesian.rs"]
+pub mod cartesian;
 #[path = "group_displacement.rs"]
 mod group_displacement;
 pub use group_displacement::{GroupDisplacementProfile, group_displacement_scan};

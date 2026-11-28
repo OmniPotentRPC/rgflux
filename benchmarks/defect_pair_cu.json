@@ -1,0 +1,11 @@
+{
+  "format": "rgsaddle.defect_pair_rates",
+  "version": 1,
+  "rate": "k = kappa * nu * exp(-dF/kT)",
+  "nu": "(1/2pi) * sqrt((tau·H·tau)/mass) * angular_scale",
+  "dF": "PAFI potential of mean force from the reactant to the dividing surface",
+  "kappa": "Bennett-Chandler positive-flux transmission coefficient",
+  "harmonic_rate": "Vineyard prefactor * exp(-dE0/kT)",
+  "entries": [
+  ]
+}

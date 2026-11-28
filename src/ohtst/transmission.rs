@@ -51,7 +51,7 @@ use ndarray::{Array1, Array2, ArrayView1, Zip};
 use rayon::prelude::*;
 use rgmin::{Control, Method, Oracle, Solver, StopNorm};
 
-use rgsaddle::bennett::Transmission;
+use crate::kappa::surface::Transmission;
 use rgsaddle::error::SaddleError;
 use rgsaddle::mass_metric::MassMetric;
 use rgsaddle::mic::Cell;

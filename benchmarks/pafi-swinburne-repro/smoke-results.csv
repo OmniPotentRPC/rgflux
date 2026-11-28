@@ -1,0 +1,4 @@
+temperature_k,published_ev,published_error_ev,ours_ev,ours_error_ev,planes,trajectories,thermalize_steps,sample_steps,integrator,mean_force,neb_steps,neb_max_force_ev_per_a,rejected_stretches
+0,1.97,0.00,1.96817368,0.00000000,9,4,2000,2000,euler_maruyama,reference_code,86,0.0008863843282684947,0
+1000,2.07,0.04,2.04436424,0.01559574,9,4,2000,2000,euler_maruyama,reference_code,86,0.0008863843282684947,0
+2000,1.82,0.09,1.80367161,0.03325187,9,4,2000,2000,euler_maruyama,reference_code,86,0.0008863843282684947,0

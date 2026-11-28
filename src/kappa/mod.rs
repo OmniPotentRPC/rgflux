@@ -46,6 +46,7 @@
 //!   Chemical Physics, 118, 7762-7774. <https://doi.org/10.1063/1.1562614>
 
 pub mod bennett_chandler;
+pub mod surface;
 
 pub use bennett_chandler::{
     BennettChandlerConfig, BennettChandlerEstimate, ReactiveTrajectory, ShootingConfig, Side,

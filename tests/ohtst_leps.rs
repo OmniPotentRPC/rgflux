@@ -10,6 +10,7 @@
 //! are not compared here.
 
 use ndarray::{Array1, array};
+use rgflux::kappa::surface::ShootingConfig;
 use rgflux::ohtst::{
     AnalyticSurfaceDynamics, AnalyticSurfaceSampler, BasinConfig, Basins, Counting, EndState,
     GaussianTransport, Hyperplane, LangevinConfig, PlaneIntegrator, PlaneOptimizer,
@@ -18,7 +19,7 @@ use rgflux::ohtst::{
     reversible_work_along, transmission_coefficient,
 };
 use rgsaddle::{
-    MinModeConfig, MinModeSession, MinModeStatus, ShootingConfig, angular_scale_rad_s, exact_eigh,
+    MinModeConfig, MinModeSession, MinModeStatus, angular_scale_rad_s, exact_eigh,
     vineyard_prefactor,
 };
 
