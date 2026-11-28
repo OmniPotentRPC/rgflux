@@ -179,9 +179,9 @@ pub struct ThermostatConfig {
     /// (`0` with white noise gives NVE).
     ///
     /// With white noise, samplers that average a constrained force as a
-    /// canonical expectation, [`crate::hyperplane::sample_hyperplane`],
-    /// [`crate::ohtst::optimize_hyperplane`], and [`crate::pafi::pafi_profile`],
-    /// require `gamma > 0` and return [`FluxError::InvalidConfig`] otherwise.
+    /// canonical expectation, [`crate::hyperplane::sample_hyperplane`] and
+    /// [`crate::pafi::pafi_profile`], require `gamma > 0` and return
+    /// [`FluxError::InvalidConfig`] otherwise.
     /// A colored-noise model may provide canonical sampling independently of
     /// `gamma`, but each engine must implement that model or reject it. Within
     /// a supported canonical regime the sampled mean does not depend on
