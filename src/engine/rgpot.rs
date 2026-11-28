@@ -1533,6 +1533,120 @@ c
     }
 
     #[test]
+    fn eam_table_comment_line_infinity_model_is_not_a_knot() {
+        let mut text = String::from("infinity model\nsecond line has nan\nthird\n1\n");
+        text.push_str("8 0.1 8 0.25 4.0\n29 63.546 Cu\n");
+        text.push_str("0 0 0 0 0 0 0 0\n");
+        text.push_str("0 0 0 0 0 0 0 0\n");
+        text.push_str("0 0 0 0 0 0 0 0\n");
+        let path = write_table("comment-infinity-model", &text);
+        let opened = open_table(&path, EamTableFormat::Setfl);
+        let _ = std::fs::remove_file(&path);
+        match opened {
+            Ok(surf) => {
+                let pos = Array1::from_vec(vec![0.0, 0.0, 0.0, 2.0, 0.0, 0.0]);
+                let (energy, _) = surf
+                    .energy_and_forces(pos.view(), None)
+                    .expect("infinity model comment still evaluates");
+                assert_eq!(energy, 0.0);
+            }
+            Err(FluxError::Surface(msg)) => {
+                panic!("infinity model was scanned as a knot: {msg}");
+            }
+            Err(other) => panic!("infinity model: {other}"),
+        }
+
+        let mut funcfl = String::from("infinity model\n29 63.546\n8 0.1 8 0.25 4.0\n");
+        funcfl.push_str("0 0 0 0 0 0 0 0\n");
+        funcfl.push_str("0 0 0 0 0 0 0 0\n");
+        funcfl.push_str("0 0 0 0 0 0 0 0\n");
+        let path = write_table("funcfl-infinity-model", &funcfl);
+        let opened = open_table(&path, EamTableFormat::Funcfl);
+        let _ = std::fs::remove_file(&path);
+        match opened {
+            Ok(surf) => {
+                let pos = Array1::from_vec(vec![0.0, 0.0, 0.0, 2.0, 0.0, 0.0]);
+                let (energy, _) = surf
+                    .energy_and_forces(pos.view(), None)
+                    .expect("funcfl infinity model comment still evaluates");
+                assert_eq!(energy, 0.0);
+            }
+            Err(FluxError::Surface(msg)) => {
+                panic!("funcfl infinity model was scanned as a knot: {msg}");
+            }
+            Err(other) => panic!("funcfl infinity model: {other}"),
+        }
+    }
+
+    #[test]
+    fn eam_table_blank_line_and_cutoff_suffix_keep_the_span_guard() {
+        let zeros = "0 0 0 0 0\n0 0 0 0 0\n0 0 0 0 0\n";
+        let expect_span = |name: &str, text: String, format: EamTableFormat| {
+            let path = write_table(name, &text);
+            let opened = open_table(&path, format);
+            let _ = std::fs::remove_file(&path);
+            let msg = assert_surface_err(opened, name);
+            assert_eq!(msg, "EAM grid span is not finite", "{name}: {msg}");
+        };
+
+        let mut blank = String::from("huge drho\n\n29 63.546\n5 1e308 5 1.0 4.0\n");
+        blank.push_str(zeros);
+        expect_span("funcfl-blank-between", blank, EamTableFormat::Funcfl);
+
+        let mut split = String::from("huge drho\n\n29\n63.546\n5 1e308 5 1.0 4.0\n");
+        split.push_str(zeros);
+        expect_span("funcfl-blank-split-mass", split, EamTableFormat::Funcfl);
+
+        let mut junk = String::from("huge drho\n29 63.546\n5 1e308 5 1.0 4.0x\n");
+        junk.push_str(zeros);
+        expect_span("funcfl-cutoff-suffix", junk, EamTableFormat::Funcfl);
+
+        let setfl = String::from("c\nc\nc\n1\n\n5 1e308 5 1.0 4.0\n29 63.546 Cu\n");
+        expect_span("setfl-blank-before-grid", setfl, EamTableFormat::Setfl);
+    }
+
+    #[test]
+    fn eam_table_place_bound_is_the_cubic_maximum() {
+        let dr = 0.5;
+        let cutoff = 4.0;
+        let zeros = vec![0.0; 8];
+        let mut spike = vec![0.0; 8];
+        spike[3] = 1.0e6;
+        let open = |drho: f64, density: &[f64], numbers: Vec<i32>| {
+            let cfg = RgpotConfig::default()
+                .with_atomic_numbers(numbers)
+                .with_default_cell(pair_cell());
+            RgpotSurface::from_eam_table_memory(
+                29, drho, dr, cutoff, &zeros, density, &zeros, false, 0.0, cfg,
+            )
+        };
+
+        let two = open(1.0e-3, &spike, vec![29, 29]).expect("fitting spike opens");
+        let near = Array1::from_vec(vec![0.0, 0.0, 0.0, 2.0, 0.0, 0.0]);
+        let (energy, _) = two
+            .energy_and_forces(near.view(), None)
+            .expect("two atoms at 2 Angstrom evaluate");
+        assert_eq!(energy, 0.0);
+
+        let crowded = open(1.0e-3, &spike, vec![29, 29, 29, 29]).expect("crowded spike opens");
+        let peak = Array1::from_vec(vec![
+            0.0, 0.0, 0.0, 1.5, 0.0, 0.0, 0.0, 1.5, 0.0, 0.0, 0.0, 1.5,
+        ]);
+        match crowded.energy_and_forces(peak.view(), None) {
+            Err(FluxError::Surface(msg)) => assert!(msg.contains("place index"), "{msg}"),
+            other => panic!("three neighbors at the spike returned {other:?}"),
+        }
+
+        let ones = vec![1.0; 8];
+        let far = open(8.0e-10, &ones, vec![29, 29, 29]).expect("distant flat density opens");
+        let distant = Array1::from_vec(vec![0.0, 0.0, 0.0, 50.0, 0.0, 0.0, 80.0, 0.0, 0.0]);
+        let (energy, _) = far
+            .energy_and_forces(distant.view(), None)
+            .expect("atoms at 0, 50 and 80 have no neighbor inside the cutoff");
+        assert_eq!(energy, 0.0);
+    }
+
+    #[test]
     fn eam_table_place_uses_neighbors_inside_cutoff() {
         let dr = 4.0 / 15.0;
         let cutoff = 4.0;

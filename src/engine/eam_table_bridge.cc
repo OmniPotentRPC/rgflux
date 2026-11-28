@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -144,11 +145,48 @@ void require_table_shape(const rgpot::EAMTable &table) {
   }
 }
 
-/// Index-space slopes of PairEAM::interpolate. The value on p in [0, 1] is
-/// a cubic, and its Bernstein coefficients bound that cubic. Constant rows
-/// keep the knot magnitude. The bound is at least the true spline value, so
-/// a place() cast that fits the bound fits the density a neighbor can
-/// contribute.
+/// Maximum of |left + c5 p + c4 p^2 + c3 p^3| on [0, 1]. That is the value
+/// cubic of PairEAM::interpolate. Endpoints and the critical points of the
+/// derivative give the maximum. A few ulps of padding keep the bound above
+/// the Horner value the spline evaluates, so a place() cast that fits the
+/// bound fits the density one neighbor can contribute.
+double segment_abs_max(double c3, double c4, double c5, double left) {
+  const double right = left + c5 + c4 + c3;
+  double bound = std::max(std::abs(left), std::abs(right));
+  const double a = 3.0 * c3;
+  const double b = 2.0 * c4;
+  const double c = c5;
+  auto consider = [&](double p) {
+    if (!(p > 0.0) || !(p < 1.0) || !std::isfinite(p)) {
+      return;
+    }
+    const double value = ((c3 * p + c4) * p + c5) * p + left;
+    if (std::isfinite(value)) {
+      bound = std::max(bound, std::abs(value));
+    }
+  };
+  if (a == 0.0) {
+    if (b != 0.0) {
+      consider(-c / b);
+    }
+  } else {
+    const double disc = b * b - 4.0 * a * c;
+    if (std::isfinite(disc) && disc >= 0.0) {
+      const double root = std::sqrt(disc);
+      const double denom = 2.0 * a;
+      consider((-b + root) / denom);
+      consider((-b - root) / denom);
+    }
+  }
+  if (std::isfinite(bound) && bound > 0.0) {
+    const double pad = 1.0 + 16.0 * std::numeric_limits<double>::epsilon();
+    bound = std::nextafter(bound * pad, std::numeric_limits<double>::infinity());
+  }
+  return bound;
+}
+
+/// Index-space slopes of PairEAM::interpolate, then the maximum of each
+/// cubic. Constant rows keep the knot magnitude.
 double max_abs_spline_value(const std::vector<double> &f) {
   const int n = static_cast<int>(f.size());
   double bound = 0.0;
@@ -179,18 +217,7 @@ double max_abs_spline_value(const std::vector<double> &f) {
     const double df = right - left;
     const double c4 = 3.0 * df - 2.0 * c5 - c5n;
     const double c3 = c5 + c5n - 2.0 * df;
-    const double b0 = left;
-    const double b1 = left + c5 / 3.0;
-    const double b2 = left + (2.0 / 3.0) * c5 + (1.0 / 3.0) * c4;
-    const double b3 = left + c5 + c4 + c3;
-    double span = std::max(std::max(std::abs(b0), std::abs(b1)),
-                            std::max(std::abs(b2), std::abs(b3)));
-    // A few ulps keep the bound above the Horner value the spline evaluates.
-    if (std::isfinite(span) && span > 0.0) {
-      const double pad = 1.0 + 16.0 * std::numeric_limits<double>::epsilon();
-      span = std::nextafter(span * pad, std::numeric_limits<double>::infinity());
-    }
-    bound = std::max(bound, span);
+    bound = std::max(bound, segment_abs_max(c3, c4, c5, left));
   }
   return bound;
 }
@@ -224,83 +251,124 @@ struct HeaderGrid {
   double cutoff = 0.0;
 };
 
-int count_from_token(double value) {
-  if (!std::isfinite(value) ||
-      std::abs(value) > static_cast<double>(std::numeric_limits<int>::max())) {
-    throw std::invalid_argument("EAM grid span is not finite");
-  }
-  return static_cast<int>(std::lround(value));
-}
+/// Cursor over a table file. Comment lines are raw getline records, so a
+/// blank line counts. Later numbers use the same whitespace skipping as
+/// operator>>. Doubles are parsed with strtod, which accepts inf and nan
+/// (iostream on this libstdc++ rejects them) and a trailing suffix the
+/// extractor would leave unread, such as the x in 4.0x. Counts are decimal
+/// integers, matching operator>> into int.
+struct Scan {
+  const std::string &text;
+  std::size_t pos = 0;
 
-/// strtod accepts inf and nan, which iostream extraction on this libstdc++
-/// rejects. The grid line is read that way so a non-finite spacing is refused
-/// before read_eam_table calls lround.
-bool parse_grid_line(const std::string &line, HeaderGrid &grid) {
-  std::istringstream in(line);
-  std::string word;
-  double vals[5];
-  for (double &val : vals) {
-    if (!(in >> word)) {
+  bool getline(std::string &out) {
+    if (pos >= text.size()) {
+      return false;
+    }
+    const std::size_t end = text.find('\n', pos);
+    if (end == std::string::npos) {
+      out = text.substr(pos);
+      pos = text.size();
+    } else {
+      out = text.substr(pos, end - pos);
+      pos = end + 1;
+    }
+    if (!out.empty() && out.back() == '\r') {
+      out.pop_back();
+    }
+    return true;
+  }
+
+  void skip_ws() {
+    while (pos < text.size() &&
+           std::isspace(static_cast<unsigned char>(text[pos])) != 0) {
+      ++pos;
+    }
+  }
+
+  bool extract_int(int &out) {
+    skip_ws();
+    if (pos >= text.size()) {
+      return false;
+    }
+    int sign = 1;
+    if (text[pos] == '+' || text[pos] == '-') {
+      if (text[pos] == '-') {
+        sign = -1;
+      }
+      ++pos;
+    }
+    if (pos >= text.size() ||
+        std::isdigit(static_cast<unsigned char>(text[pos])) == 0) {
+      return false;
+    }
+    int value = 0;
+    while (pos < text.size() &&
+           std::isdigit(static_cast<unsigned char>(text[pos])) != 0) {
+      const int digit = text[pos] - '0';
+      if (value > (std::numeric_limits<int>::max() - digit) / 10) {
+        return false;
+      }
+      value = value * 10 + digit;
+      ++pos;
+    }
+    out = sign < 0 ? -value : value;
+    return true;
+  }
+
+  bool extract_double(double &out) {
+    skip_ws();
+    if (pos >= text.size()) {
       return false;
     }
     char *end = nullptr;
-    val = std::strtod(word.c_str(), &end);
-    if (end == word.c_str() || *end != '\0') {
+    const double value = std::strtod(text.c_str() + pos, &end);
+    if (end == text.c_str() + pos) {
       return false;
     }
+    pos = static_cast<std::size_t>(end - text.c_str());
+    out = value;
+    return true;
   }
-  grid.nrho = count_from_token(vals[0]);
-  grid.drho = vals[1];
-  grid.nr = count_from_token(vals[2]);
-  grid.dr = vals[3];
-  grid.cutoff = vals[4];
-  grid.ok = true;
-  return true;
-}
-
-bool blank_line(const std::string &line) {
-  return line.find_first_not_of(" \t\r") == std::string::npos;
-}
+};
 
 /// read_eam_table consumes funcfl's one comment line, or the three setfl
-/// and Finnis-Sinclair comment lines, with getline, so a blank line counts.
-/// The element record and the grid record then use operator>>, which skips
-/// blank lines. The grid line is the content line after that element record.
+/// and Finnis-Sinclair comment lines, with getline. The element record is
+/// then two numbers (funcfl) or the element count, and the rest of that
+/// line is discarded. The grid record is the next five numbers, and blank
+/// lines between those records are whitespace. The span check runs on those
+/// numbers before read_eam_table calls lround.
 HeaderGrid sniff_grid(const std::string &text, rgpot::EAMTableFormat format) {
-  std::vector<std::string> lines;
-  std::istringstream in(text);
+  Scan scan{text, 0};
   std::string line;
-  while (std::getline(in, line)) {
-    if (!line.empty() && line.back() == '\r') {
-      line.pop_back();
-    }
-    lines.push_back(std::move(line));
-  }
-  HeaderGrid grid;
-  std::size_t index = 0;
-  auto take = [&](std::string &out) {
-    if (index >= lines.size()) {
-      return false;
-    }
-    out = lines[index++];
-    return true;
-  };
-  auto take_content = [&](std::string &out) {
-    while (index < lines.size() && blank_line(lines[index])) {
-      ++index;
-    }
-    return take(out);
-  };
   const int comments = format == rgpot::EAMTableFormat::Funcfl ? 1 : 3;
   for (int k = 0; k < comments; ++k) {
-    if (!take(line)) {
-      return grid;
+    if (!scan.getline(line)) {
+      return {};
     }
   }
-  if (!take_content(line) || !take_content(line)) {
-    return grid;
+  if (format == rgpot::EAMTableFormat::Funcfl) {
+    int z = 0;
+    double mass = 0.0;
+    if (!scan.extract_int(z) || !scan.extract_double(mass)) {
+      return {};
+    }
+  } else {
+    int nel = 0;
+    if (!scan.extract_int(nel)) {
+      return {};
+    }
   }
-  parse_grid_line(line, grid);
+  if (!scan.getline(line)) {
+    return {};
+  }
+  HeaderGrid grid;
+  if (!scan.extract_int(grid.nrho) || !scan.extract_double(grid.drho) ||
+      !scan.extract_int(grid.nr) || !scan.extract_double(grid.dr) ||
+      !scan.extract_double(grid.cutoff)) {
+    return {};
+  }
+  grid.ok = true;
   return grid;
 }
 
@@ -395,6 +463,9 @@ int refuse_overflowing_place(const EamBridge &bridge, std::size_t n_atoms, const
         continue;
       }
       neighbors += 1.0;
+    }
+    if (neighbors == 0.0) {
+      continue;
     }
     const double rho = neighbors * bridge.max_abs_density;
     if (!std::isfinite(rho) || !place_cast_defined(rho, bridge.drho) ||
