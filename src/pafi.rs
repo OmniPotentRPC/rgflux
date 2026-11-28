@@ -624,8 +624,9 @@ impl NaturalSpline {
             for k in 1..interior {
                 let factor = lower[k] / diagonal[k - 1];
                 diagonal[k] -= factor * upper[k - 1];
-                for j in 0..dof {
-                    rhs[k][j] -= factor * rhs[k - 1][j];
+                let (above, below) = rhs.split_at_mut(k);
+                for (value, previous) in below[0].iter_mut().zip(above[k - 1].iter()) {
+                    *value -= factor * previous;
                 }
             }
             for k in (0..interior).rev() {
@@ -639,13 +640,18 @@ impl NaturalSpline {
                     second[i][j] = (rhs[k][j] - next) / diagonal[k];
                 }
             }
-            for j in 0..dof {
-                second[0][j] =
-                    ((first + second_width) * second[1][j] - first * second[2][j]) / second_width;
-                second[rows - 1][j] = ((penultimate + last) * second[rows - 2][j]
-                    - last * second[rows - 3][j])
-                    / penultimate;
-            }
+            // The first row is set before the last one reads it: with three
+            // rows the last row extrapolates from the new first row.
+            second[0] = second[1]
+                .iter()
+                .zip(second[2].iter())
+                .map(|(near, far)| ((first + second_width) * near - first * far) / second_width)
+                .collect();
+            second[rows - 1] = second[rows - 2]
+                .iter()
+                .zip(second[rows - 3].iter())
+                .map(|(near, far)| ((penultimate + last) * near - last * far) / penultimate)
+                .collect();
         }
         Ok(Self {
             knots,
