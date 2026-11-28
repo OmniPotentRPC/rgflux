@@ -32,6 +32,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop' }}
+      - name: Fetch the rgpot C++ core
+        run: echo "RGPOT_DIR=$(bash ci/fetch_rgpot_cpp.sh)" >> "$GITHUB_ENV"
       - name: Build rustdoc with warnings denied
         run: ci/check_rustdoc.sh
 
@@ -39,6 +41,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Fetch the rgpot C++ core
+        run: echo "RGPOT_DIR=$(bash ci/fetch_rgpot_cpp.sh)" >> "$GITHUB_ENV"
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"

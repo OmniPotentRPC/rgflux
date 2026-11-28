@@ -30,6 +30,13 @@ cargo check --locked --features rgpot-session
 cargo check --locked --features rgpot,rgpot-session
 ```
 
+The `rgpot` feature compiles rgpot's `EAMTablePot` for
+`RgpotSurface::from_eam_table_file` and `from_eam_table_memory`. Set
+`RGPOT_DIR` to the rgpot repository root or its `CppCore` directory, or
+run `ci/fetch_rgpot_cpp.sh`, which fetches the pin. When `RGPOT_DIR` is
+unset, the build uses that fetched tree when it is already at the pin,
+and otherwise reuses an existing cargo git checkout of the pin.
+
 ## Documentation
 
 Edit the existing page in `docs/orgmode/`. Do not edit exported RST output.

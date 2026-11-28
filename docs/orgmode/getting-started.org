@@ -17,7 +17,7 @@ $ cargo add rgflux --features rgpot-session
 $ cargo add rgflux --features lammpc
 #+end_src
 
-The =lammpc= feature links =liblammpc= from =LAMMPC_LIB_DIR=, from =pkg-config= when available, or from =LAMMPC_DIR= (install prefix with =lib/= or =lib64/= and =include/=) when =pkg-config= is not configured. Include both =liblammpc= and its LAMMPS runtime on the loader path. Its build also needs the =capnp= command-line tool on =PATH=. =--all-features= therefore requires those libraries; builds with no features, or with =rgpot= or =rgpot-session=, do not.
+The =lammpc= feature links =liblammpc= from =LAMMPC_LIB_DIR=, from =pkg-config= when available, or from =LAMMPC_DIR= (install prefix with =lib/= or =lib64/= and =include/=) when =pkg-config= is not configured. Include both =liblammpc= and its LAMMPS runtime on the loader path. Its build also needs the =capnp= command-line tool on =PATH=. =--all-features= therefore requires those libraries; builds with no features, or with =rgpot= or =rgpot-session=, do not. The =rgpot= feature compiles rgpot's =EAMTablePot= for =RgpotSurface::from_eam_table_file= and =from_eam_table_memory=. Set =RGPOT_DIR= to the rgpot repository root or its =CppCore= directory, or run =ci/fetch_rgpot_cpp.sh=, which fetches the pin. When =RGPOT_DIR= is unset, the build uses that fetched tree when it is already at the pin, and otherwise reuses an existing cargo git checkout of the pin. =RgpotSurface::new= still accepts a =PotentialImpl= handle.
 
 * 1. Engine-free Bennett-Chandler recrossing
 

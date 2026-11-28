@@ -32,8 +32,10 @@ crate-type = ["lib"]
 [features]
 default = []
 # Static PES adapter over the published rgpot-core DLPack callback ABI,
-# consumed by the native BAOAB integrator. Concrete potentials must be
-# supplied as rgpot-core PotentialImpl handles.
+# consumed by the native BAOAB integrator. RgpotSurface::new accepts a
+# PotentialImpl handle. from_eam_table_file and from_eam_table_memory
+# construct an in-process EAMTablePot from a DYNAMO table or from
+# one-element knots.
 rgpot = ["dep:rgpot-core"]
 # Engine-agnostic MD session adapter wrapping rgpot's MdSession / CAbiMdSession
 # contract ("openmm", "nblib", "lammps").
