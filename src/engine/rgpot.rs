@@ -2181,6 +2181,26 @@ c
     }
 
     #[test]
+    fn eam_table_nonfinite_density_envelope_is_refused() {
+        let density = vec![
+            1.0e308, -1.0e308, 1.0e308, -1.0e308, 1.0e308, -1.0e308, 1.0e308, -1.0e308,
+        ];
+        let zeros = vec![0.0; density.len()];
+        let cfg = RgpotConfig::default()
+            .with_atomic_numbers(vec![29, 29])
+            .with_default_cell(pair_cell());
+        match RgpotSurface::from_eam_table_memory(
+            29, 1.0e300, 1.0, 4.0, &zeros, &density, &zeros, false, 0.0, cfg,
+        ) {
+            Err(FluxError::Surface(msg)) => {
+                assert_eq!(msg, "EAM grid span is not finite", "{msg}");
+            }
+            Err(other) => panic!("non-finite density envelope returned {other:?}"),
+            Ok(_) => panic!("non-finite density envelope opened"),
+        }
+    }
+
+    #[test]
     fn eam_memory_grid_nonfinite_span_has_its_own_message() {
         let knots = vec![0.0; 5];
         let expect = |drho: f64, dr: f64, cutoff: f64, what: &str| match memory_pair(
