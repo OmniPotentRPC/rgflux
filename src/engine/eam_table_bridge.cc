@@ -283,10 +283,12 @@ struct HeaderGrid {
 
 /// Cursor over a table file. Comment lines are raw getline records, so a
 /// blank line counts. Later numbers use the same whitespace skipping as
-/// operator>>. Doubles are parsed with strtod, which accepts inf and nan
-/// (iostream on this libstdc++ rejects them) and a trailing suffix the
-/// extractor would leave unread, such as the x in 4.0x. Counts are decimal
-/// integers, matching operator>> into int, including the most negative int.
+/// operator>>. Doubles use strtod, then a non-finite value or a hexadecimal
+/// float is refused. operator>> rejects inf, nan, and infinity, and it does
+/// not read a hex float as that magnitude. A trailing suffix the extractor
+/// would leave unread, such as the x in 4.0x, stays unread. Counts are
+/// decimal integers, matching operator>> into int, including the most
+/// negative int.
 struct Scan {
   const std::string &text;
   std::size_t pos = 0;
@@ -361,9 +363,20 @@ struct Scan {
     if (pos >= text.size()) {
       return false;
     }
+    const char *start = text.c_str() + pos;
     char *end = nullptr;
-    const double value = std::strtod(text.c_str() + pos, &end);
-    if (end == text.c_str() + pos) {
+    const double value = std::strtod(start, &end);
+    if (end == start) {
+      return false;
+    }
+    const char *scan = start;
+    if (*scan == '+' || *scan == '-') {
+      ++scan;
+    }
+    if (scan + 1 < end && scan[0] == '0' && (scan[1] == 'x' || scan[1] == 'X')) {
+      return false;
+    }
+    if (!std::isfinite(value)) {
       return false;
     }
     pos = static_cast<std::size_t>(end - text.c_str());

@@ -1501,10 +1501,7 @@ c
         let opened = open_table(&path, EamTableFormat::Funcfl);
         let _ = std::fs::remove_file(&path);
         let msg = assert_surface_err(opened, "infinite dr");
-        assert!(
-            msg.contains("finite and positive") || msg.contains("not finite"),
-            "{msg}"
-        );
+        assert_eq!(msg, "EAM table header could not be read", "{msg}");
     }
 
     #[test]
@@ -1575,6 +1572,29 @@ c
                 panic!("funcfl infinity model was scanned as a knot: {msg}");
             }
             Err(other) => panic!("funcfl infinity model: {other}"),
+        }
+    }
+
+    #[test]
+    fn eam_table_header_refuses_inf_nan_and_hex_floats() {
+        let expect = |name: &str, text: String, format: EamTableFormat| {
+            let path = write_table(name, &text);
+            let opened = open_table(&path, format);
+            let _ = std::fs::remove_file(&path);
+            let msg = assert_surface_err(opened, name);
+            assert_eq!(msg, "EAM table header could not be read", "{name}: {msg}");
+        };
+        for token in ["inf", "nan", "infinity", "0x1p+3"] {
+            expect(
+                &format!("funcfl-{token}"),
+                format!("comment\n29 63.546\n5 {token} 5 1.0 4.0\n"),
+                EamTableFormat::Funcfl,
+            );
+            expect(
+                &format!("setfl-{token}"),
+                format!("c\nc\nc\n1\n5 {token} 5 1.0 4.0\n"),
+                EamTableFormat::Setfl,
+            );
         }
     }
 
