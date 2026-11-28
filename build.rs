@@ -179,7 +179,7 @@ fn find_rgpot_cpp_core() -> Result<std::path::PathBuf, String> {
 fn contraction_off(src: &std::path::Path) -> bool {
     matches!(
         src.file_name().and_then(|name| name.to_str()),
-        Some("MinimumImage.cpp" | "exp.cc" | "exact_fma_hw.cc" | "PotHelpers.cc")
+        Some("MinimumImage.cpp" | "exp.cc" | "exact_fma_hw.cc" | "PotHelpers.cc" | "Slices.cc")
     )
 }
 
