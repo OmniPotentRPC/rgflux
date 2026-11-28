@@ -1765,6 +1765,80 @@ c
     }
 
     #[test]
+    fn eam_table_cancelled_critical_sample_is_refused() {
+        let density = [
+            101222.78926303517,
+            -1.1930726680185628e-16,
+            -3340.9470975651357,
+            202986064.250324,
+            202986064.250324,
+            13302505.579372644,
+            93140925.68529058,
+            -28091.831237726492,
+        ];
+        let mut embedding = vec![0.0; density.len()];
+        embedding[1] = 100.0;
+        let pair = vec![0.0; density.len()];
+        let cfg = RgpotConfig::default()
+            .with_atomic_numbers(vec![29, 29])
+            .with_default_cell(pair_cell());
+        let opened = RgpotSurface::from_eam_table_memory(
+            29,
+            0.11011303154958862,
+            1.0,
+            6.0,
+            &embedding,
+            &density,
+            &pair,
+            false,
+            0.0,
+            cfg,
+        )
+        .expect("cancelled critical sample opens");
+        let pos = Array1::from_vec(vec![0.0, 0.0, 0.0, 3.5, 0.0, 0.0]);
+        match opened.energy_and_forces(pos.view(), None) {
+            Err(FluxError::Surface(msg)) => assert!(msg.contains("place index"), "{msg}"),
+            other => panic!("cancelled critical sample returned {other:?}"),
+        }
+    }
+
+    #[test]
+    fn eam_table_large_knot_row_refuses_the_bernstein_bound() {
+        let density = [
+            -8.305933995245273e199,
+            3.1555802287374668e199,
+            3.596781745376405e199,
+            -1.243824924521969e199,
+            7.803656485673778e199,
+            7.290979594738755e199,
+            -5.277109112004301e199,
+            6.509758290242633e199,
+        ];
+        let zeros = vec![0.0; 8];
+        let cfg = RgpotConfig::default()
+            .with_atomic_numbers(vec![29, 29])
+            .with_default_cell(pair_cell());
+        let opened = RgpotSurface::from_eam_table_memory(
+            29,
+            3.8677519201211666e190,
+            0.5,
+            4.0,
+            &zeros,
+            &density,
+            &zeros,
+            false,
+            0.0,
+            cfg,
+        )
+        .expect("large knot row opens");
+        let pos = Array1::from_vec(vec![0.0, 0.0, 0.0, 2.248875, 0.0, 0.0]);
+        match opened.energy_and_forces(pos.view(), None) {
+            Err(FluxError::Surface(msg)) => assert!(msg.contains("place index"), "{msg}"),
+            other => panic!("large knot row returned {other:?}"),
+        }
+    }
+
+    #[test]
     fn eam_table_place_uses_neighbors_inside_cutoff() {
         let dr = 4.0 / 15.0;
         let cutoff = 4.0;
