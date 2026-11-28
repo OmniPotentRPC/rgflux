@@ -1194,12 +1194,6 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
-    fn assert_refused(result: Result<(f64, Array1<f64>), FluxError>) {
-        if let Ok((energy, _)) = result {
-            panic!("returned a finite energy {energy}");
-        }
-    }
-
     fn assert_surface_err(result: Result<RgpotSurface, FluxError>, what: &str) -> String {
         match result {
             Err(FluxError::Surface(msg)) => msg,
@@ -1312,8 +1306,11 @@ mod tests {
         let pair = vec![0.0; 16];
         let summed = memory_pair(4.0e-9, dr, cutoff, &wide, &dense, &pair, numbers.clone());
         match summed {
-            Err(_) => {}
-            Ok(surf) => assert_refused(surf.energy_and_forces(pos.view(), None)),
+            Err(FluxError::InvalidConfig(msg)) => {
+                assert!(msg.contains("bin index"), "{msg}");
+            }
+            Err(other) => panic!("density 10 at drho 4e-9: {other}"),
+            Ok(_) => panic!("density 10 at drho 4e-9 opened"),
         }
         let safe = memory_pair(5.0e-9, dr, cutoff, &wide, &dense, &pair, numbers)
             .expect("density 10 fits at drho 5e-9");

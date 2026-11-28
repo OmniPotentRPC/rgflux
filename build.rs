@@ -107,7 +107,7 @@ fn checkout_is_pin(path: &std::path::Path) -> bool {
     }
     let rev = String::from_utf8_lossy(&output.stdout);
     let rev = rev.trim();
-    rev == RGPOT_CPP_PIN || RGPOT_CPP_PIN.starts_with(rev)
+    rev == RGPOT_CPP_PIN
 }
 
 /// Checkout written by ci/fetch_rgpot_cpp.sh. Used only when it is already
@@ -124,6 +124,7 @@ fn script_checkout() -> Option<std::path::PathBuf> {
     cpp_core_at(&root)
 }
 
+// Three sentences, the same wording as the contributor notes.
 fn missing_rgpot_core() -> String {
     "The rgpot feature compiles rgpot's EAMTablePot for RgpotSurface::from_eam_table_file and from_eam_table_memory. Set RGPOT_DIR to the rgpot repository root or its CppCore directory, or run ci/fetch_rgpot_cpp.sh, which fetches the pin. When RGPOT_DIR is unset, the build uses that fetched tree when it is already at the pin, and otherwise reuses an existing cargo git checkout of the pin.".into()
 }
@@ -175,6 +176,85 @@ fn find_rgpot_cpp_core() -> Result<std::path::PathBuf, String> {
     Err(missing_rgpot_core())
 }
 
+fn contraction_off(src: &std::path::Path) -> bool {
+    matches!(
+        src.file_name().and_then(|name| name.to_str()),
+        Some("MinimumImage.cpp" | "exp.cc" | "exact_fma_hw.cc" | "PotHelpers.cc")
+    )
+}
+
+fn nm_lines(obj: &std::path::Path) -> Result<String, Box<dyn std::error::Error>> {
+    let output = std::process::Command::new("nm")
+        .arg("-g")
+        .arg(obj)
+        .output()?;
+    if !output.status.success() {
+        return Err(format!("nm failed on {}", obj.display()).into());
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+fn symbol_name(line: &str) -> Option<&str> {
+    line.split_whitespace().last()
+}
+
+/// exp_fixed_n is an ifunc. When no other object references it, keep the
+/// symbol inside exp.cc.
+fn localize_exp_fixed_n(
+    sources: &[std::path::PathBuf],
+    objects: &[std::path::PathBuf],
+) -> Result<(), Box<dyn std::error::Error>> {
+    let Some(exp_index) = sources
+        .iter()
+        .position(|src| src.file_name().and_then(|name| name.to_str()) == Some("exp.cc"))
+    else {
+        return Ok(());
+    };
+    for (idx, obj) in objects.iter().enumerate() {
+        if idx == exp_index {
+            continue;
+        }
+        for line in nm_lines(obj)?.lines() {
+            let mut parts = line.split_whitespace();
+            let kind = parts.next();
+            let name = parts.next();
+            let (kind, name) = match (kind, name, parts.next()) {
+                (Some(kind), Some(name), None) if kind.len() == 1 => (kind, name),
+                (Some(_addr), Some(kind), Some(name)) if kind.len() == 1 => (kind, name),
+                _ => continue,
+            };
+            if kind == "U" && name.contains("exp_fixed_n") {
+                return Ok(());
+            }
+        }
+    }
+    let exp_obj = &objects[exp_index];
+    let mut names = Vec::new();
+    for line in nm_lines(exp_obj)?.lines() {
+        if let Some(name) = symbol_name(line)
+            && name.contains("exp_fixed_n")
+        {
+            names.push(name.to_string());
+        }
+    }
+    if names.is_empty() {
+        return Err(format!(
+            "exp.cc object {} has no exp_fixed_n symbol",
+            exp_obj.display()
+        )
+        .into());
+    }
+    let mut cmd = std::process::Command::new("objcopy");
+    for name in &names {
+        cmd.arg(format!("--localize-symbol={name}"));
+    }
+    let status = cmd.arg(exp_obj).status()?;
+    if !status.success() {
+        return Err(format!("objcopy failed on {}", exp_obj.display()).into());
+    }
+    Ok(())
+}
+
 fn cxx_compiler() -> String {
     match std::env::var("CXX") {
         Ok(value) if !value.trim().is_empty() => value,
@@ -200,11 +280,16 @@ fn compile_rgpot_eam_table_bridge() -> Result<(), Box<dyn std::error::Error>> {
     for (idx, src) in sources.iter().enumerate() {
         let obj = out_dir.join(format!("rgpot_eam_{idx}.o"));
         println!("cargo:rerun-if-changed={}", src.display());
-        let status = std::process::Command::new(&cxx)
+        let mut command = std::process::Command::new(&cxx);
+        command
             .arg("-std=c++20")
             .arg("-O3")
             .arg("-fPIC")
-            .arg("-fvisibility=hidden")
+            .arg("-fvisibility=hidden");
+        if contraction_off(src) {
+            command.arg("-ffp-contract=off");
+        }
+        let status = command
             .arg("-c")
             .arg(src)
             .arg("-I")
@@ -217,6 +302,7 @@ fn compile_rgpot_eam_table_bridge() -> Result<(), Box<dyn std::error::Error>> {
         }
         objects.push(obj);
     }
+    localize_exp_fixed_n(&sources, &objects)?;
     let archive = out_dir.join("librgflux_eam_table.a");
     let mut ar_cmd = std::process::Command::new("ar");
     ar_cmd.arg("crus").arg(&archive);

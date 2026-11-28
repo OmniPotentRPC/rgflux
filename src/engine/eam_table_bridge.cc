@@ -255,9 +255,6 @@ double max_abs_density(const rgpot::EAMTable &table) {
   for (const auto &row : table.rhor) {
     bound = std::max(bound, max_abs_spline_value(row));
   }
-  if (!std::isfinite(bound)) {
-    throw std::invalid_argument("EAM grid span does not fit in an int bin index");
-  }
   return bound;
 }
 
@@ -588,11 +585,15 @@ void adopt(const rgpot::EAMTable &table, bool periodic, double skin, EamBridge &
   require_finite_knots(table.z2r);
   require_density_place(table);
   require_table_shape(table);
+  const double density_bound = max_abs_density(table);
+  if (!std::isfinite(density_bound)) {
+    throw std::invalid_argument("EAM grid span is not finite");
+  }
   bridge.pot = std::make_unique<rgpot::EAMTablePot>(table, periodic, false, skin);
   bridge.dr = table.dr;
   bridge.drho = table.drho;
   bridge.cutoff = table.cutoff;
-  bridge.max_abs_density = max_abs_density(table);
+  bridge.max_abs_density = density_bound;
   bridge.periodic = periodic;
 }
 
