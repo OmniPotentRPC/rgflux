@@ -2072,6 +2072,26 @@ c
         assert_eq!(energy, 6.0);
     }
 
+    #[cfg(rgpot_eam_images)]
+    #[test]
+    fn eam_table_doubled_own_image_count_is_refused() {
+        let knots = vec![0.0; 8];
+        let density = vec![1.0; knots.len()];
+        let dr = 12.0 / (knots.len() - 1) as f64;
+        let cfg = RgpotConfig::default()
+            .with_atomic_numbers(vec![29])
+            .with_default_cell([10.0, 0.0, 0.0, 0.0, 10.0, 0.0, 0.0, 0.0, 10.0]);
+        let surf = RgpotSurface::from_eam_table_memory(
+            29, 2.0e-9, dr, 12.0, &knots, &density, &knots, true, 0.0, cfg,
+        )
+        .expect("doubled own image opens");
+        let pos = Array1::zeros(3);
+        match surf.energy_and_forces(pos.view(), None) {
+            Err(FluxError::Surface(msg)) => assert!(msg.contains("place index"), "{msg}"),
+            other => panic!("doubled own image returned {other:?}"),
+        }
+    }
+
     #[test]
     fn eam_table_refuses_spline_index_overflow() {
         let one = [0.0_f64];
