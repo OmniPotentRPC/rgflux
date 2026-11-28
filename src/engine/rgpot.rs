@@ -379,10 +379,11 @@ impl RgpotSurface {
     ///
     /// Returns [`FluxError::InvalidConfig`] when `path` is not UTF-8 or
     /// contains an interior NUL, and [`FluxError::Surface`] when the file
-    /// cannot be read, a knot is not finite, `dr`, `drho`, or `cutoff` is
-    /// not finite and positive, funcfl resampling leaves fewer than five
-    /// knots, a knot count whose spline index does not fit in `int`, or
-    /// `EAMTablePot` rejects the table. `place` forms its bin as
+    /// cannot be read, an element line that does not parse, a knot is not
+    /// finite, `dr`, `drho`, or `cutoff` is not finite and positive, funcfl
+    /// resampling leaves fewer than five knots, a knot count whose spline
+    /// index does not fit in `int`, or `EAMTablePot` rejects the table.
+    /// `place` forms its bin as
     /// `x * (1/step) + 1` and casts that to `int` before clamping. The bridge
     /// refuses a distance out to the cutoff, a tabulated density, or a unit
     /// density whose cast does not fit, before `EAMTablePot` is constructed.
@@ -2106,5 +2107,33 @@ c
         let after = EAM_CLOSE_COUNT.with(|count| count.get());
         assert!(result.is_err(), "scratch allocation did not panic");
         assert_eq!(after, before + 1, "open handle was not closed");
+    }
+
+    #[test]
+    fn eam_table_hex_mass_and_last_knot_are_refused() {
+        let text = "\
+c
+c
+c
+1
+5 0.1 5 0.25 4.0
+29 0x1p+3 Cu
+0 0 0 0 0
+0 0 0 0 0
+0 0 0 0 0x1p+3
+";
+        for (name, format) in [
+            ("setfl-hex-mass", EamTableFormat::Setfl),
+            ("fs-hex-mass", EamTableFormat::FinnisSinclair),
+        ] {
+            let path = write_table(name, text);
+            let opened = open_table(&path, format);
+            let _ = std::fs::remove_file(&path);
+            let msg = assert_surface_err(opened, name);
+            assert_eq!(
+                msg, "EAM table element line could not be read",
+                "{name}: {msg}"
+            );
+        }
     }
 }

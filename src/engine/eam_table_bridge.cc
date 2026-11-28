@@ -478,15 +478,14 @@ bool require_knot_block(Scan &scan, int n) {
   return true;
 }
 
-bool read_element_line(Scan &scan) {
+void read_element_line(Scan &scan) {
   int z = 0;
   double mass = 0.0;
   if (!scan.extract_int(z) || !scan.extract_double(mass)) {
-    return false;
+    throw std::invalid_argument("EAM table element line could not be read");
   }
   // mass is parsed and dropped. Words after it are not knots.
   scan.discard_line();
-  return true;
 }
 
 bool read_grid_line(Scan &scan, int &nrho, int &nr) {
@@ -502,8 +501,9 @@ bool read_grid_line(Scan &scan, int &nrho, int &nr) {
 }
 
 /// After the comment lines, check the numbers read_eam_table keeps. The rest
-/// of an element line is discarded, so a word there is not a knot. Every knot
-/// token, including the last, must be a finite decimal that strtod consumes.
+/// of an element line is discarded, so a word there is not a knot. An element
+/// line that does not parse is refused. Every knot token, including the last,
+/// must be a finite decimal that strtod consumes.
 void require_finite_numeric_tokens(const std::string &text, rgpot::EAMTableFormat format) {
   Scan scan{text, 0};
   std::string line;
@@ -516,7 +516,8 @@ void require_finite_numeric_tokens(const std::string &text, rgpot::EAMTableForma
   int nrho = 0;
   int nr = 0;
   if (format == rgpot::EAMTableFormat::Funcfl) {
-    if (!read_element_line(scan) || !read_grid_line(scan, nrho, nr)) {
+    read_element_line(scan);
+    if (!read_grid_line(scan, nrho, nr)) {
       return;
     }
     if (!require_knot_block(scan, nrho) || !require_knot_block(scan, nr) ||
@@ -535,7 +536,8 @@ void require_finite_numeric_tokens(const std::string &text, rgpot::EAMTableForma
   }
   const int nd = format == rgpot::EAMTableFormat::FinnisSinclair ? nel : 1;
   for (int b = 0; b < nel; ++b) {
-    if (!read_element_line(scan) || !require_knot_block(scan, nrho)) {
+    read_element_line(scan);
+    if (!require_knot_block(scan, nrho)) {
       return;
     }
     for (int k = 0; k < nd; ++k) {
