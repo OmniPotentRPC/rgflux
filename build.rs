@@ -125,7 +125,7 @@ fn script_checkout() -> Option<std::path::PathBuf> {
 }
 
 fn missing_rgpot_core() -> String {
-    "rgpot feature compiles rgpot::EAMTablePot from the rgpot C++ core. Set RGPOT_DIR to the rgpot repository or its CppCore directory, or run ci/fetch_rgpot_cpp.sh and leave that checkout at the pinned revision.".into()
+    "The rgpot feature compiles rgpot's EAMTablePot for RgpotSurface::from_eam_table_file and from_eam_table_memory. Set RGPOT_DIR to the rgpot repository root or its CppCore directory, or run ci/fetch_rgpot_cpp.sh, which fetches the pin. When RGPOT_DIR is unset, the build uses that fetched tree when it is already at the pin, and otherwise reuses an existing cargo git checkout of the pin.".into()
 }
 
 fn find_rgpot_cpp_core() -> Result<std::path::PathBuf, String> {
