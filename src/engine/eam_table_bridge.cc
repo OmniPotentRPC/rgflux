@@ -3,6 +3,7 @@
 #include "rgpot/EAMTable/EAMTablePot.hpp"
 #include "rgpot/ForceStructs.hpp"
 #include "rgpot/nlist/MinimumImage.hpp"
+#include "rgpot/stress.hpp"
 
 #include <algorithm>
 #include <array>
@@ -597,14 +598,228 @@ void adopt(const rgpot::EAMTable &table, bool periodic, double skin, EamBridge &
   bridge.periodic = periodic;
 }
 
-/// Worst-case |rho| is one max-|density| contribution per neighbor inside
-/// the cutoff. place() has no density ceiling, so a sum that would overflow
-/// the cast is an error. Atoms outside the cutoff do not contribute.
+/// Perpendicular area of the face opposite lattice axis `axis`.
+double face_area(const double *box, int axis) {
+  const double *u = box + 3 * ((axis + 1) % 3);
+  const double *v = box + 3 * ((axis + 2) % 3);
+  const double cx = u[1] * v[2] - u[2] * v[1];
+  const double cy = u[2] * v[0] - u[0] * v[2];
+  const double cz = u[0] * v[1] - u[1] * v[0];
+  return std::sqrt(cx * cx + cy * cy + cz * cz);
+}
+
+/// True when compute() leaves the one-image pair list. The test is the
+/// same comparison: twice the cutoff is not strictly below the face
+/// spacing vol / area. A non-positive cell stays on the pair list, which
+/// reports that cell.
+bool cutoff_reaches_half_face(const double *box, double cutoff) {
+  const double vol = rgpot::cellVolume(box);
+  if (!(vol > 0.0)) {
+    return false;
+  }
+  for (int axis = 0; axis < 3; ++axis) {
+    if (!(2.0 * cutoff < vol / face_area(box, axis))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+double axis_spacing(const double *box, int axis) {
+  const double vol = rgpot::cellVolume(box);
+  const double area = face_area(box, axis);
+  if (!(area > 0.0) || !(vol > 0.0) || !std::isfinite(area) || !std::isfinite(vol)) {
+    return 0.0;
+  }
+  return vol / area;
+}
+
+/// Nearest lattice index. llround is specified only inside the long long
+/// range, so a value outside that range, or a window that does not fit in
+/// int, is refused before the call.
+int image_center(double fractional, int extent) {
+  if (!std::isfinite(fractional)) {
+    throw std::invalid_argument("EAM table: non-finite fractional separation");
+  }
+  const double lo = static_cast<double>(std::numeric_limits<long long>::min());
+  const double hi = static_cast<double>(std::numeric_limits<long long>::max());
+  if (!(fractional > lo) || !(fractional < hi)) {
+    throw std::invalid_argument(
+        "EAM table: fractional separation exceeds lattice index range");
+  }
+  const long long shift = std::llround(fractional);
+  const long long span = extent;
+  const long long min_index = std::numeric_limits<int>::min();
+  const long long max_index = std::numeric_limits<int>::max();
+  if (shift < min_index + span || shift > max_index - span) {
+    throw std::invalid_argument(
+        "EAM table: fractional separation exceeds lattice index range");
+  }
+  return static_cast<int>(shift);
+}
+
+bool invert_columns(const double m[9], double inv[9]) {
+  const double det = m[0] * (m[4] * m[8] - m[5] * m[7]) -
+                     m[3] * (m[1] * m[8] - m[2] * m[7]) +
+                     m[6] * (m[1] * m[5] - m[2] * m[4]);
+  if (!(std::abs(det) > 0.0) || !std::isfinite(det)) {
+    return false;
+  }
+  const double id = 1.0 / det;
+  inv[0] = (m[4] * m[8] - m[5] * m[7]) * id;
+  inv[1] = (m[2] * m[7] - m[1] * m[8]) * id;
+  inv[2] = (m[1] * m[5] - m[2] * m[4]) * id;
+  inv[3] = (m[5] * m[6] - m[3] * m[8]) * id;
+  inv[4] = (m[0] * m[8] - m[2] * m[6]) * id;
+  inv[5] = (m[2] * m[3] - m[0] * m[5]) * id;
+  inv[6] = (m[3] * m[7] - m[4] * m[6]) * id;
+  inv[7] = (m[1] * m[6] - m[0] * m[7]) * id;
+  inv[8] = (m[0] * m[4] - m[1] * m[3]) * id;
+  return true;
+}
+
+bool positive_half_space(long long h, long long k, long long l) {
+  return h > 0 || (h == 0 && (k > 0 || (k == 0 && l > 0)));
+}
+
+/// Shift window of the short-cell image walk. An image inside the cutoff
+/// has a normal component below cutoff / spacing, so the walk is centred
+/// on the rounded fractional separation and extends by ceil(cutoff /
+/// spacing). The product of the three windows is capped at 64 cubed.
+int image_extent(double cutoff, double spacing, int axis) {
+  if (!(spacing > 0.0) || !std::isfinite(spacing)) {
+    throw std::invalid_argument("EAM table: non-positive periodic face spacing");
+  }
+  const double shells = std::ceil(cutoff / spacing);
+  constexpr int cap = 1024;
+  if (!(shells >= 0.0) || !std::isfinite(shells)) {
+    throw std::invalid_argument("EAM table: invalid image-extent shell count");
+  }
+  if (shells > static_cast<double>(cap)) {
+    throw std::invalid_argument("EAM table: image extent on axis " + std::to_string(axis) +
+                                " exceeds cap " + std::to_string(cap));
+  }
+  return static_cast<int>(shells);
+}
+
+/// Contributions of the short-cell walk. Pairs are unordered with j >= i.
+/// Each image of another atom adds one density sample to each endpoint.
+/// An atom's own images are visited on the positive half space only, and
+/// the walk adds that sample twice, once for each opposite translation.
+void accumulate_image_contributions(std::size_t n_atoms, const double *pos, const double *box,
+                                    double cutoff, std::vector<double> &count) {
+  if (n_atoms < 1 || !(cutoff > 0.0) || !std::isfinite(cutoff)) {
+    return;
+  }
+  const double columns[9] = {box[0], box[1], box[2], box[3], box[4],
+                             box[5], box[6], box[7], box[8]};
+  double inverse[9];
+  if (!invert_columns(columns, inverse)) {
+    throw std::invalid_argument("EAM table: periodic cell is singular");
+  }
+  int extent[3];
+  for (int axis = 0; axis < 3; ++axis) {
+    extent[axis] = image_extent(cutoff, axis_spacing(box, axis), axis);
+  }
+  constexpr long long max_images = 64LL * 64LL * 64LL;
+  long long image_count = 1;
+  for (int axis = 0; axis < 3; ++axis) {
+    const long long span = 2LL * extent[axis] + 1LL;
+    if (span < 1 || image_count > max_images / span) {
+      throw std::invalid_argument("EAM table: image count exceeds cap");
+    }
+    image_count *= span;
+  }
+  const double cut2 = cutoff * cutoff;
+  for (std::size_t i = 0; i < n_atoms; ++i) {
+    const double xi = pos[3 * i];
+    const double yi = pos[3 * i + 1];
+    const double zi = pos[3 * i + 2];
+    for (std::size_t j = i; j < n_atoms; ++j) {
+      const double dx0 = xi - pos[3 * j];
+      const double dy0 = yi - pos[3 * j + 1];
+      const double dz0 = zi - pos[3 * j + 2];
+      const double f0 = inverse[0] * dx0 + inverse[3] * dy0 + inverse[6] * dz0;
+      const double f1 = inverse[1] * dx0 + inverse[4] * dy0 + inverse[7] * dz0;
+      const double f2 = inverse[2] * dx0 + inverse[5] * dy0 + inverse[8] * dz0;
+      const int c0 = image_center(f0, extent[0]);
+      const int c1 = image_center(f1, extent[1]);
+      const int c2 = image_center(f2, extent[2]);
+      const int h_lo = c0 - extent[0];
+      const int h_hi = c0 + extent[0];
+      const int k_lo = c1 - extent[1];
+      const int k_hi = c1 + extent[1];
+      const int l_lo = c2 - extent[2];
+      const int l_hi = c2 + extent[2];
+      for (long long h = h_lo; h <= h_hi; ++h) {
+        for (long long k = k_lo; k <= k_hi; ++k) {
+          for (long long l = l_lo; l <= l_hi; ++l) {
+            if (i == j) {
+              if (h == 0 && k == 0 && l == 0) {
+                continue;
+              }
+              if (!positive_half_space(h, k, l)) {
+                continue;
+              }
+            }
+            const double sx = static_cast<double>(h) * box[0] + static_cast<double>(k) * box[3] +
+                              static_cast<double>(l) * box[6];
+            const double sy = static_cast<double>(h) * box[1] + static_cast<double>(k) * box[4] +
+                              static_cast<double>(l) * box[7];
+            const double sz = static_cast<double>(h) * box[2] + static_cast<double>(k) * box[5] +
+                              static_cast<double>(l) * box[8];
+            const double dx = dx0 - sx;
+            const double dy = dy0 - sy;
+            const double dz = dz0 - sz;
+            const double r2 = dx * dx + dy * dy + dz * dz;
+            if (!(r2 > 0.0) || !(r2 < cut2)) {
+              continue;
+            }
+            if (i == j) {
+              count[i] += 2.0;
+            } else {
+              count[i] += 1.0;
+              count[j] += 1.0;
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+int refuse_short_cell_place(const EamBridge &bridge, std::size_t n_atoms, const double *pos,
+                            const double *box9, char *err_buf, std::size_t err_cap) {
+  std::vector<double> count(n_atoms, 0.0);
+  accumulate_image_contributions(n_atoms, pos, box9, bridge.cutoff, count);
+  for (double contributions : count) {
+    if (contributions == 0.0) {
+      continue;
+    }
+    const double rho = contributions * bridge.max_abs_density;
+    if (!std::isfinite(rho) || !place_cast_defined(rho, bridge.drho) ||
+        !place_cast_defined(-rho, bridge.drho)) {
+      write_error(err_buf, err_cap, "EAM place index does not fit in int");
+      return 2;
+    }
+  }
+  return 0;
+}
+
+/// Worst-case |rho| is one max-|density| sample per image the evaluation
+/// adds. Below half a face spacing that is one minimum image of each other
+/// atom. At or past half a face, the short-cell walk adds every lattice
+/// image inside the cutoff, and an atom's own images twice. place() has no
+/// density ceiling, so a sum that would overflow the cast is an error.
+/// Atoms and images outside the cutoff do not contribute.
 int refuse_overflowing_place(const EamBridge &bridge, std::size_t n_atoms, const double *pos,
                              const double *box9, char *err_buf, std::size_t err_cap) {
   if (!place_cast_defined(bridge.cutoff, bridge.dr)) {
     write_error(err_buf, err_cap, "EAM place index does not fit in int");
     return 2;
+  }
+  if (bridge.periodic && cutoff_reaches_half_face(box9, bridge.cutoff)) {
+    return refuse_short_cell_place(bridge, n_atoms, pos, box9, err_buf, err_cap);
   }
   const double cut2 = bridge.cutoff * bridge.cutoff;
   std::optional<rgpot::nlist::MinimumImage> image;

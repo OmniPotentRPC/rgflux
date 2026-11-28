@@ -262,11 +262,21 @@ fn cxx_compiler() -> String {
     }
 }
 
+/// Repository include tree that holds rgpot/plugin.h, next to CppCore.
+fn plugin_include(cpp_core: &std::path::Path) -> Option<std::path::PathBuf> {
+    let include = cpp_core.parent()?.join("include");
+    if include.join("rgpot").join("plugin.h").is_file() {
+        Some(include)
+    } else {
+        None
+    }
+}
+
 fn compile_rgpot_eam_table_bridge() -> Result<(), Box<dyn std::error::Error>> {
     let cpp_core = find_rgpot_cpp_core()?;
     let out_dir = std::path::PathBuf::from(std::env::var("OUT_DIR")?);
     let cxx = cxx_compiler();
-    let sources = [
+    let mut sources = vec![
         std::path::PathBuf::from("src/engine/eam_table_bridge.cc"),
         cpp_core.join("rgpot/EAMTable/EAMTablePot.cc"),
         cpp_core.join("rgpot/nlist/Neighbours.cc"),
@@ -276,6 +286,16 @@ fn compile_rgpot_eam_table_bridge() -> Result<(), Box<dyn std::error::Error>> {
         cpp_core.join("rgpot/Slices.cc"),
         cpp_core.join("rgpot/PotHelpers.cc"),
     ];
+    let images = cpp_core.join("rgpot/EAMTable/EAMTableImages.cc");
+    println!("cargo:rustc-check-cfg=cfg(rgpot_eam_images)");
+    if images.is_file() {
+        sources.push(images);
+        println!("cargo:rustc-cfg=rgpot_eam_images");
+    }
+    let plugin = plugin_include(&cpp_core);
+    if let Some(include) = &plugin {
+        println!("cargo:rerun-if-changed={}", include.display());
+    }
     let mut objects = Vec::with_capacity(sources.len());
     for (idx, src) in sources.iter().enumerate() {
         let obj = out_dir.join(format!("rgpot_eam_{idx}.o"));
@@ -289,14 +309,11 @@ fn compile_rgpot_eam_table_bridge() -> Result<(), Box<dyn std::error::Error>> {
         if contraction_off(src) {
             command.arg("-ffp-contract=off");
         }
-        let status = command
-            .arg("-c")
-            .arg(src)
-            .arg("-I")
-            .arg(&cpp_core)
-            .arg("-o")
-            .arg(&obj)
-            .status()?;
+        command.arg("-c").arg(src).arg("-I").arg(&cpp_core);
+        if let Some(include) = &plugin {
+            command.arg("-I").arg(include);
+        }
+        let status = command.arg("-o").arg(&obj).status()?;
         if !status.success() {
             return Err(format!("{cxx} failed on {}", src.display()).into());
         }

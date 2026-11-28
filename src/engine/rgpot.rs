@@ -386,9 +386,14 @@ impl RgpotSurface {
     /// `x * (1/step) + 1` and casts that to `int` before clamping. The bridge
     /// refuses a distance out to the cutoff, a tabulated density, or a unit
     /// density whose cast does not fit, before `EAMTablePot` is constructed.
-    /// Evaluation counts neighbors inside the cutoff and returns
-    /// [`FluxError::Surface`] when a summed density's place index does not
-    /// fit, instead of a wrong finite energy.
+    /// Evaluation counts neighbors inside the cutoff. Once the cutoff
+    /// reaches half a face spacing, the count is every lattice image in
+    /// that cutoff, and an atom's own images are added twice, as the
+    /// image walk adds them. Each density cubic is bounded by its
+    /// Bernstein control points. A critical-point sample may raise that
+    /// bound and does not replace it. The bridge returns
+    /// [`FluxError::Surface`] when a summed density's place index does
+    /// not fit, instead of a wrong finite energy.
     ///
     /// # Examples
     ///
@@ -461,8 +466,14 @@ impl RgpotSurface {
     /// or a unit density whose cast does not fit, before `EAMTablePot` is
     /// constructed. [`FluxError::Surface`] reports a table the bridge or
     /// `EAMTablePot` rejects, including a knot count whose spline index does
-    /// not fit in `int`, and an evaluation whose summed density, counted from
-    /// neighbors inside the cutoff, does not fit in that cast.
+    /// not fit in `int`, and an evaluation whose summed density does not
+    /// fit in that cast. Each density cubic is bounded by its Bernstein
+    /// control points. A critical-point sample may raise that bound and
+    /// does not replace it. The sum counts one image of each other atom
+    /// while the cutoff is below half every face spacing. Once the cutoff
+    /// reaches half a face, it counts every lattice image inside the
+    /// cutoff, and an atom's own images are added twice, as the image
+    /// walk adds them.
     ///
     /// # Examples
     ///
@@ -1984,6 +1995,67 @@ c
             .energy_and_forces(pos.view(), None)
             .expect("unit spike evaluates");
         assert_eq!(energy, 0.0);
+    }
+
+    fn assert_own_image_place_refused(
+        edge: f64,
+        cutoff: f64,
+        drho: f64,
+        embedding: &[f64],
+        what: &str,
+    ) {
+        let dr = cutoff / (embedding.len() - 1) as f64;
+        let density = vec![1.0; embedding.len()];
+        let pair = vec![0.0; embedding.len()];
+        let cfg = RgpotConfig::default()
+            .with_atomic_numbers(vec![29])
+            .with_default_cell([edge, 0.0, 0.0, 0.0, edge, 0.0, 0.0, 0.0, edge]);
+        let surf = RgpotSurface::from_eam_table_memory(
+            29, drho, dr, cutoff, embedding, &density, &pair, true, 0.0, cfg,
+        )
+        .unwrap_or_else(|err| panic!("{what} did not open: {err}"));
+        let pos = Array1::zeros(3);
+        match surf.energy_and_forces(pos.view(), None) {
+            Err(FluxError::Surface(msg)) => {
+                assert!(msg.contains("place index"), "{what}: {msg}");
+            }
+            other => panic!("{what} returned {other:?}"),
+        }
+    }
+
+    #[test]
+    fn eam_table_cube_edge_ten_refuses_own_image_density() {
+        let mut embedding = vec![0.0; 8];
+        embedding[7] = 1000.0;
+        assert_own_image_place_refused(10.0, 12.0, 5.0e-10, &embedding, "cube edge 10");
+    }
+
+    #[test]
+    fn eam_table_cube_edge_three_refuses_own_image_density() {
+        let mut embedding = vec![100.0; 8];
+        embedding[0] = 0.0;
+        assert_own_image_place_refused(3.0, 4.0, 8.0e-10, &embedding, "cube edge 3");
+    }
+
+    #[cfg(rgpot_eam_images)]
+    #[test]
+    fn eam_table_own_image_density_is_counted_twice() {
+        let embedding: Vec<f64> = (0..8).map(|knot| knot as f64).collect();
+        let density = vec![1.0; embedding.len()];
+        let pair = vec![0.0; embedding.len()];
+        let dr = 12.0 / (embedding.len() - 1) as f64;
+        let cfg = RgpotConfig::default()
+            .with_atomic_numbers(vec![29])
+            .with_default_cell([10.0, 0.0, 0.0, 0.0, 10.0, 0.0, 0.0, 0.0, 10.0]);
+        let surf = RgpotSurface::from_eam_table_memory(
+            29, 1.0, dr, 12.0, &embedding, &density, &pair, true, 0.0, cfg,
+        )
+        .expect("own image density opens");
+        let pos = Array1::zeros(3);
+        let (energy, _) = surf
+            .energy_and_forces(pos.view(), None)
+            .expect("own image density evaluates");
+        assert_eq!(energy, 6.0);
     }
 
     #[test]
