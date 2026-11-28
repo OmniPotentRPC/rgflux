@@ -1739,6 +1739,32 @@ c
     }
 
     #[test]
+    fn eam_table_step_density_refuses_the_interior_place() {
+        let drho = 1.0e150;
+        let step = 0.97 * f64::from(i32::MAX) * drho;
+        let mut density = vec![0.0; 8];
+        density[4] = step;
+        density[5] = step;
+        density[6] = step;
+        density[7] = step;
+        let mut embedding = vec![0.0; 8];
+        embedding[7] = 100.0;
+        let pair = vec![1.0; 8];
+        let cfg = RgpotConfig::default()
+            .with_atomic_numbers(vec![29, 29])
+            .with_default_cell(pair_cell());
+        let opened = RgpotSurface::from_eam_table_memory(
+            29, drho, 1.0, 6.0, &embedding, &density, &pair, false, 0.0, cfg,
+        )
+        .expect("step density opens");
+        let pos = Array1::from_vec(vec![0.0, 0.0, 0.0, 4.357925, 0.0, 0.0]);
+        match opened.energy_and_forces(pos.view(), None) {
+            Err(FluxError::Surface(msg)) => assert!(msg.contains("place index"), "{msg}"),
+            other => panic!("step density returned {other:?}"),
+        }
+    }
+
+    #[test]
     fn eam_table_place_uses_neighbors_inside_cutoff() {
         let dr = 4.0 / 15.0;
         let cutoff = 4.0;
