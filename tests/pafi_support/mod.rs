@@ -676,8 +676,9 @@ fn spline_second(knots: &[f64], path: &[[f64; 2]]) -> Vec<[f64; 2]> {
     for k in 1..interior {
         let factor = lower[k] / diagonal[k - 1];
         diagonal[k] -= factor * upper[k - 1];
-        for axis in 0..2 {
-            rhs[k][axis] -= factor * rhs[k - 1][axis];
+        let previous = rhs[k - 1];
+        for (value, below) in rhs[k].iter_mut().zip(previous) {
+            *value -= factor * below;
         }
     }
     let mut second = vec![[0.0_f64; 2]; n];
@@ -692,12 +693,14 @@ fn spline_second(knots: &[f64], path: &[[f64; 2]]) -> Vec<[f64; 2]> {
             second[i][axis] = (rhs[k][axis] - next) / diagonal[k];
         }
     }
-    for axis in 0..2 {
-        second[0][axis] =
-            ((first + second_width) * second[1][axis] - first * second[2][axis]) / second_width;
-        second[n - 1][axis] =
-            ((penultimate + last) * second[n - 2][axis] - last * second[n - 3][axis]) / penultimate;
-    }
+    let (near_start, next_start) = (second[1], second[2]);
+    second[0] = std::array::from_fn(|axis| {
+        ((first + second_width) * near_start[axis] - first * next_start[axis]) / second_width
+    });
+    let (near_end, next_end) = (second[n - 2], second[n - 3]);
+    second[n - 1] = std::array::from_fn(|axis| {
+        ((penultimate + last) * near_end[axis] - last * next_end[axis]) / penultimate
+    });
     second
 }
 

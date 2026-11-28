@@ -77,8 +77,9 @@ fn solve3(a: [[f64; 3]; 3], b: [f64; 3]) -> [f64; 3] {
         m.swap(col, pivot);
         for row in col + 1..3 {
             let factor = m[row][col] / m[col][col];
-            for k in col..4 {
-                m[row][k] -= factor * m[col][k];
+            let pivot_row = m[col];
+            for (value, above) in m[row][col..].iter_mut().zip(&pivot_row[col..]) {
+                *value -= factor * above;
             }
         }
     }
