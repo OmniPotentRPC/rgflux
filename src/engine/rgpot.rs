@@ -52,6 +52,8 @@ fn eam_step_ok(step: f64) -> bool {
 }
 
 /// `place` casts `x * (1/step) + 1` to `int` before it clamps the bin.
+/// A quotient in `(i32::MIN as f64 - 1, i32::MIN as f64)` truncates to
+/// `i32::MIN`. The exact value `i32::MIN as f64 - 1` does not fit.
 fn place_cast_defined(x: f64, step: f64) -> bool {
     if !x.is_finite() || !eam_step_ok(step) {
         return false;
@@ -61,7 +63,7 @@ fn place_cast_defined(x: f64, step: f64) -> bool {
         return false;
     }
     let q = x * rdx + 1.0;
-    q.is_finite() && q < 2147483648.0 && q >= i32::MIN as f64
+    q.is_finite() && q < 2147483648.0 && q > (i32::MIN as f64) - 1.0
 }
 
 fn knots_are_finite(values: &[f64]) -> bool {
@@ -689,6 +691,7 @@ mod tests {
             err_buf: *mut c_char,
             err_cap: usize,
         ) -> c_int;
+        fn rgflux_eam_place_cast_defined(x: f64, step: f64) -> c_int;
     }
 
     unsafe extern "C" fn harmonic_callback(
@@ -2168,6 +2171,30 @@ c
                 "{name}: {msg}"
             );
         }
+    }
+
+    #[test]
+    fn place_cast_accepts_truncation_just_below_int_min() {
+        let step = 1.0;
+        let accept = |q: f64| {
+            let x = q - 1.0;
+            assert!(place_cast_defined(x, step), "rust rejected quotient {q}");
+            let c_ok = unsafe { rgflux_eam_place_cast_defined(x, step) };
+            assert_eq!(c_ok, 1, "bridge rejected quotient {q}");
+        };
+        let refuse = |q: f64| {
+            let x = q - 1.0;
+            assert!(!place_cast_defined(x, step), "rust accepted quotient {q}");
+            let c_ok = unsafe { rgflux_eam_place_cast_defined(x, step) };
+            assert_eq!(c_ok, 0, "bridge accepted quotient {q}");
+        };
+        // -2147483648.5 and the first double above -2147483649 truncate to
+        // INT_MIN. The exact value -2147483649 does not fit in int.
+        accept(-2147483648.5);
+        accept((-2147483649.0_f64).next_up());
+        accept(i32::MIN as f64);
+        refuse(-2147483649.0);
+        refuse((-2147483649.0_f64).next_down());
     }
 
     #[test]

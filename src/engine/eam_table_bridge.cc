@@ -45,9 +45,12 @@ rgpot::EAMTableFormat to_format(int code) {
 }
 
 /// rgpot place() sets q = x * (1/step) + 1 and static_casts q to int before
-/// it clamps the bin. A quotient outside the int range makes that cast
-/// undefined. On x86-64 the runtime conversion yields INT_MIN and the clamp
-/// selects the first cubic. The bridge refuses the value before the cast.
+/// it clamps the bin. Truncation of a quotient in (INT_MIN - 1, INT_MIN)
+/// is INT_MIN, which fits, so that range is accepted. The exact value
+/// INT_MIN - 1 does not fit in int. A truncated value outside int is
+/// undefined. On x86-64 an out-of-range conversion yields INT_MIN and the
+/// clamp selects the first cubic. The bridge refuses that quotient before
+/// the cast.
 bool place_cast_defined(double x, double step) {
   if (!std::isfinite(x) || !std::isfinite(step) || !(step > 0.0)) {
     return false;
@@ -58,8 +61,8 @@ bool place_cast_defined(double x, double step) {
   }
   const double q = x * rdx + 1.0;
   const double hi = static_cast<double>(std::numeric_limits<int>::max()) + 1.0;
-  const double lo = static_cast<double>(std::numeric_limits<int>::min());
-  return std::isfinite(q) && q < hi && q >= lo;
+  const double lo = static_cast<double>(std::numeric_limits<int>::min()) - 1.0;
+  return std::isfinite(q) && q < hi && q > lo;
 }
 
 bool finite_positive(double step) {
@@ -904,6 +907,10 @@ int rgflux_eam_pair_block_count(int nel, int format, char *err_buf, std::size_t 
     write_error(err_buf, err_cap, "unknown C++ exception in EAM pair block count");
     return -1;
   }
+}
+
+int rgflux_eam_place_cast_defined(double x, double step) {
+  return place_cast_defined(x, step) ? 1 : 0;
 }
 
 void *rgflux_eam_table_open_file(const char *path, int format, int periodic,
