@@ -100,8 +100,10 @@ fn reject_eam_memory_grid(
             let magnitude = knot.abs();
             place_cast_defined(magnitude, drho) && place_cast_defined(-magnitude, drho)
         });
-    if !rhomax.is_finite() || !r_span.is_finite() || !place_cast_defined(r_span, dr) || !density_ok
-    {
+    if !rhomax.is_finite() || !r_span.is_finite() {
+        return Err(FluxError::InvalidConfig("EAM grid span is not finite"));
+    }
+    if !place_cast_defined(r_span, dr) || !density_ok {
         return Err(FluxError::InvalidConfig(
             "EAM grid span does not fit in an int bin index",
         ));
@@ -461,8 +463,10 @@ impl RgpotSurface {
     ///
     /// Returns [`FluxError::InvalidConfig`] when an array is shorter than
     /// five knots, a knot is not finite, `z2r` does not match `rhor`, or
-    /// `dr`, `drho`, or `cutoff` is not finite and positive. `place` forms
-    /// its bin as `x * (1/step) + 1` and casts that to `int` before clamping.
+    /// `dr`, `drho`, or `cutoff` is not finite and positive. A density or
+    /// radial span that is not finite has its own refusal, before the
+    /// potential is built. `place` forms its bin as `x * (1/step) + 1` and
+    /// casts that to `int` before clamping.
     /// The bridge refuses a distance out to the cutoff, a tabulated density,
     /// or a unit density whose cast does not fit, before `EAMTablePot` is
     /// constructed. [`FluxError::Surface`] reports a table the bridge or
@@ -2174,5 +2178,27 @@ c
             refused.contains("does not fit"),
             "pair count refusal: {refused}"
         );
+    }
+
+    #[test]
+    fn eam_memory_grid_nonfinite_span_has_its_own_message() {
+        let knots = vec![0.0; 5];
+        let expect = |drho: f64, dr: f64, cutoff: f64, what: &str| match memory_pair(
+            drho,
+            dr,
+            cutoff,
+            &knots,
+            &knots,
+            &knots,
+            vec![29, 29],
+        ) {
+            Err(FluxError::InvalidConfig(msg)) => {
+                assert_eq!(msg, "EAM grid span is not finite", "{what}: {msg}");
+            }
+            Err(other) => panic!("{what}: {other}"),
+            Ok(_) => panic!("{what} opened"),
+        };
+        expect(f64::MAX, 0.25, 4.0, "non-finite rhomax");
+        expect(0.1, f64::MAX, 4.0, "non-finite radial span");
     }
 }
