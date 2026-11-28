@@ -30,6 +30,10 @@ sphinx-build -b linkcheck -n -W --keep-going docs/source target/docs-linkcheck
 sphinx-build -b html -n -W --keep-going docs/source docs/build
 #+end_src
 
+The =rgpot= feature compiles rgpot's =EAMTablePot= for =RgpotSurface::from_eam_table_file= and =from_eam_table_memory=. Set =RGPOT_DIR= to the rgpot repository root or its =CppCore= directory, or run =ci/fetch_rgpot_cpp.sh=, which fetches the pin.
+
+When =RGPOT_DIR= is unset, the build uses that fetched tree when it is already at the pin, and otherwise reuses an existing cargo git checkout of the pin.
+
 Install =liblammpc= before enabling =lammpc=. Expose it through pkg-config,
 =LAMMPC_DIR=, or =LAMMPC_LIB_DIR=, and include both =liblammpc= and LAMMPS on
 the runtime loader path. Then =--features lammpc= or =--all-features= works:

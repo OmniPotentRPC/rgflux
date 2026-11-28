@@ -53,6 +53,8 @@ fn main() -> Result<(), rgflux::FluxError> {
 The default, `rgpot`, and `rgpot-session` feature sets do not need an external
 MD library:
 
+The `rgpot` feature compiles rgpot's `EAMTablePot` for `RgpotSurface::from_eam_table_file` and `from_eam_table_memory`. Set `RGPOT_DIR` to the rgpot repository root or its `CppCore` directory, or run `ci/fetch_rgpot_cpp.sh`, which fetches the pin. When `RGPOT_DIR` is unset, the build uses that fetched tree when it is already at the pin, and otherwise reuses an existing cargo git checkout of the pin.
+
 ```sh
 cargo fmt --all -- --check
 cargo clippy --locked --all-targets -- -D warnings

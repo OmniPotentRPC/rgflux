@@ -1,12 +1,14 @@
 //! Cu-vacancy adaptive PAFI campaign entry point.
 //!
-//! The published `rgpot-core` 3.7.0 crate exposes the generic
-//! `PotentialImpl` callback contract, but no constructor for rgpot's
-//! `EAMTablePot`.  Consequently rgflux cannot construct the Mishin Cu01
-//! potential from the crates.io API without rebuilding or vendoring rgpot
-//! C++, both of which would violate the dependency boundary.  This example
-//! remains an explicit, executable diagnostic until an rgpot-core release
-//! exports `eam_table_from_file` / `eam_table_from_data`.
+//! `RgpotSurface::from_eam_table_file` and `from_eam_table_memory` construct
+//! rgpot's `EAMTablePot` when `RGPOT_DIR` points at the rgpot repository root
+//! or its `CppCore` directory, or after `ci/fetch_rgpot_cpp.sh` fetches the pin.
+//! When `RGPOT_DIR` is unset, the build uses that fetched tree when it is
+//! already at the pin, and otherwise reuses an existing cargo git checkout of
+//! the pin. The published `rgpot-core` crate still does not export
+//! `eam_table_from_file` or `eam_table_from_data`, so
+//! `cu_reference::run_npt_lattice` refuses. This example remains the
+//! diagnostic for that refusal and does not substitute a stored lattice.
 
 use std::error::Error;
 

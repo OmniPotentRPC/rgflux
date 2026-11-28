@@ -41,7 +41,7 @@
 | Feature | Dependencies | Description |
 |---+---+---|
 | =default= | none | Pure-Rust =engine::native=, =stats=, =kappa=, =hyperplane=, =ohtst=, =ffs=, =pafi=, and =network= over =rgsaddle= and =rgmin= |
-| =rgpot= | =dep:rgpot-core= | Enables =engine::rgpot::RgpotSurface= and =RgpotConfig= over =rgpot_core::potential::PotentialImpl= DLPack callbacks |
+| =rgpot= | =dep:rgpot-core= | Enables =engine::rgpot::RgpotSurface=, =RgpotConfig=, and =EamTableFormat=. =RgpotSurface::new= accepts a =PotentialImpl= handle. =from_eam_table_file= and =from_eam_table_memory= call in-process =rgpot::EAMTablePot=. Set =RGPOT_DIR= to the rgpot repository root or its =CppCore= directory, or run =ci/fetch_rgpot_cpp.sh=, which fetches the pin. When =RGPOT_DIR= is unset, the build uses that fetched tree when it is already at the pin, and otherwise reuses an existing cargo git checkout of the pin |
 | =rgpot-session= | =dep:rgpot-core= | Enables =engine::rgpot_session::RgpotSessionEngine=, =RgpotSessionConfig=, and =SessionEngineKind= (=OpenMm=, =NbLib=, =Lammps=) |
 | =lammpc= | =dep:rgpot-core=, =dep:capnp= | Enables =engine::lammpc::LammpcEngine=, =LammpcConfig=, and =MASS_VELOCITY_TO_EV= over =liblammpc= (=lammpc_session_*=) |
 
@@ -385,6 +385,8 @@ blanket =PointSurface= implementation negates the supplied gradient.
 | =NativeEngine::projection= | Read the active =Rattle= or =Shake= algorithm |
 | =NativeEngine::reseed_rng=, =NativeEngine::reseed= | Reset its Langevin stream |
 | =RgpotSurface::new=, =RgpotSurface::n_atoms= | Build the optional static callback surface and read its atom count |
+| =RgpotSurface::from_eam_table_file=, =RgpotSurface::from_eam_table_memory= | Construct =rgpot::EAMTablePot= from a DYNAMO file (=EamTableFormat=) or from one-element tabulated arrays |
+| =EamTableFormat= | =Funcfl=, =Setfl= (the default), or =FinnisSinclair= |
 | =SessionEngineKind::engine_name= | Return =openmm=, =nblib=, or =lammps= |
 | =RgpotSessionEngine::new=, =engine_kind=, =rgpot_version_major= | Build and inspect the optional session adapter |
 | =LammpcEngine::new= | Build the direct optional =liblammpc= session engine |
@@ -483,7 +485,7 @@ stale, and refuses a hand-written count outside the block.
 ** Complete qualified Rust inventory
 
 # BEGIN GENERATED PUBLIC API
-This inventory lists 861 qualified public item paths.
+This inventory lists 867 qualified public item paths.
 
 *** =DynamicsEngine=
 
@@ -789,6 +791,10 @@ This inventory lists 861 qualified public item paths.
 - =rgflux::engine::reflect_velocity_in_place=
 - =rgflux::engine::rgpot=
 - =rgflux::engine::rgpot::DEFAULT_RGPOT_BOX_EDGE=
+- =rgflux::engine::rgpot::EamTableFormat=
+- =rgflux::engine::rgpot::EamTableFormat::FinnisSinclair=
+- =rgflux::engine::rgpot::EamTableFormat::Funcfl=
+- =rgflux::engine::rgpot::EamTableFormat::Setfl=
 - =rgflux::engine::rgpot::RgpotConfig=
 - =rgflux::engine::rgpot::RgpotConfig::atomic_numbers=
 - =rgflux::engine::rgpot::RgpotConfig::default=
@@ -797,6 +803,8 @@ This inventory lists 861 qualified public item paths.
 - =rgflux::engine::rgpot::RgpotConfig::with_default_cell=
 - =rgflux::engine::rgpot::RgpotSurface=
 - =rgflux::engine::rgpot::RgpotSurface::energy_and_forces=
+- =rgflux::engine::rgpot::RgpotSurface::from_eam_table_file=
+- =rgflux::engine::rgpot::RgpotSurface::from_eam_table_memory=
 - =rgflux::engine::rgpot::RgpotSurface::n_atoms=
 - =rgflux::engine::rgpot::RgpotSurface::new=
 - =rgflux::engine::rgpot_session=

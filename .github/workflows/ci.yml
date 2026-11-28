@@ -41,6 +41,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop' }}
+      - name: Fetch the rgpot C++ core
+        run: echo "RGPOT_DIR=$(bash ci/fetch_rgpot_cpp.sh)" >> "$GITHUB_ENV"
       - name: Clippy (default)
         run: cargo clippy --locked --all-targets -- -D warnings
       # `lammpc` links liblammpc, so it stays out of this job. The lammpc job
@@ -56,6 +58,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop' }}
+      - name: Fetch the rgpot C++ core
+        run: echo "RGPOT_DIR=$(bash ci/fetch_rgpot_cpp.sh)" >> "$GITHUB_ENV"
       - name: Test (default)
         run: cargo test --locked --verbose
       # `lammpc` links liblammpc, so it stays out of this job. The lammpc job
@@ -138,6 +142,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop' }}
+      - name: Fetch the rgpot C++ core
+        run: echo "RGPOT_DIR=$(bash ci/fetch_rgpot_cpp.sh)" >> "$GITHUB_ENV"
       - name: Clippy (library features)
         run: cargo clippy --locked --all-targets --features rgpot,rgpot-session -- -D warnings
       - name: Test (library features)
@@ -147,6 +153,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Fetch the rgpot C++ core
+        run: echo "RGPOT_DIR=$(bash ci/fetch_rgpot_cpp.sh)" >> "$GITHUB_ENV"
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
