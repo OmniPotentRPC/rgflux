@@ -89,49 +89,49 @@ fn main() -> Result<(), rgflux::FluxError> {
 }
 ```
 
-## 2. Drive a surface with `NativeEngine` and evaluate an OH-TST rate
+## 2. Climb the free energy of a dividing hyperplane (OH-TST)
 
-Implement `rgsaddle::PointSurface` (returning potential energy \(V(\mathbf{x})\) and gradient \(+\nabla V(\mathbf{x})\)), construct `engine::native::NativeEngine`, and call `ohtst::optimize_hyperplane` cite:`johannessonOptimizationHyperplanar2001,vineyardFrequencyFactors1957` to place the dividing hyperplane at the barrier top and evaluate the harmonic hyperplanar TST rate:
+Optimal hyperplanar transition state theory takes the dividing surface to be a hyperplane and moves it until its free energy is a maximum cite:`johannessonOptimizationHyperplanar2001`. A converged dimer from `rgsaddle` seeds the plane, and `ohtst::PlaneOptimizer` climbs the plane free energy with short constrained Langevin samples. The surface is the skewed double well \(V = (x^2 - 1)^2 + \tfrac12 k(x)(y - x)^2\) with \(k(x) = 4(1 + 0.8 \tanh 2x)\), already in mass-weighted coordinates.
 
 ```rust
-use ndarray::{Array1, ArrayView1};
-use rgflux::engine::native::{NativeConfig, NativeEngine};
-use rgflux::engine::{DynamicsEngine, HyperplaneConstraint, ThermostatConfig};
-use rgflux::ohtst::{OhtstConfig, optimize_hyperplane};
+use ndarray::{Array1, ArrayView1, array};
+use rgflux::ohtst::{Hyperplane, LangevinConfig, PlaneOptimizer, PlaneOptimizerConfig};
+use rgsaddle::{MinModeConfig, MinModeSession, MinModeStatus, PointSurface, SaddleError};
 
-struct QuarticDoubleWell1D;
+struct SkewedWell;
 
-impl rgsaddle::PointSurface for QuarticDoubleWell1D {
-    fn eval(&self, x: ArrayView1<f64>) -> Result<(f64, Array1<f64>), rgsaddle::SaddleError> {
-        let u = x[0];
-        let well = u * u - 1.0;
-        Ok((0.25 * well * well, Array1::from_vec(vec![u * well])))
+impl PointSurface for SkewedWell {
+    fn eval(&self, q: ArrayView1<f64>) -> Result<(f64, Array1<f64>), SaddleError> {
+        let (x, y) = (q[0], q[1]);
+        let (well, tanh, valley) = (x * x - 1.0, (2.0 * x).tanh(), y - x);
+        let k = 4.0 * (1.0 + 0.8 * tanh);
+        let energy = well * well + 0.5 * k * valley * valley;
+        let gx = 4.0 * x * well + 3.2 * (1.0 - tanh * tanh) * valley * valley - k * valley;
+        Ok((energy, array![gx, k * valley]))
     }
 }
 
 fn main() -> Result<(), rgflux::FluxError> {
-    let cfg = NativeConfig::default()
-        .with_masses(Array1::from_vec(vec![1.0]))
-        .with_thermostat(
-            ThermostatConfig::default()
-                .with_gamma(1.0)
-                .with_temperature(0.1),
-        )
-        .with_seed(17);
-    let mut engine = NativeEngine::new(QuarticDoubleWell1D, cfg)?;
-    engine.set_positions(Array1::from_vec(vec![-1.0]).view())?;
+    let search = MinModeConfig::default().with_force_tol(1e-8);
+    let mut dimer = MinModeSession::new(search, array![0.1, -0.05], array![1.0, 0.3])?;
+    assert_eq!(dimer.run(&SkewedWell, 2000)?.status, MinModeStatus::Converged);
+    let seed = Hyperplane::from_min_mode(&dimer)?.oriented_toward(array![1.0, 1.0].view());
 
-    let seed_plane =
-        HyperplaneConstraint::from_direction(Array1::from_vec(vec![1.0]).view(), 0.0)?;
-    let ohtst_cfg = OhtstConfig::default()
-        .with_burn_in_steps(64)
-        .with_min_sample_steps(128)
-        .with_sample_step_factor(4)
-        .with_seed(17);
-    let estimate = optimize_hyperplane(&mut engine, &seed_plane, &ohtst_cfg)?;
+    let sampler = LangevinConfig::default()
+        .with_thermal(0.1)
+        .with_time_step(0.1)
+        .with_burn_in(200)
+        .with_records(400)
+        .with_seed(9);
+    let config = PlaneOptimizerConfig::default()
+        .with_sampler(sampler)
+        .with_max_records(400)
+        .with_max_iterations(10);
+    let optimum = PlaneOptimizer::new(&seed, config)?.run(&SkewedWell)?;
 
-    assert_eq!(estimate.plane.offset, 0.0);
-    assert!(estimate.rate > 0.0 && estimate.standard_error.is_finite());
+    let normal = optimum.plane.normal();
+    assert!((normal.dot(&normal) - 1.0).abs() < 1e-12);
+    assert!(normal[0] > 0.0 && normal[1] > 0.0);
     Ok(())
 }
 ```
@@ -306,133 +306,6 @@ fn main() -> Result<(), rgflux::FluxError> {
     assert!(matches!(
         build_rate_table(2, &edges, &network),
         Err(FluxError::Unimplemented(_))
-    ));
-    Ok(())
-}
-```
-
-## Place a fixed-normal OH-TST dividing hyperplane and evaluate the rate
-
-Pass a seed `HyperplaneConstraint` and `OhtstConfig` to `ohtst::optimize_hyperplane` cite:`goswamiAdaptivePruning2026,johannessonOptimizationHyperplanar2001,bligaardOptimizationHyperplanar2005,vineyardFrequencyFactors1957`. Even when the seed offset is displaced from the saddle (here \(c_0 = -0.4\) while the barrier sits at \(c^\ddagger = 0\)), `optimize_hyperplane` relaxes into the reactant minimum, brackets and bisects the stationary dividing hyperplane along the seed normal, samples the curvature probe plane, and returns \(k_{\mathrm{OHTST}} = \frac{1}{2\pi}\sqrt{\kappa / \mu}\exp(-\Delta V / k_{\mathrm{B}}T)\) (with \(\mu\) from `rgsaddle::flux_mass`) alongside its delta-method standard error. The probe average is canonical, so the engine needs a supported canonical thermostat. White noise requires \(\gamma > 0\); its \(\gamma = 0\) mode is NVE and `optimize_hyperplane` returns `FluxError::InvalidConfig` before the search. A supported colored-noise thermostat can use \(\gamma = 0\):
-
-```rust
-use ndarray::{Array1, ArrayView1};
-use rgflux::engine::native::{NativeConfig, NativeEngine};
-use rgflux::engine::{DynamicsEngine, HyperplaneConstraint, ThermostatConfig};
-use rgflux::ohtst::{OhtstConfig, optimize_hyperplane};
-
-struct ObliqueDoubleWell2D;
-
-impl rgsaddle::PointSurface for ObliqueDoubleWell2D {
-    fn eval(&self, r: ArrayView1<f64>) -> Result<(f64, Array1<f64>), rgsaddle::SaddleError> {
-        let u = 0.6 * r[0] + 0.8 * r[1];
-        let v = -0.8 * r[0] + 0.6 * r[1];
-        let well = u * u - 1.0;
-        let du = u * well;
-        let dv = 2.0 * v;
-        Ok((
-            0.25 * well * well + v * v,
-            Array1::from_vec(vec![0.6 * du - 0.8 * dv, 0.8 * du + 0.6 * dv]),
-        ))
-    }
-}
-
-fn main() -> Result<(), rgflux::FluxError> {
-    let mut engine = NativeEngine::new(
-        ObliqueDoubleWell2D,
-        NativeConfig::default()
-            .with_masses(Array1::from_vec(vec![2.0, 8.0]))
-            .with_thermostat(
-                ThermostatConfig::default()
-                    .with_gamma(1.0)
-                    .with_temperature(0.1),
-            )
-            .with_seed(33),
-    )?;
-    engine.set_positions(Array1::from_vec(vec![-0.6, -0.8]).view())?;
-
-    // Seed normal (3, 4) / 5 = (0.6, 0.8) with a displaced offset c_0 = -0.4.
-    let seed_plane =
-        HyperplaneConstraint::from_direction(Array1::from_vec(vec![3.0, 4.0]).view(), -0.4)?;
-    let cfg = OhtstConfig::default()
-        .with_max_outer_steps(16)
-        .with_max_translation(0.25)
-        .with_burn_in_steps(64)
-        .with_min_sample_steps(128)
-        .with_sample_step_factor(8)
-        .with_time_step(0.01)
-        .with_seed(33);
-
-    let est = optimize_hyperplane(&mut engine, &seed_plane, &cfg)?;
-    assert!(est.plane.offset.abs() < 1e-12);
-    assert!(est.rate > 0.0 && est.standard_error.is_finite());
-    Ok(())
-}
-```
-
-### Relax a reactant once and evaluate every exit
-
-The reactant is a minimum once its largest force component \(\max_i \lvert F_i \rvert\) is at most `OhtstConfig::reactant_fmax` (default \(10^{-6}\) in the engine force unit, eV/Å in metal units). `ohtst::relax_reactant` relaxes the engine's positions with `rgmin::Lbfgs` to that tolerance, restores the engine, and returns a `ReactantMinimum` holding the coordinates and the measured force. `ohtst::optimize_hyperplane_from_minimum` takes that minimum, or one relaxed by another code, and evaluates one exit without relaxing again, so a basin with several exits is relaxed once. A supplied minimum is refused with `FluxError::ReactantNotRelaxed` when its declared force or the force the engine measures there exceeds `reactant_fmax`; there is no fallback rate:
-
-```rust
-use ndarray::{Array1, ArrayView1};
-use rgflux::engine::native::{NativeConfig, NativeEngine};
-use rgflux::engine::{DynamicsEngine, HyperplaneConstraint, ThermostatConfig};
-use rgflux::ohtst::{
-    OhtstConfig, ReactantMinimum, optimize_hyperplane_from_minimum, relax_reactant,
-};
-
-// Independent double wells along x and y: the reactant at (-1, -1) has one
-// exit over each barrier.
-struct TwoExitWell;
-
-impl rgsaddle::PointSurface for TwoExitWell {
-    fn eval(&self, r: ArrayView1<f64>) -> Result<(f64, Array1<f64>), rgsaddle::SaddleError> {
-        let (wx, wy) = (r[0] * r[0] - 1.0, r[1] * r[1] - 1.0);
-        Ok((
-            0.25 * (wx * wx + wy * wy),
-            Array1::from_vec(vec![r[0] * wx, r[1] * wy]),
-        ))
-    }
-}
-
-fn main() -> Result<(), rgflux::FluxError> {
-    let mut engine = NativeEngine::new(
-        TwoExitWell,
-        NativeConfig::default()
-            .with_masses(Array1::from_vec(vec![1.0, 1.0]))
-            .with_thermostat(
-                ThermostatConfig::default()
-                    .with_gamma(1.0)
-                    .with_temperature(0.1),
-            )
-            .with_seed(7),
-    )?;
-    engine.set_positions(Array1::from_vec(vec![-0.8, -1.3]).view())?;
-    let cfg = OhtstConfig::default()
-        .with_reactant_fmax(1e-8)
-        .with_burn_in_steps(64)
-        .with_min_sample_steps(128)
-        .with_sample_step_factor(8)
-        .with_seed(7);
-
-    let reactant = relax_reactant(&mut engine, &cfg)?;
-    assert!(reactant.fmax <= 1e-8);
-    for direction in [[1.0, 0.0], [0.0, 1.0]] {
-        let exit =
-            HyperplaneConstraint::from_direction(Array1::from_vec(direction.to_vec()).view(), 0.0)?;
-        let est = optimize_hyperplane_from_minimum(&mut engine, &exit, &reactant, &cfg)?;
-        assert!(est.rate > 0.0 && est.standard_error.is_finite());
-    }
-
-    // A minimum relaxed elsewhere, with the force measured there.
-    let exit = HyperplaneConstraint::from_direction(Array1::from_vec(vec![1.0, 0.0]).view(), 0.0)?;
-    let external = ReactantMinimum::new(Array1::from_vec(vec![-1.0, -1.0]), 0.0);
-    assert!(optimize_hyperplane_from_minimum(&mut engine, &exit, &external, &cfg).is_ok());
-    let loose = ReactantMinimum::new(Array1::from_vec(vec![-1.0, -1.0]), 1e-3);
-    assert!(matches!(
-        optimize_hyperplane_from_minimum(&mut engine, &exit, &loose, &cfg),
-        Err(rgflux::FluxError::ReactantNotRelaxed { .. })
     ));
     Ok(())
 }
@@ -937,7 +810,7 @@ fn main() -> Result<(), rgflux::FluxError> {
 | `stats` | This page, constants, configuration, outputs, functions, and generated inventory | `howto.org`, /Diagnose correlated samples with batch means, effective sample size, and Geweke windows/; `explanation.org`, /Correlated time-series diagnostics (stats)/ |
 | `cu_reference` | This page, copper vacancy mobility types and functions, and generated inventory | `explanation.org`, /Copper vacancy mobility reference (`cu_reference`)/; `examples/cu_vacancy_adaptive.rs` |
 | `engine` | This page, features, configuration, traits, types, methods, constants, and generated inventory | `howto.org` examples for hyperplanes, trajectory methods, and `EindirSurface`; `getting-started.org`, /Choose an engine/ |
-| internal `config` | This page, /Configuration structs and field defaults/, plus every `with_*` path in the generated inventory | `AGENTS.md`, /Public configuration convention/ |
+| internal `config` | This page, /Configuration structs and field defaults/, plus every `with_*` path in the generated inventory | No separate guide; the convention is the section named here |
 | C ABI and Python | This page, /Binding surface/ | No exported binding exists in this release |
 
 ## Cargo features
@@ -1387,7 +1260,7 @@ stale, and refuses a hand-written count outside the block.
 ### Complete qualified Rust inventory
 
 # BEGIN GENERATED PUBLIC API
-This inventory lists 861 qualified public item paths.
+This inventory lists 1757 qualified public item paths.
 
 #### `DynamicsEngine`
 
@@ -1489,6 +1362,48 @@ This inventory lists 861 qualified public item paths.
 - `rgflux::ThermostatConfig::noise`
 - `rgflux::ThermostatConfig::temperature`
 
+#### `adaptive_ohtst`
+
+- `rgflux::adaptive_ohtst`
+- `rgflux::adaptive_ohtst::ADAPTIVE_OHTST_MAX_SAMPLES`
+- `rgflux::adaptive_ohtst::ADAPTIVE_OHTST_PILOT_SAMPLES`
+- `rgflux::adaptive_ohtst::ADAPTIVE_OHTST_SAMPLE_SAFETY`
+- `rgflux::adaptive_ohtst::ADAPTIVE_OHTST_TARGET_LOG_ERROR`
+- `rgflux::adaptive_ohtst::AdaptiveOhTstConfig`
+- `rgflux::adaptive_ohtst::AdaptiveOhTstConfig::default`
+- `rgflux::adaptive_ohtst::AdaptiveOhTstConfig::max_iterations`
+- `rgflux::adaptive_ohtst::AdaptiveOhTstConfig::max_planes`
+- `rgflux::adaptive_ohtst::AdaptiveOhTstConfig::sampler`
+- `rgflux::adaptive_ohtst::AdaptiveOhTstConfig::with_max_iterations`
+- `rgflux::adaptive_ohtst::AdaptiveOhTstConfig::with_max_planes`
+- `rgflux::adaptive_ohtst::AdaptiveOhTstConfig::with_sampler`
+- `rgflux::adaptive_ohtst::AdaptiveOhTstConfig::with_thermal`
+- `rgflux::adaptive_ohtst::AdaptiveOhTstEstimate`
+- `rgflux::adaptive_ohtst::AdaptiveOhTstEstimate::dividing_plane`
+- `rgflux::adaptive_ohtst::AdaptiveOhTstEstimate::evaluations`
+- `rgflux::adaptive_ohtst::AdaptiveOhTstEstimate::iterations`
+- `rgflux::adaptive_ohtst::AdaptiveOhTstEstimate::profile`
+- `rgflux::adaptive_ohtst::AdaptiveOhTstEstimate::rate`
+- `rgflux::adaptive_ohtst::AdaptiveOhTstEstimate::status`
+- `rgflux::adaptive_ohtst::AdaptiveOhTstProfile`
+- `rgflux::adaptive_ohtst::AdaptiveOhTstProfile::barrier`
+- `rgflux::adaptive_ohtst::AdaptiveOhTstProfile::barrier_error`
+- `rgflux::adaptive_ohtst::AdaptiveOhTstProfile::dividing`
+- `rgflux::adaptive_ohtst::AdaptiveOhTstProfile::free_energy`
+- `rgflux::adaptive_ohtst::AdaptiveOhTstProfile::free_energy_error`
+- `rgflux::adaptive_ohtst::AdaptiveOhTstProfile::geometry_error`
+- `rgflux::adaptive_ohtst::AdaptiveOhTstProfile::plane_samples`
+- `rgflux::adaptive_ohtst::AdaptiveOhTstProfile::planes`
+- `rgflux::adaptive_ohtst::AdaptiveOhTstProfile::quadrature_error`
+- `rgflux::adaptive_ohtst::AdaptiveOhTstProfile::sampled_barrier_error`
+- `rgflux::adaptive_ohtst::AdaptiveOhTstProfile::samples_per_plane`
+- `rgflux::adaptive_ohtst::AdaptiveOhTstStatus`
+- `rgflux::adaptive_ohtst::AdaptiveOhTstStatus::SampleCap`
+- `rgflux::adaptive_ohtst::AdaptiveOhTstStatus::TargetMet`
+- `rgflux::adaptive_ohtst::AdaptiveOhTstStatus::Unresolved`
+- `rgflux::adaptive_ohtst::adaptive_ohtst_sample_count`
+- `rgflux::adaptive_ohtst::adaptive_ohtst_string_rate`
+
 #### `cu_reference`
 
 - `rgflux::cu_reference`
@@ -1518,6 +1433,220 @@ This inventory lists 861 qualified public item paths.
 - `rgflux::cu_reference::published_copper_mobility`
 - `rgflux::cu_reference::published_mobility_a2_per_ps`
 - `rgflux::cu_reference::run_npt_lattice`
+
+#### `defect_pair`
+
+- `rgflux::defect_pair`
+- `rgflux::defect_pair::BasinSaddle`
+- `rgflux::defect_pair::BasinSaddle::minus`
+- `rgflux::defect_pair::BasinSaddle::minus_energy`
+- `rgflux::defect_pair::BasinSaddle::mode`
+- `rgflux::defect_pair::BasinSaddle::negative_eigenvalue`
+- `rgflux::defect_pair::BasinSaddle::plus`
+- `rgflux::defect_pair::BasinSaddle::plus_energy`
+- `rgflux::defect_pair::BasinSaddle::saddle`
+- `rgflux::defect_pair::BasinSaddle::saddle_energy`
+- `rgflux::defect_pair::CaptureRecord`
+- `rgflux::defect_pair::CaptureRecord::captured`
+- `rgflux::defect_pair::CaptureRecord::start`
+- `rgflux::defect_pair::CaptureRecord::time`
+- `rgflux::defect_pair::CellMode`
+- `rgflux::defect_pair::CellMode::Frozen`
+- `rgflux::defect_pair::CellMode::Variable`
+- `rgflux::defect_pair::DefectPairConfig`
+- `rgflux::defect_pair::DefectPairConfig::angular_scale`
+- `rgflux::defect_pair::DefectPairConfig::band`
+- `rgflux::defect_pair::DefectPairConfig::boltzmann`
+- `rgflux::defect_pair::DefectPairConfig::bulk_stress`
+- `rgflux::defect_pair::DefectPairConfig::cell_mode`
+- `rgflux::defect_pair::DefectPairConfig::connect_rmsd`
+- `rgflux::defect_pair::DefectPairConfig::default`
+- `rgflux::defect_pair::DefectPairConfig::dimer`
+- `rgflux::defect_pair::DefectPairConfig::direction_tol`
+- `rgflux::defect_pair::DefectPairConfig::external_stress`
+- `rgflux::defect_pair::DefectPairConfig::finite_temperature`
+- `rgflux::defect_pair::DefectPairConfig::harmonic_atoms`
+- `rgflux::defect_pair::DefectPairConfig::harmonic_step`
+- `rgflux::defect_pair::DefectPairConfig::images`
+- `rgflux::defect_pair::DefectPairConfig::mass`
+- `rgflux::defect_pair::DefectPairConfig::max_band_steps`
+- `rgflux::defect_pair::DefectPairConfig::max_dimer_steps`
+- `rgflux::defect_pair::DefectPairConfig::pafi`
+- `rgflux::defect_pair::DefectPairConfig::planes`
+- `rgflux::defect_pair::DefectPairConfig::push`
+- `rgflux::defect_pair::DefectPairConfig::relax`
+- `rgflux::defect_pair::DefectPairConfig::seed_fraction`
+- `rgflux::defect_pair::DefectPairConfig::shooting`
+- `rgflux::defect_pair::DefectPairConfig::temperatures`
+- `rgflux::defect_pair::DefectPairConfig::with_angular_scale`
+- `rgflux::defect_pair::DefectPairConfig::with_band`
+- `rgflux::defect_pair::DefectPairConfig::with_boltzmann`
+- `rgflux::defect_pair::DefectPairConfig::with_bulk_stress`
+- `rgflux::defect_pair::DefectPairConfig::with_cell_mode`
+- `rgflux::defect_pair::DefectPairConfig::with_connect_rmsd`
+- `rgflux::defect_pair::DefectPairConfig::with_dimer`
+- `rgflux::defect_pair::DefectPairConfig::with_direction_tol`
+- `rgflux::defect_pair::DefectPairConfig::with_external_stress`
+- `rgflux::defect_pair::DefectPairConfig::with_finite_temperature`
+- `rgflux::defect_pair::DefectPairConfig::with_harmonic_atoms`
+- `rgflux::defect_pair::DefectPairConfig::with_harmonic_step`
+- `rgflux::defect_pair::DefectPairConfig::with_images`
+- `rgflux::defect_pair::DefectPairConfig::with_mass`
+- `rgflux::defect_pair::DefectPairConfig::with_max_band_steps`
+- `rgflux::defect_pair::DefectPairConfig::with_max_dimer_steps`
+- `rgflux::defect_pair::DefectPairConfig::with_pafi`
+- `rgflux::defect_pair::DefectPairConfig::with_planes`
+- `rgflux::defect_pair::DefectPairConfig::with_push`
+- `rgflux::defect_pair::DefectPairConfig::with_relax`
+- `rgflux::defect_pair::DefectPairConfig::with_seed_fraction`
+- `rgflux::defect_pair::DefectPairConfig::with_shooting`
+- `rgflux::defect_pair::DefectPairConfig::with_temperatures`
+- `rgflux::defect_pair::DefectPairConfig::with_zero_t_tol`
+- `rgflux::defect_pair::DefectPairConfig::zero_t_tol`
+- `rgflux::defect_pair::DimerSeed`
+- `rgflux::defect_pair::DimerSeed::mode`
+- `rgflux::defect_pair::DimerSeed::positions`
+- `rgflux::defect_pair::DirectionClass`
+- `rgflux::defect_pair::DirectionClass::Away`
+- `rgflux::defect_pair::DirectionClass::Tangential`
+- `rgflux::defect_pair::DirectionClass::Toward`
+- `rgflux::defect_pair::DirectionClass::as_str`
+- `rgflux::defect_pair::FREE_CRYSTAL`
+- `rgflux::defect_pair::FreeMigration`
+- `rgflux::defect_pair::FreeMigration::boundary`
+- `rgflux::defect_pair::FreeMigration::outward_rate`
+- `rgflux::defect_pair::FreeMigration::return_count`
+- `rgflux::defect_pair::FreeMigration::return_probability`
+- `rgflux::defect_pair::HopOutcome`
+- `rgflux::defect_pair::HopOutcome::Disconnected`
+- `rgflux::defect_pair::HopOutcome::NotConverged`
+- `rgflux::defect_pair::HopOutcome::NotIndex1`
+- `rgflux::defect_pair::HopOutcome::Rated`
+- `rgflux::defect_pair::HopOutcome::as_str`
+- `rgflux::defect_pair::HopTemplate`
+- `rgflux::defect_pair::HopTemplate::final_state`
+- `rgflux::defect_pair::HopTemplate::mode`
+- `rgflux::defect_pair::HopTemplate::name`
+- `rgflux::defect_pair::HopTemplate::orientation`
+- `rgflux::defect_pair::HopTemplate::product`
+- `rgflux::defect_pair::HopTemplate::saddle`
+- `rgflux::defect_pair::MatchedCapture`
+- `rgflux::defect_pair::MatchedCapture::radius`
+- `rgflux::defect_pair::MatchedCapture::volume`
+- `rgflux::defect_pair::OuterHop`
+- `rgflux::defect_pair::OuterHop::distance`
+- `rgflux::defect_pair::OuterHop::rate`
+- `rgflux::defect_pair::OuterHop::source`
+- `rgflux::defect_pair::PairSetup`
+- `rgflux::defect_pair::PairSetup::cell`
+- `rgflux::defect_pair::PairSetup::cell_repeats`
+- `rgflux::defect_pair::PairSetup::fixed`
+- `rgflux::defect_pair::PairSetup::hops`
+- `rgflux::defect_pair::PairSetup::mobile`
+- `rgflux::defect_pair::PairSetup::positions`
+- `rgflux::defect_pair::PairSetup::shell`
+- `rgflux::defect_pair::PeriodicSinkRate`
+- `rgflux::defect_pair::PeriodicSinkRate::decay`
+- `rgflux::defect_pair::PeriodicSinkRate::mean_time`
+- `rgflux::defect_pair::PeriodicSinkSurvival`
+- `rgflux::defect_pair::PeriodicSinkSurvival::at_starts`
+- `rgflux::defect_pair::PeriodicSinkSurvival::cell_mean`
+- `rgflux::defect_pair::PeriodicSinkSurvival::reduced_times`
+- `rgflux::defect_pair::RateCatalogue`
+- `rgflux::defect_pair::RateCatalogue::entries`
+- `rgflux::defect_pair::RateCatalogue::from_json`
+- `rgflux::defect_pair::RateCatalogue::merge`
+- `rgflux::defect_pair::RateCatalogue::to_json`
+- `rgflux::defect_pair::RateEntry`
+- `rgflux::defect_pair::RateEntry::band_converged`
+- `rgflux::defect_pair::RateEntry::band_force`
+- `rgflux::defect_pair::RateEntry::cell_repeats`
+- `rgflux::defect_pair::RateEntry::connected`
+- `rgflux::defect_pair::RateEntry::d_e0`
+- `rgflux::defect_pair::RateEntry::d_f`
+- `rgflux::defect_pair::RateEntry::d_f_error`
+- `rgflux::defect_pair::RateEntry::d_f_harmonic`
+- `rgflux::defect_pair::RateEntry::direction`
+- `rgflux::defect_pair::RateEntry::final_state`
+- `rgflux::defect_pair::RateEntry::harmonic_rate`
+- `rgflux::defect_pair::RateEntry::hop`
+- `rgflux::defect_pair::RateEntry::index1`
+- `rgflux::defect_pair::RateEntry::kappa`
+- `rgflux::defect_pair::RateEntry::kappa_error`
+- `rgflux::defect_pair::RateEntry::n_atoms`
+- `rgflux::defect_pair::RateEntry::negative_eigenvalue`
+- `rgflux::defect_pair::RateEntry::nu`
+- `rgflux::defect_pair::RateEntry::orientation`
+- `rgflux::defect_pair::RateEntry::outcome`
+- `rgflux::defect_pair::RateEntry::pafi_evaluations`
+- `rgflux::defect_pair::RateEntry::pafi_samples`
+- `rgflux::defect_pair::RateEntry::product_energy`
+- `rgflux::defect_pair::RateEntry::rate`
+- `rgflux::defect_pair::RateEntry::reactant_energy`
+- `rgflux::defect_pair::RateEntry::saddle_dipole`
+- `rgflux::defect_pair::RateEntry::saddle_energy`
+- `rgflux::defect_pair::RateEntry::saddle_stress`
+- `rgflux::defect_pair::RateEntry::separation_after`
+- `rgflux::defect_pair::RateEntry::separation_before`
+- `rgflux::defect_pair::RateEntry::shell`
+- `rgflux::defect_pair::RateEntry::temperature`
+- `rgflux::defect_pair::RateEntry::vineyard`
+- `rgflux::defect_pair::RateEntry::zero_t`
+- `rgflux::defect_pair::RecombinationVolume`
+- `rgflux::defect_pair::RecombinationVolume::kinetic_sites`
+- `rgflux::defect_pair::RecombinationVolume::placements`
+- `rgflux::defect_pair::RecombinationVolume::spontaneous_sites`
+- `rgflux::defect_pair::RecombinationVolume::total_sites`
+- `rgflux::defect_pair::RecombinationVolume::volume`
+- `rgflux::defect_pair::SPONTANEOUS_BARRIER_EV`
+- `rgflux::defect_pair::SiteOutcome`
+- `rgflux::defect_pair::SiteOutcome::Kinetic`
+- `rgflux::defect_pair::SiteOutcome::Spontaneous`
+- `rgflux::defect_pair::SiteOutcome::as_str`
+- `rgflux::defect_pair::SphereLanding`
+- `rgflux::defect_pair::SphereLanding::boundary`
+- `rgflux::defect_pair::SphereLanding::distance`
+- `rgflux::defect_pair::SphereLanding::rate`
+- `rgflux::defect_pair::SphereLanding::source`
+- `rgflux::defect_pair::VolumePlacement`
+- `rgflux::defect_pair::VolumePlacement::count`
+- `rgflux::defect_pair::VolumePlacement::id`
+- `rgflux::defect_pair::VolumePlacement::outcome`
+- `rgflux::defect_pair::VolumePlacement::probability`
+- `rgflux::defect_pair::VolumePlacement::sites`
+- `rgflux::defect_pair::VolumeSite`
+- `rgflux::defect_pair::VolumeSite::count`
+- `rgflux::defect_pair::VolumeSite::id`
+- `rgflux::defect_pair::VolumeSite::outcome`
+- `rgflux::defect_pair::VolumeSite::rates`
+- `rgflux::defect_pair::attempt_frequency`
+- `rgflux::defect_pair::capture_is_spontaneous`
+- `rgflux::defect_pair::capture_is_spontaneous_within`
+- `rgflux::defect_pair::classify_separation`
+- `rgflux::defect_pair::debye_hit_probability`
+- `rgflux::defect_pair::debye_matched_radius`
+- `rgflux::defect_pair::debye_radius`
+- `rgflux::defect_pair::debye_resistance`
+- `rgflux::defect_pair::defect_pair_rates`
+- `rgflux::defect_pair::descend_to_floor`
+- `rgflux::defect_pair::effective_capture_radius`
+- `rgflux::defect_pair::embed_free_migration`
+- `rgflux::defect_pair::embed_sphere_return`
+- `rgflux::defect_pair::kinetic_recombination_volume`
+- `rgflux::defect_pair::matched_capture_radius`
+- `rgflux::defect_pair::mean_absorption_time`
+- `rgflux::defect_pair::pair_separation`
+- `rgflux::defect_pair::periodic_capture_log_likelihood`
+- `rgflux::defect_pair::periodic_sink_rate`
+- `rgflux::defect_pair::periodic_sink_survival`
+- `rgflux::defect_pair::product_tangent`
+- `rgflux::defect_pair::seeded_saddles`
+- `rgflux::defect_pair::segment_band`
+- `rgflux::defect_pair::shell_pair_factor`
+- `rgflux::defect_pair::smoluchowski_rate`
+- `rgflux::defect_pair::sphere_hit_probability`
+- `rgflux::defect_pair::spherical_return_probability`
+- `rgflux::defect_pair::volume_from_frequency`
 
 #### `engine`
 
@@ -1949,6 +2078,36 @@ This inventory lists 861 qualified public item paths.
 - `rgflux::kappa::kramers_transmission_coefficient`
 - `rgflux::kappa::shoot_bennett_chandler`
 - `rgflux::kappa::shoot_reactive_trajectories`
+- `rgflux::kappa::surface`
+- `rgflux::kappa::surface::ShootingConfig`
+- `rgflux::kappa::surface::ShootingConfig::blocks`
+- `rgflux::kappa::surface::ShootingConfig::default`
+- `rgflux::kappa::surface::ShootingConfig::friction`
+- `rgflux::kappa::surface::ShootingConfig::mass`
+- `rgflux::kappa::surface::ShootingConfig::plateau_record`
+- `rgflux::kappa::surface::ShootingConfig::record_every`
+- `rgflux::kappa::surface::ShootingConfig::seed`
+- `rgflux::kappa::surface::ShootingConfig::shots`
+- `rgflux::kappa::surface::ShootingConfig::steps`
+- `rgflux::kappa::surface::ShootingConfig::thermal`
+- `rgflux::kappa::surface::ShootingConfig::time_step`
+- `rgflux::kappa::surface::ShootingConfig::with_blocks`
+- `rgflux::kappa::surface::ShootingConfig::with_friction`
+- `rgflux::kappa::surface::ShootingConfig::with_mass`
+- `rgflux::kappa::surface::ShootingConfig::with_plateau_record`
+- `rgflux::kappa::surface::ShootingConfig::with_record_every`
+- `rgflux::kappa::surface::ShootingConfig::with_seed`
+- `rgflux::kappa::surface::ShootingConfig::with_shots`
+- `rgflux::kappa::surface::ShootingConfig::with_steps`
+- `rgflux::kappa::surface::ShootingConfig::with_thermal`
+- `rgflux::kappa::surface::ShootingConfig::with_time_step`
+- `rgflux::kappa::surface::Transmission`
+- `rgflux::kappa::surface::Transmission::error`
+- `rgflux::kappa::surface::Transmission::forward`
+- `rgflux::kappa::surface::Transmission::kappa`
+- `rgflux::kappa::surface::Transmission::kappa_of_t`
+- `rgflux::kappa::surface::Transmission::time`
+- `rgflux::kappa::surface::bennett_chandler`
 
 #### `network`
 
@@ -1979,47 +2138,512 @@ This inventory lists 861 qualified public item paths.
 #### `ohtst`
 
 - `rgflux::ohtst`
-- `rgflux::ohtst::OhtstConfig`
-- `rgflux::ohtst::OhtstConfig::burn_in_steps`
-- `rgflux::ohtst::OhtstConfig::default`
-- `rgflux::ohtst::OhtstConfig::max_outer_steps`
-- `rgflux::ohtst::OhtstConfig::max_rotation`
-- `rgflux::ohtst::OhtstConfig::max_translation`
-- `rgflux::ohtst::OhtstConfig::min_overlap`
-- `rgflux::ohtst::OhtstConfig::min_sample_steps`
-- `rgflux::ohtst::OhtstConfig::patience`
-- `rgflux::ohtst::OhtstConfig::reactant_fmax`
-- `rgflux::ohtst::OhtstConfig::retention_stride`
-- `rgflux::ohtst::OhtstConfig::sample_step_factor`
-- `rgflux::ohtst::OhtstConfig::seed`
-- `rgflux::ohtst::OhtstConfig::stats`
-- `rgflux::ohtst::OhtstConfig::time_step`
-- `rgflux::ohtst::OhtstConfig::use_mbar`
-- `rgflux::ohtst::OhtstConfig::with_burn_in_steps`
-- `rgflux::ohtst::OhtstConfig::with_max_outer_steps`
-- `rgflux::ohtst::OhtstConfig::with_max_rotation`
-- `rgflux::ohtst::OhtstConfig::with_max_translation`
-- `rgflux::ohtst::OhtstConfig::with_min_overlap`
-- `rgflux::ohtst::OhtstConfig::with_min_sample_steps`
-- `rgflux::ohtst::OhtstConfig::with_patience`
-- `rgflux::ohtst::OhtstConfig::with_reactant_fmax`
-- `rgflux::ohtst::OhtstConfig::with_retention_stride`
-- `rgflux::ohtst::OhtstConfig::with_sample_step_factor`
-- `rgflux::ohtst::OhtstConfig::with_seed`
-- `rgflux::ohtst::OhtstConfig::with_stats`
-- `rgflux::ohtst::OhtstConfig::with_time_step`
-- `rgflux::ohtst::OhtstConfig::with_use_mbar`
-- `rgflux::ohtst::OhtstEstimate`
-- `rgflux::ohtst::OhtstEstimate::plane`
-- `rgflux::ohtst::OhtstEstimate::rate`
-- `rgflux::ohtst::OhtstEstimate::standard_error`
-- `rgflux::ohtst::ReactantMinimum`
-- `rgflux::ohtst::ReactantMinimum::fmax`
-- `rgflux::ohtst::ReactantMinimum::new`
-- `rgflux::ohtst::ReactantMinimum::positions`
-- `rgflux::ohtst::optimize_hyperplane`
-- `rgflux::ohtst::optimize_hyperplane_from_minimum`
-- `rgflux::ohtst::relax_reactant`
+- `rgflux::ohtst::AnalyticSurfaceDynamics`
+- `rgflux::ohtst::AnalyticSurfaceDynamics::new`
+- `rgflux::ohtst::AnalyticSurfaceDynamics::shoot_hyperplane`
+- `rgflux::ohtst::AnalyticSurfaceSampler`
+- `rgflux::ohtst::AnalyticSurfaceSampler::constrained_directions`
+- `rgflux::ohtst::AnalyticSurfaceSampler::energy`
+- `rgflux::ohtst::AnalyticSurfaceSampler::new`
+- `rgflux::ohtst::AnalyticSurfaceSampler::sample_hyperplane`
+- `rgflux::ohtst::AnalyticSurfaceSampler::with_start`
+- `rgflux::ohtst::AnalyticThermodynamicSampler`
+- `rgflux::ohtst::AnalyticThermodynamicSampler::new`
+- `rgflux::ohtst::AnalyticThermodynamicSampler::sample_hyperplane`
+- `rgflux::ohtst::AnharmonicConfig`
+- `rgflux::ohtst::AnharmonicConfig::default`
+- `rgflux::ohtst::AnharmonicConfig::hvp_step`
+- `rgflux::ohtst::AnharmonicConfig::krylov`
+- `rgflux::ohtst::AnharmonicConfig::krylov_tolerance`
+- `rgflux::ohtst::AnharmonicConfig::probes`
+- `rgflux::ohtst::AnharmonicConfig::seed`
+- `rgflux::ohtst::AnharmonicConfig::step`
+- `rgflux::ohtst::AnharmonicConfig::with_hvp_step`
+- `rgflux::ohtst::AnharmonicConfig::with_krylov`
+- `rgflux::ohtst::AnharmonicConfig::with_krylov_tolerance`
+- `rgflux::ohtst::AnharmonicConfig::with_probes`
+- `rgflux::ohtst::AnharmonicConfig::with_seed`
+- `rgflux::ohtst::AnharmonicConfig::with_step`
+- `rgflux::ohtst::AnharmonicCorrection`
+- `rgflux::ohtst::AnharmonicCorrection::coefficient`
+- `rgflux::ohtst::AnharmonicCorrection::coefficient_error`
+- `rgflux::ohtst::AnharmonicCorrection::curvature`
+- `rgflux::ohtst::AnharmonicCorrection::evaluations`
+- `rgflux::ohtst::AnharmonicCorrection::fixed_log_ratio`
+- `rgflux::ohtst::AnharmonicCorrection::log_ratio`
+- `rgflux::ohtst::AnharmonicCorrection::offset`
+- `rgflux::ohtst::AnharmonicCorrection::reactant`
+- `rgflux::ohtst::AnharmonicCorrection::reactant_error`
+- `rgflux::ohtst::AnharmonicCorrection::saddle`
+- `rgflux::ohtst::AnharmonicCorrection::saddle_error`
+- `rgflux::ohtst::AnharmonicCorrection::slope`
+- `rgflux::ohtst::AnharmonicCorrection::slope_error`
+- `rgflux::ohtst::BasinConfig`
+- `rgflux::ohtst::BasinConfig::cap`
+- `rgflux::ohtst::BasinConfig::control`
+- `rgflux::ohtst::BasinConfig::default`
+- `rgflux::ohtst::BasinConfig::hvp_step`
+- `rgflux::ohtst::BasinConfig::refine`
+- `rgflux::ohtst::BasinConfig::refinements`
+- `rgflux::ohtst::BasinConfig::resolution`
+- `rgflux::ohtst::BasinConfig::sampler`
+- `rgflux::ohtst::BasinConfig::spacing`
+- `rgflux::ohtst::BasinConfig::tolerance`
+- `rgflux::ohtst::BasinConfig::width`
+- `rgflux::ohtst::BasinConfig::with_cap`
+- `rgflux::ohtst::BasinConfig::with_control`
+- `rgflux::ohtst::BasinConfig::with_hvp_step`
+- `rgflux::ohtst::BasinConfig::with_refine`
+- `rgflux::ohtst::BasinConfig::with_refinements`
+- `rgflux::ohtst::BasinConfig::with_resolution`
+- `rgflux::ohtst::BasinConfig::with_sampler`
+- `rgflux::ohtst::BasinConfig::with_spacing`
+- `rgflux::ohtst::BasinConfig::with_tolerance`
+- `rgflux::ohtst::BasinConfig::with_width`
+- `rgflux::ohtst::BasinDensity`
+- `rgflux::ohtst::BasinDensity::density`
+- `rgflux::ohtst::BasinDensity::density_error`
+- `rgflux::ohtst::BasinDensity::ends`
+- `rgflux::ohtst::BasinDensity::evaluations`
+- `rgflux::ohtst::BasinDensity::harmonic_density`
+- `rgflux::ohtst::BasinDensity::offsets`
+- `rgflux::ohtst::BasinDensity::plane`
+- `rgflux::ohtst::BasinDensity::profile`
+- `rgflux::ohtst::BasinDensity::quadrature_error`
+- `rgflux::ohtst::BasinDensity::slope_errors`
+- `rgflux::ohtst::BasinDensity::slopes`
+- `rgflux::ohtst::BasinDensity::spread`
+- `rgflux::ohtst::BasinDensity::tail`
+- `rgflux::ohtst::BasinDensity::thermal`
+- `rgflux::ohtst::BasinDensity::uncontrolled_errors`
+- `rgflux::ohtst::BasinDensity::window`
+- `rgflux::ohtst::BasinEnd`
+- `rgflux::ohtst::BasinEnd::Cap`
+- `rgflux::ohtst::BasinEnd::Turn`
+- `rgflux::ohtst::BasinEnd::Width`
+- `rgflux::ohtst::Basins`
+- `rgflux::ohtst::Basins::acceptance`
+- `rgflux::ohtst::Basins::assign`
+- `rgflux::ohtst::Basins::classify`
+- `rgflux::ohtst::Basins::distance`
+- `rgflux::ohtst::Basins::new`
+- `rgflux::ohtst::Basins::products`
+- `rgflux::ohtst::Basins::quench`
+- `rgflux::ohtst::Basins::reactants`
+- `rgflux::ohtst::Basins::threshold`
+- `rgflux::ohtst::Basins::tolerance`
+- `rgflux::ohtst::Basins::with_distance`
+- `rgflux::ohtst::Basins::with_products`
+- `rgflux::ohtst::Basins::with_quench`
+- `rgflux::ohtst::Basins::with_reactants`
+- `rgflux::ohtst::Basins::with_threshold`
+- `rgflux::ohtst::Basins::with_tolerance`
+- `rgflux::ohtst::Counting`
+- `rgflux::ohtst::Counting::Final`
+- `rgflux::ohtst::Counting::FirstCrossing`
+- `rgflux::ohtst::EndState`
+- `rgflux::ohtst::EndState::Quench`
+- `rgflux::ohtst::EndState::Side`
+- `rgflux::ohtst::EndState::from`
+- `rgflux::ohtst::Endpoint`
+- `rgflux::ohtst::Endpoint::Product`
+- `rgflux::ohtst::Endpoint::Reactant`
+- `rgflux::ohtst::ExactGaussianPlaneSampler`
+- `rgflux::ohtst::ExactGaussianPlaneSampler::energy`
+- `rgflux::ohtst::ExactGaussianPlaneSampler::new`
+- `rgflux::ohtst::ExactGaussianPlaneSampler::sample_hyperplane`
+- `rgflux::ohtst::ExactGaussianPlaneSampler::with_observable`
+- `rgflux::ohtst::FixedCell`
+- `rgflux::ohtst::GaussianTransport`
+- `rgflux::ohtst::GaussianTransport::default`
+- `rgflux::ohtst::GaussianTransport::rank`
+- `rgflux::ohtst::GaussianTransport::shrink_to_rigid`
+- `rgflux::ohtst::GaussianTransport::shrinkage`
+- `rgflux::ohtst::GaussianTransport::with_rank`
+- `rgflux::ohtst::GaussianTransport::with_shrink_to_rigid`
+- `rgflux::ohtst::GaussianTransport::with_shrinkage`
+- `rgflux::ohtst::HarmonicExpansion`
+- `rgflux::ohtst::HarmonicExpansion::eval`
+- `rgflux::ohtst::HarmonicExpansion::excluded_modes`
+- `rgflux::ohtst::HarmonicExpansion::hessian_vector`
+- `rgflux::ohtst::HarmonicExpansion::new`
+- `rgflux::ohtst::HarmonicExpansion::reference`
+- `rgflux::ohtst::HarmonicExpansion::surface`
+- `rgflux::ohtst::HarmonicExpansion::with_reference`
+- `rgflux::ohtst::HarmonicReference`
+- `rgflux::ohtst::HarmonicReference::hvp_step`
+- `rgflux::ohtst::HarmonicReference::new`
+- `rgflux::ohtst::HarmonicReference::point`
+- `rgflux::ohtst::HarmonicReference::tolerance`
+- `rgflux::ohtst::HarmonicReference::with_hvp_step`
+- `rgflux::ohtst::HarmonicReference::with_point`
+- `rgflux::ohtst::HarmonicReference::with_tolerance`
+- `rgflux::ohtst::Hyperplane`
+- `rgflux::ohtst::HyperplaneDynamics`
+- `rgflux::ohtst::HyperplaneDynamics::shoot_hyperplane`
+- `rgflux::ohtst::HyperplaneObservable`
+- `rgflux::ohtst::HyperplaneObservable::observe`
+- `rgflux::ohtst::LangevinConfig`
+- `rgflux::ohtst::LangevinConfig::blocks`
+- `rgflux::ohtst::LangevinConfig::burn_in`
+- `rgflux::ohtst::LangevinConfig::control`
+- `rgflux::ohtst::LangevinConfig::default`
+- `rgflux::ohtst::LangevinConfig::friction`
+- `rgflux::ohtst::LangevinConfig::hold_excluded`
+- `rgflux::ohtst::LangevinConfig::integrator`
+- `rgflux::ohtst::LangevinConfig::records`
+- `rgflux::ohtst::LangevinConfig::region`
+- `rgflux::ohtst::LangevinConfig::retain`
+- `rgflux::ohtst::LangevinConfig::seed`
+- `rgflux::ohtst::LangevinConfig::stride`
+- `rgflux::ohtst::LangevinConfig::thermal`
+- `rgflux::ohtst::LangevinConfig::time_step`
+- `rgflux::ohtst::LangevinConfig::with_blocks`
+- `rgflux::ohtst::LangevinConfig::with_burn_in`
+- `rgflux::ohtst::LangevinConfig::with_control`
+- `rgflux::ohtst::LangevinConfig::with_friction`
+- `rgflux::ohtst::LangevinConfig::with_hold_excluded`
+- `rgflux::ohtst::LangevinConfig::with_integrator`
+- `rgflux::ohtst::LangevinConfig::with_records`
+- `rgflux::ohtst::LangevinConfig::with_region`
+- `rgflux::ohtst::LangevinConfig::with_retain`
+- `rgflux::ohtst::LangevinConfig::with_seed`
+- `rgflux::ohtst::LangevinConfig::with_stride`
+- `rgflux::ohtst::LangevinConfig::with_thermal`
+- `rgflux::ohtst::LangevinConfig::with_time_step`
+- `rgflux::ohtst::MassWeighted`
+- `rgflux::ohtst::OhTstRate`
+- `rgflux::ohtst::OhTstRate::density`
+- `rgflux::ohtst::OhTstRate::density_error`
+- `rgflux::ohtst::OhTstRate::error`
+- `rgflux::ohtst::OhTstRate::flux`
+- `rgflux::ohtst::OhTstRate::free_energy`
+- `rgflux::ohtst::OhTstRate::free_energy_error`
+- `rgflux::ohtst::OhTstRate::log_rate`
+- `rgflux::ohtst::OhTstRate::log_rate_error`
+- `rgflux::ohtst::OhTstRate::multiplied`
+- `rgflux::ohtst::OhTstRate::rate`
+- `rgflux::ohtst::OhTstRate::transmitted`
+- `rgflux::ohtst::PermutationDistance`
+- `rgflux::ohtst::PermutationDistance::atoms`
+- `rgflux::ohtst::PermutationDistance::cell`
+- `rgflux::ohtst::PermutationDistance::distance`
+- `rgflux::ohtst::PermutationDistance::masses`
+- `rgflux::ohtst::PermutationDistance::new`
+- `rgflux::ohtst::PermutationDistance::species`
+- `rgflux::ohtst::PermutationDistance::with_atoms`
+- `rgflux::ohtst::PermutationDistance::with_cell`
+- `rgflux::ohtst::PermutationDistance::with_masses`
+- `rgflux::ohtst::PermutationDistance::with_species`
+- `rgflux::ohtst::PlaneDensity`
+- `rgflux::ohtst::PlaneDensity::density`
+- `rgflux::ohtst::PlaneDensity::plane`
+- `rgflux::ohtst::PlaneDensity::thermal`
+- `rgflux::ohtst::PlaneIntegrator`
+- `rgflux::ohtst::PlaneIntegrator::Baoab`
+- `rgflux::ohtst::PlaneIntegrator::Ghmc`
+- `rgflux::ohtst::PlaneMetric`
+- `rgflux::ohtst::PlaneMetric::Blocks`
+- `rgflux::ohtst::PlaneMetric::Harmonic`
+- `rgflux::ohtst::PlaneOptimizer`
+- `rgflux::ohtst::PlaneOptimizer::config`
+- `rgflux::ohtst::PlaneOptimizer::new`
+- `rgflux::ohtst::PlaneOptimizer::plane`
+- `rgflux::ohtst::PlaneOptimizer::run`
+- `rgflux::ohtst::PlaneOptimizer::run_with_sampler`
+- `rgflux::ohtst::PlaneOptimizerConfig`
+- `rgflux::ohtst::PlaneOptimizerConfig::confidence`
+- `rgflux::ohtst::PlaneOptimizerConfig::default`
+- `rgflux::ohtst::PlaneOptimizerConfig::max_evaluations`
+- `rgflux::ohtst::PlaneOptimizerConfig::max_iterations`
+- `rgflux::ohtst::PlaneOptimizerConfig::max_records`
+- `rgflux::ohtst::PlaneOptimizerConfig::max_rotation`
+- `rgflux::ohtst::PlaneOptimizerConfig::max_translation`
+- `rgflux::ohtst::PlaneOptimizerConfig::metric`
+- `rgflux::ohtst::PlaneOptimizerConfig::metric_rank`
+- `rgflux::ohtst::PlaneOptimizerConfig::norm_test`
+- `rgflux::ohtst::PlaneOptimizerConfig::patience`
+- `rgflux::ohtst::PlaneOptimizerConfig::recenter`
+- `rgflux::ohtst::PlaneOptimizerConfig::rotate`
+- `rgflux::ohtst::PlaneOptimizerConfig::rotation_basis`
+- `rgflux::ohtst::PlaneOptimizerConfig::sampler`
+- `rgflux::ohtst::PlaneOptimizerConfig::tolerance`
+- `rgflux::ohtst::PlaneOptimizerConfig::translate`
+- `rgflux::ohtst::PlaneOptimizerConfig::with_confidence`
+- `rgflux::ohtst::PlaneOptimizerConfig::with_max_evaluations`
+- `rgflux::ohtst::PlaneOptimizerConfig::with_max_iterations`
+- `rgflux::ohtst::PlaneOptimizerConfig::with_max_records`
+- `rgflux::ohtst::PlaneOptimizerConfig::with_max_rotation`
+- `rgflux::ohtst::PlaneOptimizerConfig::with_max_translation`
+- `rgflux::ohtst::PlaneOptimizerConfig::with_metric`
+- `rgflux::ohtst::PlaneOptimizerConfig::with_metric_rank`
+- `rgflux::ohtst::PlaneOptimizerConfig::with_norm_test`
+- `rgflux::ohtst::PlaneOptimizerConfig::with_patience`
+- `rgflux::ohtst::PlaneOptimizerConfig::with_recenter`
+- `rgflux::ohtst::PlaneOptimizerConfig::with_rotate`
+- `rgflux::ohtst::PlaneOptimizerConfig::with_rotation_basis`
+- `rgflux::ohtst::PlaneOptimizerConfig::with_sampler`
+- `rgflux::ohtst::PlaneOptimizerConfig::with_tolerance`
+- `rgflux::ohtst::PlaneOptimizerConfig::with_translate`
+- `rgflux::ohtst::PlaneOptimizerStatus`
+- `rgflux::ohtst::PlaneOptimizerStatus::Converged`
+- `rgflux::ohtst::PlaneOptimizerStatus::MaxEvaluations`
+- `rgflux::ohtst::PlaneOptimizerStatus::MaxIterations`
+- `rgflux::ohtst::PlaneOptimum`
+- `rgflux::ohtst::PlaneOptimum::accepted`
+- `rgflux::ohtst::PlaneOptimum::evaluations`
+- `rgflux::ohtst::PlaneOptimum::inner_iterations`
+- `rgflux::ohtst::PlaneOptimum::iterations`
+- `rgflux::ohtst::PlaneOptimum::plane`
+- `rgflux::ohtst::PlaneOptimum::sample`
+- `rgflux::ohtst::PlaneOptimum::samples`
+- `rgflux::ohtst::PlaneOptimum::status`
+- `rgflux::ohtst::PlaneOptimum::trace`
+- `rgflux::ohtst::PlanePath`
+- `rgflux::ohtst::PlanePath::curve`
+- `rgflux::ohtst::PlanePath::dim`
+- `rgflux::ohtst::PlanePath::end`
+- `rgflux::ohtst::PlanePath::is_empty`
+- `rgflux::ohtst::PlanePath::legs`
+- `rgflux::ohtst::PlanePath::len`
+- `rgflux::ohtst::PlanePath::plane`
+- `rgflux::ohtst::PlanePath::start`
+- `rgflux::ohtst::PlanePath::tangent`
+- `rgflux::ohtst::PlanePath::then`
+- `rgflux::ohtst::PlanePath::trace`
+- `rgflux::ohtst::PlaneSample`
+- `rgflux::ohtst::PlaneSample::acceptance`
+- `rgflux::ohtst::PlaneSample::block_gradients`
+- `rgflux::ohtst::PlaneSample::centroid`
+- `rgflux::ohtst::PlaneSample::centroid_block_gradients`
+- `rgflux::ohtst::PlaneSample::centroid_packed_gradient`
+- `rgflux::ohtst::PlaneSample::centroid_torque`
+- `rgflux::ohtst::PlaneSample::centroid_torque_error`
+- `rgflux::ohtst::PlaneSample::directional`
+- `rgflux::ohtst::PlaneSample::effective_samples`
+- `rgflux::ohtst::PlaneSample::equilibration`
+- `rgflux::ohtst::PlaneSample::evaluations`
+- `rgflux::ohtst::PlaneSample::free_dimensions`
+- `rgflux::ohtst::PlaneSample::grad_normal`
+- `rgflux::ohtst::PlaneSample::grad_normal_error`
+- `rgflux::ohtst::PlaneSample::grad_point`
+- `rgflux::ohtst::PlaneSample::last`
+- `rgflux::ohtst::PlaneSample::normal_force`
+- `rgflux::ohtst::PlaneSample::normal_force_error`
+- `rgflux::ohtst::PlaneSample::packed_gradient`
+- `rgflux::ohtst::PlaneSample::plane`
+- `rgflux::ohtst::PlaneSample::records`
+- `rgflux::ohtst::PlaneSample::retained`
+- `rgflux::ohtst::PlaneSample::tau`
+- `rgflux::ohtst::PlaneSample::thermal`
+- `rgflux::ohtst::PlaneSample::uncontrolled`
+- `rgflux::ohtst::PlaneSample::virial`
+- `rgflux::ohtst::PlaneSample::virial_error`
+- `rgflux::ohtst::PlaneTrace`
+- `rgflux::ohtst::PlaneTrace::normal_force`
+- `rgflux::ohtst::PlaneTrace::normal_force_error`
+- `rgflux::ohtst::PlaneTrace::plane`
+- `rgflux::ohtst::PlaneTrace::records`
+- `rgflux::ohtst::PlaneTrace::rotation`
+- `rgflux::ohtst::PlaneTrace::rotation_error`
+- `rgflux::ohtst::QuadraticModel`
+- `rgflux::ohtst::QuadraticModel::center`
+- `rgflux::ohtst::QuadraticModel::energy`
+- `rgflux::ohtst::QuadraticModel::eval`
+- `rgflux::ohtst::QuadraticModel::gradient`
+- `rgflux::ohtst::QuadraticModel::hessian`
+- `rgflux::ohtst::QuadraticModel::hessian_vector`
+- `rgflux::ohtst::QuadraticModel::new`
+- `rgflux::ohtst::QuadraticModel::with_center`
+- `rgflux::ohtst::QuadraticModel::with_energy`
+- `rgflux::ohtst::QuadraticModel::with_gradient`
+- `rgflux::ohtst::QuadraticModel::with_hessian`
+- `rgflux::ohtst::QuenchConfig`
+- `rgflux::ohtst::QuenchConfig::default`
+- `rgflux::ohtst::QuenchConfig::force_tol`
+- `rgflux::ohtst::QuenchConfig::initial_step`
+- `rgflux::ohtst::QuenchConfig::max_move`
+- `rgflux::ohtst::QuenchConfig::max_steps`
+- `rgflux::ohtst::QuenchConfig::method`
+- `rgflux::ohtst::QuenchConfig::with_force_tol`
+- `rgflux::ohtst::QuenchConfig::with_initial_step`
+- `rgflux::ohtst::QuenchConfig::with_max_move`
+- `rgflux::ohtst::QuenchConfig::with_max_steps`
+- `rgflux::ohtst::QuenchConfig::with_method`
+- `rgflux::ohtst::QuenchedTransitionRegion`
+- `rgflux::ohtst::QuenchedTransitionRegion::basins`
+- `rgflux::ohtst::QuenchedTransitionRegion::fmt`
+- `rgflux::ohtst::QuenchedTransitionRegion::new`
+- `rgflux::ohtst::QuenchedTransitionRegion::violation`
+- `rgflux::ohtst::RateMultiplicity`
+- `rgflux::ohtst::RateMultiplicity::default`
+- `rgflux::ohtst::RateMultiplicity::in_plane_images`
+- `rgflux::ohtst::RateMultiplicity::paths`
+- `rgflux::ohtst::RateMultiplicity::total`
+- `rgflux::ohtst::RateMultiplicity::with_in_plane_images`
+- `rgflux::ohtst::RateMultiplicity::with_paths`
+- `rgflux::ohtst::RateMultiplicity::with_region`
+- `rgflux::ohtst::ReactantDensity`
+- `rgflux::ohtst::ReactantDensity::acceptance`
+- `rgflux::ohtst::ReactantDensity::behind`
+- `rgflux::ohtst::ReactantDensity::crossing_density`
+- `rgflux::ohtst::ReactantDensity::crossing_error`
+- `rgflux::ohtst::ReactantDensity::density`
+- `rgflux::ohtst::ReactantDensity::density_error`
+- `rgflux::ohtst::ReactantDensity::evaluations`
+- `rgflux::ohtst::ReactantDensity::last`
+- `rgflux::ohtst::ReactantDensity::plane`
+- `rgflux::ohtst::ReactantDensity::records`
+- `rgflux::ohtst::ReactantDensity::tau`
+- `rgflux::ohtst::ReactantDensity::thermal`
+- `rgflux::ohtst::ReactantDensity::wall_hits`
+- `rgflux::ohtst::ReversibleWork`
+- `rgflux::ohtst::ReversibleWork::bar_error`
+- `rgflux::ohtst::ReversibleWork::bar_work`
+- `rgflux::ohtst::ReversibleWork::end`
+- `rgflux::ohtst::ReversibleWork::error`
+- `rgflux::ohtst::ReversibleWork::estimate`
+- `rgflux::ohtst::ReversibleWork::evaluations`
+- `rgflux::ohtst::ReversibleWork::integrated_error`
+- `rgflux::ohtst::ReversibleWork::integrated_work`
+- `rgflux::ohtst::ReversibleWork::mbar_error`
+- `rgflux::ohtst::ReversibleWork::mbar_work`
+- `rgflux::ohtst::ReversibleWork::nodes`
+- `rgflux::ohtst::ReversibleWork::overlap`
+- `rgflux::ohtst::ReversibleWork::thermal`
+- `rgflux::ohtst::ReversibleWork::warnings`
+- `rgflux::ohtst::ReversibleWork::work`
+- `rgflux::ohtst::ReversibleWorkConfig`
+- `rgflux::ohtst::ReversibleWorkConfig::bar_samples`
+- `rgflux::ohtst::ReversibleWorkConfig::default`
+- `rgflux::ohtst::ReversibleWorkConfig::estimate`
+- `rgflux::ohtst::ReversibleWorkConfig::mbar`
+- `rgflux::ohtst::ReversibleWorkConfig::min_overlap`
+- `rgflux::ohtst::ReversibleWorkConfig::nodes`
+- `rgflux::ohtst::ReversibleWorkConfig::sampler`
+- `rgflux::ohtst::ReversibleWorkConfig::simpson`
+- `rgflux::ohtst::ReversibleWorkConfig::transport`
+- `rgflux::ohtst::ReversibleWorkConfig::warm_burn_in`
+- `rgflux::ohtst::ReversibleWorkConfig::with_bar_samples`
+- `rgflux::ohtst::ReversibleWorkConfig::with_estimate`
+- `rgflux::ohtst::ReversibleWorkConfig::with_mbar`
+- `rgflux::ohtst::ReversibleWorkConfig::with_min_overlap`
+- `rgflux::ohtst::ReversibleWorkConfig::with_nodes`
+- `rgflux::ohtst::ReversibleWorkConfig::with_sampler`
+- `rgflux::ohtst::ReversibleWorkConfig::with_simpson`
+- `rgflux::ohtst::ReversibleWorkConfig::with_transport`
+- `rgflux::ohtst::ReversibleWorkConfig::with_warm_burn_in`
+- `rgflux::ohtst::StateDistance`
+- `rgflux::ohtst::StateDistance::Euclidean`
+- `rgflux::ohtst::StateDistance::Permutation`
+- `rgflux::ohtst::StateDistance::distance`
+- `rgflux::ohtst::StateDistance::from`
+- `rgflux::ohtst::THERMODYNAMIC_DERIVATIVE`
+- `rgflux::ohtst::ThermodynamicDerivative`
+- `rgflux::ohtst::ThermodynamicDerivative::full`
+- `rgflux::ohtst::ThermodynamicDerivative::new`
+- `rgflux::ohtst::ThermodynamicDerivative::observe`
+- `rgflux::ohtst::ThermodynamicDerivative::reference`
+- `rgflux::ohtst::ThermodynamicDerivative::with_reference`
+- `rgflux::ohtst::ThermodynamicIntegrationConfig`
+- `rgflux::ohtst::ThermodynamicIntegrationEstimate`
+- `rgflux::ohtst::ThermodynamicIntegrationNode`
+- `rgflux::ohtst::ThermodynamicSampler`
+- `rgflux::ohtst::ThermodynamicSampler::constrained_directions`
+- `rgflux::ohtst::ThermodynamicSampler::energy`
+- `rgflux::ohtst::ThermodynamicSampler::inner`
+- `rgflux::ohtst::ThermodynamicSampler::inner_mut`
+- `rgflux::ohtst::ThermodynamicSampler::new`
+- `rgflux::ohtst::ThermodynamicSampler::sample_hyperplane`
+- `rgflux::ohtst::ThermodynamicSurfaceSampler`
+- `rgflux::ohtst::ThermodynamicSurfaceSampler::constrained_directions`
+- `rgflux::ohtst::ThermodynamicSurfaceSampler::energy`
+- `rgflux::ohtst::ThermodynamicSurfaceSampler::new`
+- `rgflux::ohtst::ThermodynamicSurfaceSampler::sample_hyperplane`
+- `rgflux::ohtst::TransmissionCoefficient`
+- `rgflux::ohtst::TransmissionCoefficient::error`
+- `rgflux::ohtst::TransmissionCoefficient::evaluations`
+- `rgflux::ohtst::TransmissionCoefficient::kappa`
+- `rgflux::ohtst::TransmissionCoefficient::kappa_of_t`
+- `rgflux::ohtst::TransmissionCoefficient::reactive`
+- `rgflux::ohtst::TransmissionCoefficient::recrossed`
+- `rgflux::ohtst::TransmissionCoefficient::shots`
+- `rgflux::ohtst::TransmissionCoefficient::time`
+- `rgflux::ohtst::TransmissionCoefficient::unassigned`
+- `rgflux::ohtst::TransmissionConfig`
+- `rgflux::ohtst::TransmissionConfig::blocks`
+- `rgflux::ohtst::TransmissionConfig::check_every`
+- `rgflux::ohtst::TransmissionConfig::commit`
+- `rgflux::ohtst::TransmissionConfig::counting`
+- `rgflux::ohtst::TransmissionConfig::default`
+- `rgflux::ohtst::TransmissionConfig::end_state`
+- `rgflux::ohtst::TransmissionConfig::friction`
+- `rgflux::ohtst::TransmissionConfig::hold_excluded`
+- `rgflux::ohtst::TransmissionConfig::masses`
+- `rgflux::ohtst::TransmissionConfig::seed`
+- `rgflux::ohtst::TransmissionConfig::shots`
+- `rgflux::ohtst::TransmissionConfig::steps`
+- `rgflux::ohtst::TransmissionConfig::thermal`
+- `rgflux::ohtst::TransmissionConfig::time_step`
+- `rgflux::ohtst::TransmissionConfig::with_blocks`
+- `rgflux::ohtst::TransmissionConfig::with_check_every`
+- `rgflux::ohtst::TransmissionConfig::with_commit`
+- `rgflux::ohtst::TransmissionConfig::with_counting`
+- `rgflux::ohtst::TransmissionConfig::with_end_state`
+- `rgflux::ohtst::TransmissionConfig::with_friction`
+- `rgflux::ohtst::TransmissionConfig::with_hold_excluded`
+- `rgflux::ohtst::TransmissionConfig::with_masses`
+- `rgflux::ohtst::TransmissionConfig::with_seed`
+- `rgflux::ohtst::TransmissionConfig::with_shots`
+- `rgflux::ohtst::TransmissionConfig::with_steps`
+- `rgflux::ohtst::TransmissionConfig::with_thermal`
+- `rgflux::ohtst::TransmissionConfig::with_time_step`
+- `rgflux::ohtst::TransmissionEstimate`
+- `rgflux::ohtst::TransmissionEstimate::kappa`
+- `rgflux::ohtst::Transport`
+- `rgflux::ohtst::Transport::Gaussian`
+- `rgflux::ohtst::Transport::Rigid`
+- `rgflux::ohtst::Transport::from`
+- `rgflux::ohtst::Uncontrolled`
+- `rgflux::ohtst::Uncontrolled::centroid_torque`
+- `rgflux::ohtst::Uncontrolled::centroid_torque_error`
+- `rgflux::ohtst::Uncontrolled::grad_normal`
+- `rgflux::ohtst::Uncontrolled::grad_normal_error`
+- `rgflux::ohtst::Uncontrolled::normal_force`
+- `rgflux::ohtst::Uncontrolled::normal_force_error`
+- `rgflux::ohtst::WorkEstimate`
+- `rgflux::ohtst::WorkEstimate::Bar`
+- `rgflux::ohtst::WorkEstimate::Integration`
+- `rgflux::ohtst::WorkEstimate::Mbar`
+- `rgflux::ohtst::WorkNode`
+- `rgflux::ohtst::WorkNode::bar_work`
+- `rgflux::ohtst::WorkNode::derivative`
+- `rgflux::ohtst::WorkNode::error`
+- `rgflux::ohtst::WorkNode::leg`
+- `rgflux::ohtst::WorkNode::mbar_work`
+- `rgflux::ohtst::WorkNode::overlap`
+- `rgflux::ohtst::WorkNode::plane`
+- `rgflux::ohtst::WorkNode::s`
+- `rgflux::ohtst::WorkNode::transport_weight`
+- `rgflux::ohtst::WorkNode::work`
+- `rgflux::ohtst::anharmonic_correction`
+- `rgflux::ohtst::basin_density`
+- `rgflux::ohtst::harmonic_energy_at`
+- `rgflux::ohtst::mass_weighted_rigid_translations`
+- `rgflux::ohtst::ohtst_rate`
+- `rgflux::ohtst::optimize_plane`
+- `rgflux::ohtst::plane_transmission`
+- `rgflux::ohtst::reactant_density`
+- `rgflux::ohtst::restricted_thermodynamic_integration`
+- `rgflux::ohtst::reversible_work`
+- `rgflux::ohtst::reversible_work_along`
+- `rgflux::ohtst::reversible_work_along_on_surface`
+- `rgflux::ohtst::reversible_work_on_surface`
+- `rgflux::ohtst::sample_plane`
+- `rgflux::ohtst::sample_plane_with_sampler`
+- `rgflux::ohtst::thermodynamic_integration`
+- `rgflux::ohtst::transmission_coefficient`
+- `rgflux::ohtst::transmission_coefficient_on_surface`
 
 #### `opes`
 
@@ -2255,6 +2879,88 @@ This inventory lists 861 qualified public item paths.
 - `rgflux::pafi::SpectralTailReport::interval_errors`
 - `rgflux::pafi::SpectralTailReport::profile_coefficients`
 - `rgflux::pafi::SpectralTailReport::tail_indicator`
+- `rgflux::pafi::cartesian`
+- `rgflux::pafi::cartesian::BalancedBarriers`
+- `rgflux::pafi::cartesian::BalancedBarriers::drift`
+- `rgflux::pafi::cartesian::BalancedBarriers::error`
+- `rgflux::pafi::cartesian::BalancedBarriers::forward`
+- `rgflux::pafi::cartesian::BalancedBarriers::reverse`
+- `rgflux::pafi::cartesian::FreeEnergyProfile`
+- `rgflux::pafi::cartesian::FreeEnergyProfile::anchored`
+- `rgflux::pafi::cartesian::FreeEnergyProfile::arc`
+- `rgflux::pafi::cartesian::FreeEnergyProfile::balanced`
+- `rgflux::pafi::cartesian::FreeEnergyProfile::barrier`
+- `rgflux::pafi::cartesian::FreeEnergyProfile::barrier_error`
+- `rgflux::pafi::cartesian::FreeEnergyProfile::dividing`
+- `rgflux::pafi::cartesian::FreeEnergyProfile::free_energy`
+- `rgflux::pafi::cartesian::FreeEnergyProfile::free_energy_error`
+- `rgflux::pafi::cartesian::FreeEnergyProfile::gradient`
+- `rgflux::pafi::cartesian::FreeEnergyProfile::gradient_error`
+- `rgflux::pafi::cartesian::FreeEnergyProfile::reverse_barrier`
+- `rgflux::pafi::cartesian::FreeEnergyProfile::samples`
+- `rgflux::pafi::cartesian::HyperplaneAverage`
+- `rgflux::pafi::cartesian::HyperplaneAverage::equilibration`
+- `rgflux::pafi::cartesian::HyperplaneAverage::error`
+- `rgflux::pafi::cartesian::HyperplaneAverage::evaluations`
+- `rgflux::pafi::cartesian::HyperplaneAverage::gradient`
+- `rgflux::pafi::cartesian::HyperplaneAverage::n_eff`
+- `rgflux::pafi::cartesian::HyperplaneAverage::psi`
+- `rgflux::pafi::cartesian::HyperplaneAverage::rejected`
+- `rgflux::pafi::cartesian::HyperplaneAverage::retained`
+- `rgflux::pafi::cartesian::HyperplaneAverage::samples`
+- `rgflux::pafi::cartesian::HyperplaneAverage::tau`
+- `rgflux::pafi::cartesian::HyperplaneAverage::unconverged_quenches`
+- `rgflux::pafi::cartesian::PafiConfig`
+- `rgflux::pafi::cartesian::PafiConfig::blocks`
+- `rgflux::pafi::cartesian::PafiConfig::default`
+- `rgflux::pafi::cartesian::PafiConfig::fix_com`
+- `rgflux::pafi::cartesian::PafiConfig::integrator`
+- `rgflux::pafi::cartesian::PafiConfig::max_jump`
+- `rgflux::pafi::cartesian::PafiConfig::max_rounds`
+- `rgflux::pafi::cartesian::PafiConfig::mean_force`
+- `rgflux::pafi::cartesian::PafiConfig::mobility`
+- `rgflux::pafi::cartesian::PafiConfig::quench`
+- `rgflux::pafi::cartesian::PafiConfig::region`
+- `rgflux::pafi::cartesian::PafiConfig::retain`
+- `rgflux::pafi::cartesian::PafiConfig::samples`
+- `rgflux::pafi::cartesian::PafiConfig::seed`
+- `rgflux::pafi::cartesian::PafiConfig::stride`
+- `rgflux::pafi::cartesian::PafiConfig::target_error`
+- `rgflux::pafi::cartesian::PafiConfig::thermal`
+- `rgflux::pafi::cartesian::PafiConfig::thermalize`
+- `rgflux::pafi::cartesian::PafiConfig::time_step`
+- `rgflux::pafi::cartesian::PafiConfig::trajectories`
+- `rgflux::pafi::cartesian::PafiConfig::with_blocks`
+- `rgflux::pafi::cartesian::PafiConfig::with_fix_com`
+- `rgflux::pafi::cartesian::PafiConfig::with_integrator`
+- `rgflux::pafi::cartesian::PafiConfig::with_max_jump`
+- `rgflux::pafi::cartesian::PafiConfig::with_max_rounds`
+- `rgflux::pafi::cartesian::PafiConfig::with_mean_force`
+- `rgflux::pafi::cartesian::PafiConfig::with_mobility`
+- `rgflux::pafi::cartesian::PafiConfig::with_quench`
+- `rgflux::pafi::cartesian::PafiConfig::with_region`
+- `rgflux::pafi::cartesian::PafiConfig::with_retain`
+- `rgflux::pafi::cartesian::PafiConfig::with_samples`
+- `rgflux::pafi::cartesian::PafiConfig::with_seed`
+- `rgflux::pafi::cartesian::PafiConfig::with_stride`
+- `rgflux::pafi::cartesian::PafiConfig::with_target_error`
+- `rgflux::pafi::cartesian::PafiConfig::with_thermal`
+- `rgflux::pafi::cartesian::PafiConfig::with_thermalize`
+- `rgflux::pafi::cartesian::PafiConfig::with_time_step`
+- `rgflux::pafi::cartesian::PafiConfig::with_trajectories`
+- `rgflux::pafi::cartesian::PafiIntegrator`
+- `rgflux::pafi::cartesian::PafiIntegrator::EulerMaruyama`
+- `rgflux::pafi::cartesian::PafiIntegrator::LeimkuhlerMatthews`
+- `rgflux::pafi::cartesian::PafiMeanForce`
+- `rgflux::pafi::cartesian::PafiMeanForce::PublishedEquation8`
+- `rgflux::pafi::cartesian::PafiMeanForce::ReferenceCode`
+- `rgflux::pafi::cartesian::anchored_barriers`
+- `rgflux::pafi::cartesian::average_hyperplane`
+- `rgflux::pafi::cartesian::average_hyperplane_with_sampler`
+- `rgflux::pafi::cartesian::balanced_barriers`
+- `rgflux::pafi::cartesian::integrate_profile`
+- `rgflux::pafi::cartesian::pafi_profile`
+- `rgflux::pafi::cartesian::zero_temperature_barrier`
 - `rgflux::pafi::estimate_spectral_tail`
 - `rgflux::pafi::estimate_spectral_tail_with_errors`
 - `rgflux::pafi::group_displacement_scan`
@@ -2264,6 +2970,78 @@ This inventory lists 861 qualified public item paths.
 - `rgflux::pafi::pafi_profile_dyn`
 - `rgflux::pafi::pool_pafi_replicates`
 - `rgflux::pafi::size_window_from_tau_int`
+
+#### `pair_network`
+
+- `rgflux::pair_network`
+- `rgflux::pair_network::Mat3i`
+- `rgflux::pair_network::PairConfig`
+- `rgflux::pair_network::PairConfig::canonical`
+- `rgflux::pair_network::PairConfig::new`
+- `rgflux::pair_network::PairConfig::offset`
+- `rgflux::pair_network::PairConfig::orbit_size`
+- `rgflux::pair_network::PairConfig::orientation`
+- `rgflux::pair_network::PairConfig::transformed`
+- `rgflux::pair_network::PairEdge`
+- `rgflux::pair_network::PairEdge::config`
+- `rgflux::pair_network::PairEdge::count`
+- `rgflux::pair_network::PairEdge::forward`
+- `rgflux::pair_network::PairEdge::hop`
+- `rgflux::pair_network::PairEdge::target`
+- `rgflux::pair_network::PairEdge::via`
+- `rgflux::pair_network::PairExit`
+- `rgflux::pair_network::PairExit::norm2`
+- `rgflux::pair_network::PairExit::rate`
+- `rgflux::pair_network::PairExit::source`
+- `rgflux::pair_network::PairHop`
+- `rgflux::pair_network::PairHop::from`
+- `rgflux::pair_network::PairHop::kind`
+- `rgflux::pair_network::PairHop::to`
+- `rgflux::pair_network::PairHop::via`
+- `rgflux::pair_network::PairMove`
+- `rgflux::pair_network::PairMove::displacement`
+- `rgflux::pair_network::PairMove::from`
+- `rgflux::pair_network::PairMove::kind`
+- `rgflux::pair_network::PairMove::new`
+- `rgflux::pair_network::PairMove::orbit`
+- `rgflux::pair_network::PairMove::to`
+- `rgflux::pair_network::PairMove::via`
+- `rgflux::pair_network::PairNetwork`
+- `rgflux::pair_network::PairNetwork::build`
+- `rgflux::pair_network::PairNetwork::hops`
+- `rgflux::pair_network::PairNetwork::id`
+- `rgflux::pair_network::PairNetwork::locate`
+- `rgflux::pair_network::PairNetwork::max_norm2`
+- `rgflux::pair_network::PairNetwork::orientations`
+- `rgflux::pair_network::PairNetwork::sites`
+- `rgflux::pair_network::PairNetwork::states`
+- `rgflux::pair_network::PairStateClass`
+- `rgflux::pair_network::PairStateClass::config`
+- `rgflux::pair_network::PairStateClass::edges`
+- `rgflux::pair_network::PairStateClass::multiplicity`
+- `rgflux::pair_network::PairTarget`
+- `rgflux::pair_network::PairTarget::Contact`
+- `rgflux::pair_network::PairTarget::Outside`
+- `rgflux::pair_network::PairTarget::State`
+- `rgflux::pair_network::SensitivityCover`
+- `rgflux::pair_network::SensitivityCover::covered`
+- `rgflux::pair_network::SensitivityCover::order`
+- `rgflux::pair_network::SensitivityCover::remaining`
+- `rgflux::pair_network::SurrogateCalibration`
+- `rgflux::pair_network::SurrogateCalibration::coefficients`
+- `rgflux::pair_network::SurrogateCalibration::count`
+- `rgflux::pair_network::SurrogateCalibration::covariance`
+- `rgflux::pair_network::SurrogateCalibration::draw`
+- `rgflux::pair_network::SurrogateCalibration::scatter`
+- `rgflux::pair_network::SurrogateCalibration::shift`
+- `rgflux::pair_network::SurrogateCalibration::shift_error`
+- `rgflux::pair_network::SurrogateCalibration::spread`
+- `rgflux::pair_network::Vec3i`
+- `rgflux::pair_network::calibrate_surrogate`
+- `rgflux::pair_network::cubic_group`
+- `rgflux::pair_network::director`
+- `rgflux::pair_network::norm2`
+- `rgflux::pair_network::sensitivity_cover`
 
 #### `stats`
 
@@ -2340,7 +3118,7 @@ Saddle-point searches in `rgsaddle` and local or Riemannian minimizers in `rgmin
 - First-order transition rates (\(k_{\mathrm{OHTST}}\) in `ohtst`, \(k_{AB}\) in `ffs`, and `normalized_rate` in `pafi`) have inverse time units \([T]^{-1}\).
 - Across the `lammpc`, `rgpot`, and `rgpot-session` boundaries, quantities follow LAMMPS `metal` / `rgpot` units: coordinates and box vectors in Å, velocities in Å/ps, forces in eV/Å, energies and \(k_{\mathrm{B}}T\) in eV, masses in amu (with dynamical conversion factor `MASS_VELOCITY_TO_EV` \(= 1.0364269656262175 \times 10^{-4}\;\mathrm{eV / (amu \cdot \AA^2 / ps^2)}\) in `LammpcEngine`), time steps in ps, and Langevin friction \(\gamma\) in \(\mathrm{ps}^{-1}\).
 
-## Holonomic hyperplane sampling and fixed-normal OH-TST
+## Holonomic hyperplane sampling
 
 ### Theory
 
@@ -2370,36 +3148,17 @@ where \(\mu\) is the effective directional flux mass along \(\mathbf{n}\), evalu
 
 `hyperplane::sample_hyperplane` equilibrates the constrained system for `burn_in_steps`, records \(\lambda_t\) over `sample_steps` steps, and estimates \(\langle \lambda \rangle_c\) and its block-averaged standard error \(\sigma_\lambda\) via `stats::batch_means` cite:`flyvbjergErrorEstimates1989,flegalMcmcThirdSignificantFigure2008` while retaining dividing-surface configurations every `retention_stride` steps. The average is a canonical expectation only when the dynamics samples the canonical ensemble, so `sample_hyperplane` requires a supported canonical thermostat. White noise requires \(\gamma > 0\); the smart-sampling GLE remains thermostatted at \(\gamma = 0\) on engines that implement it. NVE dynamics started from the anchor samples an energy shell and returns `FluxError::InvalidConfig`; the mean it gave before this check was biased with no error. In the canonical regime the mean does not depend on \(\gamma\), the constraint scheme (`ConstraintProjection::Rattle` or `Shake`), or the mass distribution, only its standard error and the burn-in it needs do.
 
-`ohtst::optimize_hyperplane` holds the seed normal \(\mathbf{n}\) fixed and determines the stationary dividing hyperplane offset \(c^\ddagger\) and harmonic hyperplanar TST rate cite:`vineyardFrequencyFactors1957,johannessonOptimizationHyperplanar2001`:
-
-1. *Reactant relaxation*: Clears any active constraint and relaxes from the engine's starting coordinates with `rgmin::Lbfgs` (the eOn step capped at `max_translation` per atom, up to \(8 \times \text{max\_outer\_steps}\) iterations) until \(\max_i |F_i| \le \text{reactant\_fmax}\). A start already within the tolerance is not moved. The capped step takes no line search and compares no energies, so energy rounding near the minimum cannot stall it. The directional slope \(-\mathbf{n} \cdot \mathbf{F}\) must also rise through \(\mathbf{x}_{\min}\) (\(s_{\min} = \mathbf{n} \cdot \mathbf{x}_{\min}\), \(V_{\min} = V(\mathbf{x}_{\min})\)). Stationary maxima or flat ledges are escaped by stepping \(-\text{max\_translation}\,\mathbf{n}\) and relaxing again. A relaxation that ends above `reactant_fmax` returns `FluxError::ReactantNotRelaxed` with the measured force; there is no fallback rate.
-2. *Dividing-surface bracketing and bisection*: If the seed point \(\mathbf{x}_{\min} + (c_0 - s_{\min})\mathbf{n}\) already satisfies \(|-\mathbf{n} \cdot \mathbf{F}| \le \text{reactant\_fmax}\) and \(V > V_{\min}\), \(c^\ddagger = c_0\) is accepted directly. Otherwise, the offset marches from \(s_{\min}\) in direction \(\mathrm{sign}(c_0 - s_{\min})\) (\(+1\) when \(c_0 \ge s_{\min}\)) in increments of `max_translation` (up to `max_outer_steps`) until the directional slope changes sign, then bisects the bracket \([c_{\mathrm{lo}}, c_{\mathrm{hi}}]\) to tolerance \(\text{SERIES\_FLAT\_TOL}\,(1 + c_{\mathrm{hi}})\) to obtain \(c^\ddagger\) and static barrier \(\Delta V = V^\ddagger - V_{\min} > 0\).
-3. *Reactant curvature probing*: Places a parallel probe plane at signed offset \(c_{\mathrm{probe}} = s_{\min} + \mathrm{sign}(c^\ddagger - s_{\min})\,\delta\) with \(\delta = \min(\text{max\_translation}, \tfrac{1}{2}|c^\ddagger - s_{\min}|)\), calls `sample_hyperplane` for \(\max(\text{max\_outer\_steps} \times \text{sample\_step\_factor}, \text{min\_sample\_steps})\) steps, and infers the reactant curvature along \(\mathbf{n}\):
-
-   \[
-   \kappa = \frac{\langle \lambda \rangle_{c_{\mathrm{probe}}}}{c_{\mathrm{probe}} - s_{\min}} > 0.
-   \]
-
-   Because \(\langle \lambda \rangle\) carries the sign of \(c_{\mathrm{probe}} - s_{\min}\), dividing by the signed separation yields \(\kappa > 0\) on either side of the reactant minimum. This probe is a canonical expectation from `sample_hyperplane`, so `optimize_hyperplane` requires a supported canonical thermostat and returns `FluxError::InvalidConfig` for NVE before it snapshots the engine or starts the reactant search. White noise requires \(\gamma > 0\), while a supported colored-noise thermostat can remain canonical at \(\gamma = 0\).
-4. *Rate and delta-method uncertainty*: With flux mass \(\mu = (\sum_i n_i^2 / m_i)^{-1}\) from `rgsaddle::flux_mass` (mapping a normal/mass length mismatch to `FluxError::Shape` and a non-finite or non-positive metric to `FluxError::InvalidConfig`) and angular frequency \(\omega = \sqrt{\kappa / \mu}\), the fixed-normal OH-TST rate and its first-order delta-method standard error are
-
-   \[
-   k_{\mathrm{OHTST}} = \frac{1}{2\pi}\sqrt{\frac{\kappa}{\mu}}\,\exp\!\left(-\frac{\Delta V}{k_{\mathrm{B}} T}\right), \qquad \sigma_{k_{\mathrm{OHTST}}} = k_{\mathrm{OHTST}}\,\frac{\sigma_\lambda}{2\,\lvert\langle \lambda \rangle\rvert}.
-   \]
-
-`ohtst::relax_reactant` runs stage 1 alone and returns a `ReactantMinimum` with the force measured at it. `ohtst::optimize_hyperplane_from_minimum` runs stages 2 to 4 from a supplied minimum, relaxed by `relax_reactant` or by another code, after checking that its declared and measured \(\max_i |F_i|\) are at most `reactant_fmax` and that the directional slope rises through it. A basin with several exits is then relaxed once. A minimum that fails a check is refused with `FluxError::ReactantNotRelaxed` or `FluxError::InvalidConfig`; no other rate estimate is substituted.
-
-The force tolerance is physical: forces at a relaxed minimum or saddle carry rounding noise that grows with the atom count, the total energy, and the coordinate magnitude, so a fixed multiple of machine epsilon is not a reachable force criterion; both stage 1 and the verbatim-seed slope test in stage 2 use `reactant_fmax`. `stats::SERIES_FLAT_TOL` is kept for the bisection bracket width in stage 2, which compares binary64 lengths of known scale.
-
 ### Assumptions and scope
 
-- Single dominant reaction channel along the fixed unit normal \(\mathbf{n}\); positive barrier \(\Delta V > 0\) and locally harmonic reactant well (\(\kappa > 0\)) at the probe offset \(c_{\mathrm{probe}}\).
-- Positive thermal energy \(k_{\mathrm{B}} T > 0\), a supported canonical thermostat, and strictly positive masses \(m_i > 0\). White noise needs \(\gamma > 0\); its zero-friction NVE mode makes `optimize_hyperplane` return `FluxError::InvalidConfig` before the search. A supported colored-noise thermostat can use \(\gamma = 0\).
-- `hyperplane::sample_hyperplane` and fixed-normal `ohtst::optimize_hyperplane` are implemented; the in-plane virial, rotational torque \(\partial A / \partial \mathbf{n}\), Assaraf-Caffarel / Stein zero-variance control variates cite:`assarafZeroVariance1999`, two-state BAR / multi-state MBAR reversible work cite:`bennettEfficientEstimation1976,shirtsStatisticallyOptimal2008`, and Riemannian trust-region normal optimization (`patience`, `min_overlap`, `use_mbar`) are not yet implemented.
+- Positive thermal energy \(k_{\mathrm{B}} T > 0\), a supported canonical thermostat, and strictly positive masses \(m_i > 0\). White noise needs \(\gamma > 0\).
 
 ### Engine wiring
 
-Both `sample_hyperplane` and `optimize_hyperplane` capture an internal `EngineSnapshot` (`positions`, `velocities`, `cell`, `thermostat`, and `constraint`) before modifying the engine and restore those five fields on exit (returning any restoration error if sampling succeeded, or preserving the primary sampling error if both failed). In `NativeEngine` and `LammpcEngine`, two-pass linear SHAKE projects positions to relative residual \(\lvert \mathbf{n} \cdot \mathbf{x} - c \rvert / (1 + \lvert c \rvert + \|\mathbf{x}\|_2) \le 16\,\varepsilon_{\mathrm{mach}}\) (`HYPERPLANE_PROJECTION_TOL`) cite:`ryckaertShake1977`, and RATTLE projects velocities to the mass-metric tangent space \(\mathbf{n} \cdot \mathbf{v} = 0\) cite:`andersenRattle1983,leimkuhlerGeodesicIntegration2016`.
+`sample_hyperplane` captures an internal `EngineSnapshot` (`positions`, `velocities`, `cell`, `thermostat`, and `constraint`) before modifying the engine and restores those five fields on exit (returning any restoration error if sampling succeeded, or preserving the primary sampling error if both failed). In `NativeEngine` and `LammpcEngine`, two-pass linear SHAKE projects positions to relative residual \(\lvert \mathbf{n} \cdot \mathbf{x} - c \rvert / (1 + \lvert c \rvert + \|\mathbf{x}\|_2) \le 16\,\varepsilon_{\mathrm{mach}}\) (`HYPERPLANE_PROJECTION_TOL`) cite:`ryckaertShake1977`, and RATTLE projects velocities to the mass-metric tangent space \(\mathbf{n} \cdot \mathbf{v} = 0\) cite:`andersenRattle1983,leimkuhlerGeodesicIntegration2016`.
+
+## Optimal hyperplanar transition state theory (`ohtst`)
+
+The dividing surface is a hyperplane with point \(\mathbf{p}\) and unit normal \(\boldsymbol{\nu}\) in mass-weighted coordinates, and its free energy is \(A(\mathbf{p}, \boldsymbol{\nu}) = -k_{\mathrm{B}} T \ln \int \delta(\boldsymbol{\nu} \cdot (\mathbf{q} - \mathbf{p}))\, e^{-V(\mathbf{q}) / k_{\mathrm{B}} T}\, d\mathbf{q}\). The plane that maximizes \(A\) gives the smallest hyperplanar transition state rate cite:`johannessonOptimizationHyperplanar2001`. `ohtst::PlaneOptimizer` climbs \(A\) in both the offset and the orientation, `ohtst::basin_density` gives \(Z_H / Z_R\) on a plane through the minimum, `ohtst::reversible_work` gives \(\Delta A\) from that plane to the optimum, and `ohtst::ohtst_rate` returns \(k = \sqrt{k_{\mathrm{B}} T / 2\pi}\,(Z_H / Z_R)\, e^{-\Delta A / k_{\mathrm{B}} T}\). `ohtst::transmission_coefficient` shoots from the optimal plane for the recrossing factor. Surfaces enter as `rgsaddle::PointSurface`, wrapped in `rgsaddle::MassWeighted` when they are Cartesian.
 
 ## Forward Flux Sampling (FFS)
 
