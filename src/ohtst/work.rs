@@ -227,7 +227,7 @@ pub struct WorkNode {
     pub overlap: Option<f64>,
     /// Share of the fitted Gaussian change that the map from the node
     /// before carries, from 0 for the rigid map to 1; see
-    /// [`rgsaddle::GaussianTransport::shrink_to_rigid`].
+    /// [`GaussianTransport::shrink_to_rigid`](super::GaussianTransport::shrink_to_rigid).
     pub transport_weight: Option<f64>,
     /// Work from the first plane to this node by MBAR.
     pub mbar_work: Option<f64>,
